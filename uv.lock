@@ -25,6 +25,7 @@ dependencies = [
 dev = [
     { name = "mypy" },
     { name = "ruff" },
+    { name = "types-pyyaml" },
 ]
 test = [
     { name = "pytest" },
@@ -42,6 +43,7 @@ requires-dist = [
 dev = [
     { name = "mypy", specifier = "==1.18.2" },
     { name = "ruff", specifier = "==0.3.0" },
+    { name = "types-pyyaml", specifier = "==6.0.12.20250915" },
 ]
 test = [
     { name = "pytest", specifier = "==9.0.3" },
@@ -265,6 +267,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/39/21/052d121336189425711eb769293896c1f17235d6357f7b6ef8a62c680497/ruff-0.3.0-py3-none-win32.whl", hash = "sha256:19eacceb4c9406f6c41af806418a26fdb23120dfe53583df76d1401c92b7c14b", size = 6908759, upload-time = "2024-02-29T15:20:22.298Z" },
     { url = "https://files.pythonhosted.org/packages/6d/15/c3d5079dc3269d069fda09076ceae4f8608df079106eb298051d39f97bdb/ruff-0.3.0-py3-none-win_amd64.whl", hash = "sha256:128265876c1d703e5f5e5a4543bd8be47c73a9ba223fd3989d4aa87dd06f312f", size = 7596729, upload-time = "2024-02-29T15:20:26.973Z" },
     { url = "https://files.pythonhosted.org/packages/6c/c6/31b49f2be455ae38205f70a6c48a69f04953d50351d62eb0e51a07b9b6f4/ruff-0.3.0-py3-none-win_arm64.whl", hash = "sha256:e3a4a6d46aef0a84b74fcd201a4401ea9a6cd85614f6a9435f2d33dd8cefbf83", size = 7215471, upload-time = "2024-02-29T15:20:31.117Z" },
+]
+
+[[package]]
+name = "types-pyyaml"
+version = "6.0.12.20250915"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7e/69/3c51b36d04da19b92f9e815be12753125bd8bc247ba0470a982e6979e71c/types_pyyaml-6.0.12.20250915.tar.gz", hash = "sha256:0f8b54a528c303f0e6f7165687dd33fafa81c807fcac23f632b63aa624ced1d3", size = 17522, upload-time = "2025-09-15T03:01:00.728Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/e0/1eed384f02555dde685fff1a1ac805c1c7dcb6dd019c916fe659b1c1f9ec/types_pyyaml-6.0.12.20250915-py3-none-any.whl", hash = "sha256:e7d4d9e064e89a3b3cae120b4990cd370874d2bf12fa5f46c97018dd5d3c9ab6", size = 20338, upload-time = "2025-09-15T03:00:59.218Z" },
 ]
 
 [[package]]

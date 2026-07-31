@@ -8,6 +8,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      # KNOWN-RED until continuo PR-0 (feat/runtime-adapter-port) is pushed to GitHub.
+      # The pyproject.toml [tool.uv.sources] currently points to a local path for
+      # continuo-validation-contract; uv sync will fail in CI until this is switched to
+      # the git source: { git = "https://github.com/carolsimone/continuo", subdirectory = "validation-contract", rev = "<PR-0-merge-sha>" }
+      # Then switch to the PyPI pin in PR-8 once validation-contract 0.3.0 publishes.
       - name: Sync
         run: uv sync --all-groups
       - name: Lint

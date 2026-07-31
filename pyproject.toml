@@ -25,10 +25,13 @@ dev = ["ruff==0.3.0", "mypy==1.18.2"]
 test = ["pytest==9.0.3", "pytest-cov==4.1.0"]
 
 [tool.uv.sources]
-# LOCAL: points to worktree at feat/runtime-adapter-port branch
-# TODO: once PR-0 (validation-contract) merges to main with sha=<merge-sha>, switch to git source:
-# continuo-validation-contract = { git = "https://github.com/carolsimone/continuo", subdirectory = "validation-contract", rev = "<PR-0-merge-sha>" }
-# Then replace with PyPI pin in PR-8 once 0.3.0 publishes.
+# LOCAL PATH: points to worktree at feat/runtime-adapter-port branch (validation-contract 0.3.0).
+# Works for local dev (uv sync, pytest, etc.) but CI will fail until continuo PR-0 is pushed.
+# Migration path:
+#   1. Once PR-0 (feat/runtime-adapter-port) merges to main (sha=<merge-sha>), swap to git source:
+#      continuo-validation-contract = { git = "https://github.com/carolsimone/continuo", subdirectory = "validation-contract", rev = "<PR-0-merge-sha>" }
+#   2. In PR-8, replace with plain PyPI pin once 0.3.0 publishes:
+#      continuo-validation-contract = "==0.3.0"
 continuo-validation-contract = { path = "/Users/simonecarolini/github/continuo/.claude/worktrees/runtime-adapter-port/validation-contract", editable = true }
 
 [build-system]

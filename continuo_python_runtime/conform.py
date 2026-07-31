@@ -13,6 +13,7 @@ checks VARCHAR/CHAR length limits.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Sequence
 from typing import Any
 
@@ -75,6 +76,7 @@ def conform(
     """Enforce the declared output shape on an Arrow table.
 
     Order of checks:
+    0. Duplicate column names in the input table (always raises).
     1. Extra-column policy (raise or warn+drop).
     2. Missing columns (always raises).
     3. Select columns in declared order.
@@ -95,8 +97,17 @@ def conform(
     Raises:
         ConformError: On any structural mismatch, strict-cast failure,
             null violation, or VARCHAR/CHAR overflow.
+        ValueError: If ``extra_columns`` is not ``"raise"`` or ``"warn"``.
     """
+    if extra_columns not in ("raise", "warn"):
+        raise ValueError(f"extra_columns must be 'raise' or 'warn', got {extra_columns!r}")
+
     declared = [c.name for c in columns]
+
+    counts = Counter(table.column_names)
+    dups = sorted(name for name, count in counts.items() if count > 1)
+    if dups:
+        raise ConformError(f"dataframe has duplicate column(s): {dups}")
 
     extra = [n for n in table.column_names if n not in declared]
     if extra:

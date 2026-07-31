@@ -42,6 +42,17 @@ def test_missing_column_raises():
         conform(_t(id=[1], amount=["1"]), COLS)
 
 
+def test_duplicate_column_raises():
+    dup_table = pa.Table.from_arrays([pa.array([1]), pa.array([2])], names=["id", "id"])
+    with pytest.raises(ConformError, match="duplicate column"):
+        conform(dup_table, COLS)
+
+
+def test_invalid_extra_columns_policy_raises():
+    with pytest.raises(ValueError):
+        conform(_t(id=[1], amount=["1"], email=["a"]), COLS, extra_columns="ignore")
+
+
 def test_lossy_float_to_int_raises():
     with pytest.raises(ConformError):
         conform(_t(id=[3.9], amount=["1"], email=["a"]), COLS)

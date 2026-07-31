@@ -1,4 +1,4 @@
-"""CLI for continuo-runtime: validate, merge, and hash contract workflows."""
+"""CLI for continuo-runtime: validate, merge, hash, and lint contract workflows."""
 
 import argparse
 import logging
@@ -11,6 +11,7 @@ from continuo_python_runtime.contract.merge import (
     write_wire_contract,
 )
 from continuo_python_runtime.errors import HarnessError
+from continuo_python_runtime.lint import lint_paths
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,12 @@ def main(argv: list[str] | None = None) -> int:
         "--repo-root", required=True, help="Repository root path"
     )
 
+    # lint subcommand
+    lint_parser = subparsers.add_parser(
+        "lint", help="Lint Python scripts for forbidden imports and SQL literals"
+    )
+    lint_parser.add_argument("path", nargs="+", help="Paths to lint (files or directories)")
+
     args = parser.parse_args(argv)
 
     try:
@@ -60,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_merge(args.contract_dir, args.service, args.repo_root, args.out)
         elif args.command == "hash":
             return cmd_hash(args.contract_dir, args.repo_root)
+        elif args.command == "lint":
+            return cmd_lint(args.path)
     except HarnessError as exc:
         logger.error("%s", exc)
         return 1
@@ -95,4 +104,17 @@ def cmd_hash(contract_dir: str, repo_root: str) -> int:
         hash_value = node_entry["content_hash"]
         print(f"{relation}\t{hash_value}")
 
+    return 0
+
+
+def cmd_lint(paths: list[str]) -> int:
+    """Lint Python scripts for forbidden imports and SQL literals.
+
+    Reports violations to stderr via logging and exits with 1 if any are found.
+    """
+    violations = lint_paths([Path(p) for p in paths])
+    if violations:
+        for violation in violations:
+            logger.error("%s", violation)
+        return 1
     return 0

@@ -33,7 +33,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "continuo-validation-contract", editable = "../continuo/.claude/worktrees/runtime-adapter-port/validation-contract" },
+    { name = "continuo-validation-contract", git = "https://github.com/carolsimone/continuo?subdirectory=validation-contract&rev=d414c8a4c27f16dcc3e067e00fd70af22b3c35ef" },
     { name = "pyarrow", specifier = "==25.0.0" },
     { name = "pyyaml", specifier = "==6.0.3" },
 ]
@@ -51,19 +51,7 @@ test = [
 [[package]]
 name = "continuo-validation-contract"
 version = "0.3.0"
-source = { editable = "../continuo/.claude/worktrees/runtime-adapter-port/validation-contract" }
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = "==1.18.2" },
-    { name = "ruff", specifier = "==0.16.0" },
-]
-test = [
-    { name = "pytest", specifier = "==9.1.1" },
-    { name = "pytest-cov", specifier = "==4.1.0" },
-]
+source = { git = "https://github.com/carolsimone/continuo?subdirectory=validation-contract&rev=d414c8a4c27f16dcc3e067e00fd70af22b3c35ef#d414c8a4c27f16dcc3e067e00fd70af22b3c35ef" }
 
 [[package]]
 name = "coverage"

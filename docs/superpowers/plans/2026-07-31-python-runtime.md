@@ -16,32 +16,32 @@
 - Sentinel block: reuse `continuo_validation_contract.result.result_block(status, message, failures, unique_id)`; never re-implement the markers. Error class travels as the deterministic message prefix `"<ErrorClass>: <detail>"`.
 - Supported `output_columns` types (exact set): `BIGINT`, `INT`/`INTEGER`, `DOUBLE PRECISION`, `NUMERIC(p,s)`/`DECIMAL(p,s)`, `VARCHAR(n)`/`CHAR(n)`/`TEXT`, `TIMESTAMP`, `DATE`, `BOOLEAN`.
 - `content_hash` algorithm is spec §13.2 of the parent design, byte-exact: `"sha256:" + sha256(canonical_json(entry_without_content_hash) + b"\x00" + script_bytes)`, `reads` values whitespace-normalized, JSON sorted keys / compact separators.
-- Until `continuo-validation-contract==0.3.0` is on PyPI, depend on it via a uv path source: `[tool.uv.sources] continuo-validation-contract = { path = "../continuo/validation-contract", editable = true }`. Remove the override in PR-7 (images) — images must install from PyPI.
+- Until `continuo-validation-contract==0.3.0` is on PyPI, depend on it via a uv path source: `[tool.uv.sources] continuo-validation-contract = { path = "../continuo/validation-contract", editable = true }`. Remove the override in PR 8 (images) — images must install from PyPI.
 - Commit messages: conventional (`feat:`, `test:`, `chore:`), each ending with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 
 ## PR map (merge order)
 
 | PR | Repo | Content | Tasks |
 |---|---|---|---|
-| PR-0 | continuo (`validation-contract`) | `RuntimeAdapter` ABC + `continuo_runtime.adapters` discovery (additive, part of the planned 0.3.0 bump) | 1 |
-| PR-1 | this repo | Scaffold: pyproject, package skeleton, error taxonomy, repo CI; remove pre-design scaffold | 2–3 |
-| PR-2 | this repo | Contract schema v1: model, loader, validator | 4–5 |
-| PR-3 | this repo | `hashing.py` — content_hash reference impl | 6 |
-| PR-4 | this repo | `types.py` (SQL→Arrow) + `conform.py` | 7–8 |
-| PR-5 | this repo | Merger + CLI (`validate`, `merge`, `hash`) | 9–10 |
-| PR-6 | this repo | `context.py` (RunContext) + `lint.py` + CLI `lint` | 11–12 |
-| PR-7 | this repo | `harness.py` + CLI `run` + fake-adapter e2e | 13–14 |
-| PR-8 | this repo | `Dockerfile.postgres` + image CI + smoke test | 15 |
-| PR-9 | this repo | `template/` + golden test + README rewrite | 16–17 |
-| PR-10 | this repo | `Dockerfile.trino` + CI matrix entry (after `continuo-runtime-trino` publishes) | 18 |
-| ext-A | continuo-validation-runners | `continuo-runtime-postgres` package (blocks PR-8) | out of this plan |
-| ext-B | continuo-validation-runners | `continuo-runtime-trino` package (blocks PR-10) | out of this plan |
+| PR 1 | continuo (`validation-contract`) | `RuntimeAdapter` ABC + `continuo_runtime.adapters` discovery (additive, part of the planned 0.3.0 bump) | 1 |
+| PR 2 | this repo | Scaffold: pyproject, package skeleton, error taxonomy, repo CI; remove pre-design scaffold | 2–3 |
+| PR 3 | this repo | Contract schema v1: model, loader, validator | 4–5 |
+| PR 4 | this repo | `hashing.py` — content_hash reference impl | 6 |
+| PR 5 | this repo | `types.py` (SQL→Arrow) + `conform.py` | 7–8 |
+| PR 6 | this repo | Merger + CLI (`validate`, `merge`, `hash`) | 9–10 |
+| PR 7 | this repo | `context.py` (RunContext) + `lint.py` + CLI `lint` | 11–12 |
+| PR 8 | this repo | `harness.py` + CLI `run` + fake-adapter e2e | 13–14 |
+| PR 9 | this repo | `Dockerfile.postgres` + image CI + smoke test | 15 |
+| PR 10 | this repo | `template/` + golden test + README rewrite | 16–17 |
+| PR 11 | this repo | `Dockerfile.trino` + CI matrix entry (after `continuo-runtime-trino` publishes) | 18 |
+| ext-A | continuo-validation-runners | `continuo-runtime-postgres` package (blocks PR 9) | out of this plan |
+| ext-B | continuo-validation-runners | `continuo-runtime-trino` package (blocks PR 11) | out of this plan |
 
-External PRs ext-A/ext-B implement the PR-0 ABC per spec §4 (Postgres: `TRUNCATE + INSERT` in one transaction; Trino: staging table → swap) with that repo's docker-compose integration tests; they follow that repo's existing package layout and are planned there.
+External PRs ext-A/ext-B implement the PR 1 ABC per spec §4 (Postgres: `TRUNCATE + INSERT` in one transaction; Trino: staging table → swap) with that repo's docker-compose integration tests; they follow that repo's existing package layout and are planned there.
 
 ---
 
-### Task 1: `RuntimeAdapter` ABC + discovery (PR-0, repo `~/github/continuo`)
+### Task 1: `RuntimeAdapter` ABC + discovery (PR 1, repo `~/github/continuo`)
 
 **Files:**
 - Modify: `validation-contract/continuo_validation_contract/port.py`
@@ -173,11 +173,11 @@ git commit -m "feat(validation-contract): add RuntimeAdapter port + runtime entr
 
 ---
 
-### Task 2: Repo scaffold + pyproject + CI (PR-1)
+### Task 2: Repo scaffold + pyproject + CI (PR 2)
 
 **Files:**
 - Delete: `contract/`, `code/`, `adapter/`, `hashing/`, `contract-loader/` (pre-design scaffold, superseded per spec §3)
-- Create: `pyproject.toml`, `continuo_python_runtime/__init__.py`, `tests/__init__.py`, `.github/workflows/ci.yml`, `README.md` note (defer full rewrite to PR-9)
+- Create: `pyproject.toml`, `continuo_python_runtime/__init__.py`, `tests/__init__.py`, `.github/workflows/ci.yml`, `README.md` note (defer full rewrite to PR 10)
 
 **Interfaces:**
 - Produces: importable package `continuo_python_runtime`; `uv run pytest` green; CI running ruff+mypy+pytest on PRs.
@@ -228,7 +228,7 @@ build-backend = "hatchling.build"
 packages = ["continuo_python_runtime"]
 ```
 
-(Adjust the pyarrow/PyYAML pins to the latest stable at implementation time; keep them exact-pinned. `cli:main` doesn't exist until PR-5 — a dangling entry point is harmless for `uv run pytest`, but if `uv sync` validates it, create a stub `cli.py` with `def main() -> int: return 0` now.)
+(Adjust the pyarrow/PyYAML pins to the latest stable at implementation time; keep them exact-pinned. `cli:main` doesn't exist until PR 6 — a dangling entry point is harmless for `uv run pytest`, but if `uv sync` validates it, create a stub `cli.py` with `def main() -> int: return 0` now.)
 
 - [ ] **Step 3: Create the package + smoke test**
 
@@ -277,7 +277,7 @@ jobs:
 ```
 
 CI cannot see `../continuo`, so the committed `[tool.uv.sources]` entry must be a **git source**, not the path source shown in Step 2 — commit this form (it works both locally and in CI):
-`continuo-validation-contract = { git = "https://github.com/carolsimone/continuo", subdirectory = "validation-contract", rev = "<PR-0 merge sha>" }` — replaced by the plain PyPI pin in PR-8 once 0.3.0 publishes.
+`continuo-validation-contract = { git = "https://github.com/carolsimone/continuo", subdirectory = "validation-contract", rev = "<PR 1 merge sha>" }` — replaced by the plain PyPI pin in PR 9 once 0.3.0 publishes.
 
 - [ ] **Step 6: Commit**
 
@@ -288,7 +288,7 @@ git commit -m "chore: package scaffold, CI, remove pre-design prototype"
 
 ---
 
-### Task 3: Error taxonomy (PR-1)
+### Task 3: Error taxonomy (PR 2)
 
 **Files:**
 - Create: `continuo_python_runtime/errors.py`
@@ -373,11 +373,11 @@ class LoadError(HarnessError):
 ```
 
 - [ ] **Step 4: Run** — `uv run pytest tests/test_errors.py -v` → PASS
-- [ ] **Step 5: Commit** — `git add ... && git commit -m "feat: harness error taxonomy"` — then open **PR-1**.
+- [ ] **Step 5: Commit** — `git add ... && git commit -m "feat: harness error taxonomy"` — then open **PR 2**.
 
 ---
 
-### Task 4: Contract model (PR-2)
+### Task 4: Contract model (PR 3)
 
 **Files:**
 - Create: `continuo_python_runtime/contract/__init__.py`, `continuo_python_runtime/contract/model.py`
@@ -426,7 +426,7 @@ def test_defaults_and_relation():
 
 ---
 
-### Task 5: Contract loader + validator (PR-2)
+### Task 5: Contract loader + validator (PR 3)
 
 **Files:**
 - Create: `continuo_python_runtime/contract/loader.py`
@@ -437,7 +437,7 @@ def test_defaults_and_relation():
 - Produces:
   - `parse_node(raw: dict, source: str) -> Node` — validates one mapping; `source` (filename) appears in every error message.
   - `load_contract_dir(path: Path) -> list[Node]` — loads every `*.yml`/`*.yaml` under `path` (sorted), each file `{"nodes": [...]}`; validates cross-file: duplicate `(schema, table)` rejected.
-  - Validation rules (each raises `ContractError` naming the source + node): required non-empty strings `schema`, `table`, `owner`, `schedule`, `script`; `criticality` ∈ `CRITICALITIES`; `extra_columns` ∈ `EXTRA_COLUMNS_POLICIES`; `reads` a non-empty map of non-empty strings, duplicate names impossible by dict but empty SQL rejected; `output_columns` non-empty, each `{name, type[, nullable]}` with `type` matching the supported-type grammar (delegates to `types.parse_sql_type` **once PR-4 lands** — in this PR, validate with the regex below, then PR-4's Task 7 swaps the regex for `parse_sql_type` in a one-line change); duplicate column names rejected; unknown keys at node level rejected (misspelling guard).
+  - Validation rules (each raises `ContractError` naming the source + node): required non-empty strings `schema`, `table`, `owner`, `schedule`, `script`; `criticality` ∈ `CRITICALITIES`; `extra_columns` ∈ `EXTRA_COLUMNS_POLICIES`; `reads` a non-empty map of non-empty strings, duplicate names impossible by dict but empty SQL rejected; `output_columns` non-empty, each `{name, type[, nullable]}` with `type` matching the supported-type grammar (delegates to `types.parse_sql_type` **once PR 5 lands** — in this PR, validate with the regex below, then PR 5's Task 7 swaps the regex for `parse_sql_type` in a one-line change); duplicate column names rejected; unknown keys at node level rejected (misspelling guard).
 
 - [ ] **Step 1: Failing tests** (representative set — implement all)
 
@@ -524,11 +524,11 @@ _TYPE_RE = re.compile(
 `parse_node` checks unknown keys first (`set(raw) - _ALLOWED_KEYS`), then each rule in the Interfaces block, building `Column`/`Node`. `load_contract_dir` iterates `sorted(path.glob("*.yml")) + sorted(path.glob("*.yaml"))`, requires each document to be a mapping with a `nodes` list, calls `parse_node`, then checks `relation` uniqueness across all files (`ContractError(f"duplicate node {relation} (in {a} and {b})")`). Empty dir / no nodes → `ContractError("no contract files found in ...")`.
 
 - [ ] **Step 4: Run → PASS**; also `uv run ruff check . && uv run mypy continuo_python_runtime`
-- [ ] **Step 5: Commit** — `feat: contract v1 loader + validator` — open **PR-2**.
+- [ ] **Step 5: Commit** — `feat: contract v1 loader + validator` — open **PR 3**.
 
 ---
 
-### Task 6: content_hash (PR-3)
+### Task 6: content_hash (PR 4)
 
 **Files:**
 - Create: `continuo_python_runtime/hashing.py`
@@ -586,11 +586,11 @@ def test_prefix_format():
 - [ ] **Step 2: Run → FAIL**
 - [ ] **Step 3: Implement** exactly per Interfaces (≈20 lines; `copy.deepcopy` before mutating).
 - [ ] **Step 4: Run → PASS**
-- [ ] **Step 5: Commit** — `feat: content_hash reference implementation (spec 13.2)` — open **PR-3**.
+- [ ] **Step 5: Commit** — `feat: content_hash reference implementation (spec 13.2)` — open **PR 4**.
 
 ---
 
-### Task 7: SQL type grammar → Arrow (PR-4)
+### Task 7: SQL type grammar → Arrow (PR 5)
 
 **Files:**
 - Create: `continuo_python_runtime/types.py`
@@ -655,7 +655,7 @@ def test_arrow_mapping():
 
 ---
 
-### Task 8: conform() (PR-4)
+### Task 8: conform() (PR 5)
 
 **Files:**
 - Create: `continuo_python_runtime/conform.py`
@@ -787,11 +787,11 @@ def conform(table, columns, extra_columns="raise"):
 (`pc` = `pyarrow.compute`. Note `pa.Table.cast` with `safe=True` raises on lossy conversions; verify the float→int case actually raises in the installed pyarrow — if it silently truncates, pre-check with `pc.floor`/equality comparison and raise `ConformError` explicitly; the test defines the required behavior, the implementation must satisfy it.)
 
 - [ ] **Step 4: Run → PASS**
-- [ ] **Step 5: Commit** — `feat: strict conform() (Arrow cast + varchar + null checks)` — open **PR-4**.
+- [ ] **Step 5: Commit** — `feat: strict conform() (Arrow cast + varchar + null checks)` — open **PR 5**.
 
 ---
 
-### Task 9: Merger (PR-5)
+### Task 9: Merger (PR 6)
 
 **Files:**
 - Create: `continuo_python_runtime/contract/merge.py`
@@ -856,10 +856,10 @@ def test_missing_script_rejected(tmp_path):
 
 ---
 
-### Task 10: CLI — validate / merge / hash (PR-5)
+### Task 10: CLI — validate / merge / hash (PR 6)
 
 **Files:**
-- Create: `continuo_python_runtime/cli.py` (replace PR-1 stub)
+- Create: `continuo_python_runtime/cli.py` (replace PR 2 stub)
 - Test: `tests/test_cli.py`
 
 **Interfaces:**
@@ -902,11 +902,11 @@ def test_hash_prints_relation_and_hash(contract_repo, capsys):
 ```
 
 - [ ] **Step 2: Run → FAIL**  |  **Step 3: Implement**  |  **Step 4: Run → PASS**
-- [ ] **Step 5: Commit** — `feat: CLI validate/merge/hash` — open **PR-5**.
+- [ ] **Step 5: Commit** — `feat: CLI validate/merge/hash` — open **PR 6**.
 
 ---
 
-### Task 11: RunContext (PR-6)
+### Task 11: RunContext (PR 7)
 
 **Files:**
 - Create: `continuo_python_runtime/context.py`
@@ -965,7 +965,7 @@ def test_adapter_failure_wrapped(node_fixture):
 
 ---
 
-### Task 12: Script lint + CLI `lint` (PR-6)
+### Task 12: Script lint + CLI `lint` (PR 7)
 
 **Files:**
 - Create: `continuo_python_runtime/lint.py`
@@ -1011,11 +1011,11 @@ def test_violation_carries_location():
 ```
 
 - [ ] **Step 2: Run → FAIL**  |  **Step 3: Implement with `ast.walk`**  |  **Step 4: Run → PASS** (incl. a CLI test in `tests/test_cli.py`: lint on the good/bad fixtures returns 0/1)
-- [ ] **Step 5: Commit** — `feat: no-handwritten-SQL script lint` — open **PR-6**.
+- [ ] **Step 5: Commit** — `feat: no-handwritten-SQL script lint` — open **PR 7**.
 
 ---
 
-### Task 13: Script dispatch + harness core (PR-7)
+### Task 13: Script dispatch + harness core (PR 8)
 
 **Files:**
 - Create: `continuo_python_runtime/harness.py`
@@ -1118,7 +1118,7 @@ def test_load_failure_is_load_error(harness_repo, capsys):
 
 ---
 
-### Task 14: CLI `run` (PR-7)
+### Task 14: CLI `run` (PR 8)
 
 **Files:**
 - Modify: `continuo_python_runtime/cli.py`
@@ -1129,15 +1129,15 @@ def test_load_failure_is_load_error(harness_repo, capsys):
 
 - [ ] **Step 1: Failing test** — monkeypatch env with the Task 13 fixture + monkeypatch `discover_runtime_adapter`-based construction by injecting via `continuo_python_runtime.cli`'s seam: implement `run` to call `harness.run_node(os.environ)`, and in the test monkeypatch `harness.build_adapter` (a one-line module function `build_adapter() -> RuntimeAdapter` that `run_node` uses when `adapter is None`) to return `FakeRuntimeAdapter(...)`. Assert exit code 0 and one sentinel block.
 - [ ] **Step 2: Run → FAIL**  |  **Step 3: Implement (add `build_adapter()` seam to `harness.py` if Task 13 didn't; wire subcommand)**  |  **Step 4: Full suite + ruff + mypy → PASS**
-- [ ] **Step 5: Commit** — `feat: continuo-runtime run entrypoint` — open **PR-7**.
+- [ ] **Step 5: Commit** — `feat: continuo-runtime run entrypoint` — open **PR 8**.
 
 ---
 
-### Task 15: Dockerfile.postgres + image CI + smoke test (PR-8)
+### Task 15: Dockerfile.postgres + image CI + smoke test (PR 9)
 
 **Files:**
 - Create: `Dockerfile.postgres`, `tests/smoke/node_smoke/` fixture service (contracts + script), `.github/workflows/images.yml`
-- Modify: `pyproject.toml` (drop the `[tool.uv.sources]` git override — depend on published `continuo-validation-contract==0.3.0`; requires PR-0 released to PyPI first)
+- Modify: `pyproject.toml` (drop the `[tool.uv.sources]` git override — depend on published `continuo-validation-contract==0.3.0`; requires PR 1 released to PyPI first)
 
 **Interfaces:**
 - Produces: image `continuo-python-runtime:<version>-postgres` whose entrypoint is `continuo-runtime run`, with `continuo-runtime-postgres` (from continuo-validation-runners, ext-A) installed as the single runtime adapter.
@@ -1162,11 +1162,11 @@ ENTRYPOINT ["continuo-runtime", "run"]
 
 - [ ] **Step 4: Verify locally** — `docker build -f Dockerfile.postgres .` succeeds; run the smoke sequence against `docker run -d postgres:16` and confirm the sentinel `success` block and the row count.
 
-- [ ] **Step 5: Commit** — `feat: postgres base image + smoke pipeline` — open **PR-8** (merges only after ext-A publishes `continuo-runtime-postgres`).
+- [ ] **Step 5: Commit** — `feat: postgres base image + smoke pipeline` — open **PR 9** (merges only after ext-A publishes `continuo-runtime-postgres`).
 
 ---
 
-### Task 16: Template (PR-9)
+### Task 16: Template (PR 10)
 
 **Files:**
 - Create: `template/contracts/example.yml`, `template/scripts/example.py`, `template/Dockerfile`, `template/.github/workflows/release.yml`, `template/README.md`
@@ -1284,18 +1284,18 @@ def test_template_passes_lint_validate_merge(tmp_path):
 
 ---
 
-### Task 17: README rewrite (PR-9)
+### Task 17: README rewrite (PR 10)
 
 **Files:**
 - Modify: `README.md` (currently a verbatim copy of the parent design's §13)
 
 - [ ] **Step 1: Rewrite** — sections: what this repo is (the three artifacts), quickstart for domain teams (copy `template/`, the 3 repo vars + secrets, write a contract + script, push), the script API (`run(ctx)`, `ctx.read(name)`, Arrow currency, dataframe-lib freedom), the conform rules table (strict cast, varchar, null, extra-column policy), the error taxonomy table, engine selection (`FROM …-postgres` / `…-trino`), and a pointer to `docs/superpowers/specs/2026-07-31-python-runtime-design.md` + the parent design for the boundary contract. Keep the §13 boundary text in a `docs/boundary-contract.md` file rather than deleting it.
 - [ ] **Step 2: Verify** — `uv run pytest` still green; links resolve.
-- [ ] **Step 3: Commit** — `docs: README for domain teams` — open **PR-9**.
+- [ ] **Step 3: Commit** — `docs: README for domain teams` — open **PR 10**.
 
 ---
 
-### Task 18: Dockerfile.trino + matrix (PR-10 — after ext-B publishes)
+### Task 18: Dockerfile.trino + matrix (PR 11 — after ext-B publishes)
 
 **Files:**
 - Create: `Dockerfile.trino`
@@ -1304,4 +1304,4 @@ def test_template_passes_lint_validate_merge(tmp_path):
 - [ ] **Step 1: Write `Dockerfile.trino`** — identical to `Dockerfile.postgres` with `continuo-runtime-trino==<version>` as the single adapter.
 - [ ] **Step 2: Extend the images workflow** to build/tag both engines (`<version>-postgres`, `<version>-trino`); trino smoke runs against `trinodb/trino` service container with a memory-connector catalog, mirroring the postgres smoke sequence.
 - [ ] **Step 3: Verify** — both images build locally; smoke green in CI.
-- [ ] **Step 4: Commit** — `feat: trino base image` — open **PR-10**.
+- [ ] **Step 4: Commit** — `feat: trino base image` — open **PR 11**.

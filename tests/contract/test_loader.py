@@ -38,7 +38,8 @@ def test_parse_valid_node_accepts_content_hash():
 
 
 @pytest.mark.parametrize(
-    "missing", ["schema", "table", "owner", "schedule", "script", "reads", "output_columns"]
+    "missing",
+    ["schema", "table", "owner", "schedule", "script", "reads", "output_columns"],
 )
 def test_missing_required_field_rejected(missing):
     raw = {k: v for k, v in VALID.items() if k != missing}
@@ -72,7 +73,9 @@ def test_bad_criticality_and_policy_and_type():
     with pytest.raises(ContractError, match="extra_columns"):
         parse_node({**VALID, "extra_columns": "ignore"}, "f.yml")
     with pytest.raises(ContractError, match="type"):
-        parse_node({**VALID, "output_columns": [{"name": "x", "type": "JSONB"}]}, "f.yml")
+        parse_node(
+            {**VALID, "output_columns": [{"name": "x", "type": "JSONB"}]}, "f.yml"
+        )
 
 
 def test_valid_type_grammar_variants():
@@ -136,6 +139,55 @@ def test_reads_non_string_sql_rejected():
 def test_reads_not_mapping_rejected():
     with pytest.raises(ContractError, match="reads"):
         parse_node({**VALID, "reads": ["select 1"]}, "f.yml")
+
+
+def test_reads_non_string_name_rejected():
+    with pytest.raises(ContractError, match="reads"):
+        parse_node({**VALID, "reads": {1: "select 1"}}, "f.yml")
+
+
+def test_reads_blank_name_rejected():
+    with pytest.raises(ContractError, match="reads"):
+        parse_node({**VALID, "reads": {" ": "select 1"}}, "f.yml")
+
+
+def test_extra_columns_non_string_rejected():
+    with pytest.raises(ContractError, match="extra_columns"):
+        parse_node({**VALID, "extra_columns": ["raise"]}, "f.yml")
+
+
+def test_load_dir_duplicate_yaml_key_rejected(tmp_path):
+    a = tmp_path / "a.yml"
+    a.write_text(
+        "nodes:\n"
+        "  - schema: analytics\n"
+        "    table: t\n"
+        "    owner: marketing\n"
+        "    schedule: daily\n"
+        "    criticality: SECONDARY\n"
+        "    script: scripts/t.py\n"
+        "    reads:\n"
+        "      ids: select id from analytics.a\n"
+        "      ids: select id from analytics.b\n"
+        "    output_columns:\n"
+        "      - {name: id, type: INTEGER}\n"
+    )
+    with pytest.raises(ContractError, match="duplicate"):
+        load_contract_dir(tmp_path)
+
+
+def test_load_dir_yaml_syntax_error_rejected(tmp_path):
+    a = tmp_path / "a.yml"
+    a.write_text("nodes: [unclosed\n  bad: : :\n")
+    with pytest.raises(ContractError, match="a.yml"):
+        load_contract_dir(tmp_path)
+
+
+def test_load_dir_multi_document_rejected(tmp_path):
+    a = tmp_path / "a.yml"
+    a.write_text("nodes: []\n---\nnodes: []\n")
+    with pytest.raises(ContractError, match="a.yml"):
+        load_contract_dir(tmp_path)
 
 
 def test_load_dir_duplicate_relation_across_files_rejected(tmp_path):

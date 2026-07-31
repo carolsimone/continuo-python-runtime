@@ -37,6 +37,27 @@ _ALLOWED_KEYS = {
 
 _REQUIRED_STRING_FIELDS = ("schema", "table", "owner", "schedule", "script")
 
+
+class _StrictLoader(yaml.SafeLoader):
+    """SafeLoader that rejects duplicate mapping keys instead of keeping the last."""
+
+
+def _strict_construct_mapping(
+    loader: _StrictLoader, node: yaml.MappingNode, deep: bool = False
+):
+    seen = set()
+    for key_node, _ in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            raise ContractError(f"duplicate key {key!r} at {key_node.start_mark}")
+        seen.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+
+_StrictLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _strict_construct_mapping
+)
+
 # NOTE: once PR-4 (Task 7) lands, swap this regex check for a call to
 # `continuo_python_runtime.contract.types.parse_sql_type`.
 _TYPE_RE = re.compile(
@@ -62,7 +83,9 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
     ``source`` is the originating filename; it appears in every error message.
     """
     if not isinstance(raw, dict):
-        raise ContractError(f"{source}: node must be a mapping, got {type(raw).__name__}")
+        raise ContractError(
+            f"{source}: node must be a mapping, got {type(raw).__name__}"
+        )
 
     label = _node_label(raw, source)
 
@@ -73,7 +96,9 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
     for field in _REQUIRED_STRING_FIELDS:
         value = raw.get(field)
         if not isinstance(value, str) or not value.strip():
-            raise ContractError(f"{label}: required field '{field}' must be a non-empty string")
+            raise ContractError(
+                f"{label}: required field '{field}' must be a non-empty string"
+            )
 
     schema = raw["schema"]
     table = raw["table"]
@@ -88,7 +113,10 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
         )
 
     extra_columns = raw.get("extra_columns", "raise")
-    if extra_columns not in EXTRA_COLUMNS_POLICIES:
+    if (
+        not isinstance(extra_columns, str)
+        or extra_columns not in EXTRA_COLUMNS_POLICIES
+    ):
         raise ContractError(
             f"{label}: 'extra_columns' must be one of {sorted(EXTRA_COLUMNS_POLICIES)}, "
             f"got {extra_columns!r}"
@@ -96,10 +124,18 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
 
     reads = raw.get("reads")
     if not isinstance(reads, dict) or not reads:
-        raise ContractError(f"{label}: 'reads' must be a non-empty mapping of name -> SQL")
+        raise ContractError(
+            f"{label}: 'reads' must be a non-empty mapping of name -> SQL"
+        )
     for name, sql in reads.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ContractError(
+                f"{label}: 'reads' name {name!r} must be a non-empty string"
+            )
         if not isinstance(sql, str) or not sql.strip():
-            raise ContractError(f"{label}: 'reads.{name}' must be a non-empty SQL string")
+            raise ContractError(
+                f"{label}: 'reads.{name}' must be a non-empty SQL string"
+            )
 
     raw_columns = raw.get("output_columns")
     if not isinstance(raw_columns, list) or not raw_columns:
@@ -166,7 +202,12 @@ def load_contract_dir(path: Path) -> list[Node]:
 
     for file in files:
         text = file.read_text()
-        document = yaml.safe_load(text)
+        try:
+            document = yaml.load(text, Loader=_StrictLoader)  # noqa: S506 — SafeLoader subclass
+        except ContractError as exc:
+            raise ContractError(f"{file.name}: {exc}") from None
+        except yaml.YAMLError as exc:
+            raise ContractError(f"{file.name}: invalid YAML: {exc}") from None
         if document is None:
             document = {}
         if not isinstance(document, dict):

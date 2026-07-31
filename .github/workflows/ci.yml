@@ -1,0 +1,20 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      # continuo-validation-contract resolves from the continuo git repo, pinned at the
+      # PR #380 merge commit (see [tool.uv.sources]); moves to the PyPI pin in PR 9.
+      - name: Sync
+        run: uv sync --all-groups
+      - name: Lint
+        run: uv run ruff check .
+      - name: Types
+        run: uv run mypy continuo_python_runtime
+      - name: Tests
+        run: uv run pytest --cov=continuo_python_runtime -v

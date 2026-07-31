@@ -69,50 +69,47 @@ def parse_sql_type(raw: str) -> SqlType:
             base_name = "NUMERIC"
 
         if base_name == "NUMERIC":
-            # Parse NUMERIC(precision, scale)
-            params = [p.strip() for p in params_str.split(",")]
-            if len(params) != 2:
+            # Parse NUMERIC(precision, scale) - strict format: \d+,\s*\d+ (spaces only after comma)
+            numeric_match = re.match(r"^(\d+),\s*(\d+)$", params_str)
+            if not numeric_match:
                 raise ContractError(
-                    f"type: NUMERIC requires exactly 2 parameters (precision, scale), "
-                    f"got {len(params)}"
+                    f"type: NUMERIC requires precision and scale as unsigned integers, "
+                    f"got ({params_str})"
                 )
-            try:
-                precision = int(params[0])
-                scale = int(params[1])
-            except ValueError as e:
-                raise ContractError(
-                    f"type: NUMERIC parameters must be integers, got ({params[0]}, {params[1]})"
-                ) from e
+            precision = int(numeric_match.group(1))
+            scale = int(numeric_match.group(2))
             return SqlType("NUMERIC", precision=precision, scale=scale)
 
         elif base_name == "VARCHAR":
-            # Parse VARCHAR(length)
+            # Parse VARCHAR(length) - strict format: \d+ only
             if "," in params_str:
                 raise ContractError(
                     f"type: VARCHAR takes a single parameter (length), "
                     f"got {params_str!r}"
                 )
-            try:
-                length = int(params_str)
-            except ValueError as e:
+            varchar_match = re.match(r"^(\d+)$", params_str)
+            if not varchar_match:
                 raise ContractError(
-                    f"type: VARCHAR length must be an integer, got {params_str!r}"
-                ) from e
+                    f"type: VARCHAR length must be an unsigned integer, "
+                    f"got {params_str!r}"
+                )
+            length = int(varchar_match.group(1))
             return SqlType("VARCHAR", length=length)
 
         elif base_name == "CHAR":
-            # Parse CHAR(length)
+            # Parse CHAR(length) - strict format: \d+ only
             if "," in params_str:
                 raise ContractError(
                     f"type: CHAR takes a single parameter (length), "
                     f"got {params_str!r}"
                 )
-            try:
-                length = int(params_str)
-            except ValueError as e:
+            char_match = re.match(r"^(\d+)$", params_str)
+            if not char_match:
                 raise ContractError(
-                    f"type: CHAR length must be an integer, got {params_str!r}"
-                ) from e
+                    f"type: CHAR length must be an unsigned integer, "
+                    f"got {params_str!r}"
+                )
+            length = int(char_match.group(1))
             return SqlType("CHAR", length=length)
 
         else:

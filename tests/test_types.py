@@ -26,7 +26,22 @@ def test_parse_supported(raw, expected):
     assert parse_sql_type(raw) == expected
 
 
-@pytest.mark.parametrize("raw", ["JSONB", "VARCHAR", "NUMERIC", "NUMERIC(10)", "FLOAT", ""])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "JSONB",
+        "VARCHAR",
+        "NUMERIC",
+        "NUMERIC(10)",
+        "FLOAT",
+        "",
+        "VARCHAR(-1)",
+        "CHAR(-1)",
+        "NUMERIC(-5,2)",
+        "NUMERIC(10, -2)",
+        "NUMERIC(10 ,2)",
+    ],
+)
 def test_parse_unsupported_raises(raw):
     with pytest.raises(ContractError):
         parse_sql_type(raw)

@@ -1,5 +1,7 @@
 """Tests for contract v1 merger."""
 
+import yaml
+
 import pytest
 
 from continuo_python_runtime.contract.merge import build_wire_contract
@@ -28,4 +30,40 @@ def test_missing_script_rejected(contract_repo):
     repo = contract_repo
     (repo / "scripts" / "t.py").unlink()
     with pytest.raises(ContractError, match="scripts/t.py"):
+        build_wire_contract(repo / "contracts", repo, "s")
+
+
+def test_absolute_script_path_rejected(tmp_path):
+    """Reject absolute script paths that escape the repository."""
+    repo = tmp_path
+    (repo / "contracts").mkdir()
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "t.py").write_text("def run(ctx):\n    return ctx.read('ids')\n")
+
+    (repo / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
+        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
+        "criticality": "SECONDARY", "script": "/etc/passwd",
+        "reads": {"ids": "select id from analytics.a"},
+        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
+    }]}))
+
+    with pytest.raises(ContractError, match="escapes"):
+        build_wire_contract(repo / "contracts", repo, "s")
+
+
+def test_parent_directory_escape_rejected(tmp_path):
+    """Reject relative script paths with .. that escape the repository."""
+    repo = tmp_path
+    (repo / "contracts").mkdir()
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "t.py").write_text("def run(ctx):\n    return ctx.read('ids')\n")
+
+    (repo / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
+        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
+        "criticality": "SECONDARY", "script": "../outside.py",
+        "reads": {"ids": "select id from analytics.a"},
+        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
+    }]}))
+
+    with pytest.raises(ContractError, match="escapes"):
         build_wire_contract(repo / "contracts", repo, "s")

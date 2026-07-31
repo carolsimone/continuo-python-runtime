@@ -51,8 +51,12 @@ def build_wire_contract(contract_dir: Path, repo_root: Path, service: str) -> di
     for node in nodes:
         entry = node_entry(node)
 
-        # Resolve script path against repo_root
-        script_path = repo_root / node.script
+        # Resolve script path against repo_root and enforce containment
+        script_path = (repo_root / node.script).resolve()
+        if not script_path.is_relative_to(repo_root.resolve()):
+            raise ContractError(
+                f"{node.relation}: script path {node.script!r} escapes the repository root"
+            )
         if not script_path.exists():
             raise ContractError(f"script not found: {node.script}")
 

@@ -11,7 +11,6 @@ from continuo_python_runtime.contract.merge import (
     write_wire_contract,
 )
 from continuo_python_runtime.errors import HarnessError
-from continuo_python_runtime.hashing import content_hash
 
 logger = logging.getLogger(__name__)
 
@@ -82,43 +81,18 @@ def cmd_merge(contract_dir: str, service: str, repo_root: str, out: str) -> int:
 
 
 def cmd_hash(contract_dir: str, repo_root: str) -> int:
-    """Print relation and content hash for each node."""
-    nodes = load_contract_dir(Path(contract_dir))
-    repo_root_path = Path(repo_root)
+    """Print relation and content hash for each node.
 
-    # Sort nodes by relation for consistent output
-    sorted_nodes = sorted(nodes, key=lambda n: n.relation)
+    Reuses build_wire_contract for consistent hashing and error handling.
+    Service value is irrelevant to per-node hashes since entries don't include it.
+    """
+    # Reuse build_wire_contract for consistent hashing and error handling
+    doc = build_wire_contract(Path(contract_dir), Path(repo_root), service="_hash")
 
-    for node in sorted_nodes:
-        # Resolve script path and read bytes
-        script_path = (repo_root_path / node.script).resolve()
-        script_bytes = script_path.read_bytes()
-
-        # Build entry dict (similar to node_entry in merge.py)
-        entry = {
-            "schema": node.schema,
-            "table": node.table,
-            "owner": node.owner,
-            "schedule": node.schedule,
-            "criticality": node.criticality,
-            "script": node.script,
-            "reads": node.reads,
-            "output_columns": [
-                {
-                    "name": col.name,
-                    "type": col.type,
-                    "nullable": col.nullable,
-                }
-                for col in node.output_columns
-            ],
-            "description": node.description,
-            "extra_columns": node.extra_columns,
-        }
-
-        # Compute content hash
-        hash_value = content_hash(entry, script_bytes)
-
-        # Print relation\thash
-        print(f"{node.relation}\t{hash_value}")
+    # Print relation\thash from wire contract nodes (already sorted by relation)
+    for node_entry in doc["nodes"]:
+        relation = f"{node_entry['schema']}.{node_entry['table']}"
+        hash_value = node_entry["content_hash"]
+        print(f"{relation}\t{hash_value}")
 
     return 0

@@ -7,7 +7,6 @@ structural or semantic violation.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +19,7 @@ from continuo_python_runtime.contract.model import (
     Node,
 )
 from continuo_python_runtime.errors import ContractError
+from continuo_python_runtime.types import parse_sql_type
 
 _ALLOWED_KEYS = {
     "schema",
@@ -56,15 +56,6 @@ def _strict_construct_mapping(
 
 _StrictLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _strict_construct_mapping
-)
-
-# NOTE: once PR-4 (Task 7) lands, swap this regex check for a call to
-# `continuo_python_runtime.contract.types.parse_sql_type`.
-_TYPE_RE = re.compile(
-    r"^(BIGINT|INT|INTEGER|DOUBLE PRECISION|TEXT|TIMESTAMP|DATE|BOOLEAN"
-    r"|(NUMERIC|DECIMAL)\(\d+,\s*\d+\)"
-    r"|(VARCHAR|CHAR)\(\d+\))$",
-    re.IGNORECASE,
 )
 
 
@@ -152,10 +143,16 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
         if not isinstance(name, str) or not name.strip():
             raise ContractError(f"{label}: output column missing non-empty 'name'")
         col_type = entry.get("type")
-        if not isinstance(col_type, str) or not _TYPE_RE.match(col_type.strip()):
+        if not isinstance(col_type, str):
             raise ContractError(
                 f"{label}: output column '{name}' has unsupported 'type' {col_type!r}"
             )
+        try:
+            parse_sql_type(col_type)
+        except ContractError as e:
+            raise ContractError(
+                f"{label}: output column '{name}' has unsupported {str(e)}"
+            ) from e
         nullable = entry.get("nullable", True)
         if not isinstance(nullable, bool):
             raise ContractError(

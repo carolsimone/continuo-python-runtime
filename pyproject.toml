@@ -1,0 +1,46 @@
+[project]
+name = "continuo-python-runtime"
+version = "0.1.0"
+description = "Runtime harness, contract tooling, and CI lint for Continuo python nodes."
+authors = [{ name = "Simone Carolini" }]
+maintainers = [{ name = "Simone Carolini" }]
+readme = "README.md"
+requires-python = ">= 3.14"
+dependencies = [
+    "continuo-validation-contract==0.3.0",
+    "pyarrow==25.0.0",
+    "PyYAML==6.0.3",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.14",
+]
+
+[project.scripts]
+continuo-runtime = "continuo_python_runtime.cli:main"
+
+[dependency-groups]
+dev = ["ruff==0.3.0", "mypy==1.18.2"]
+test = ["pytest==9.0.3", "pytest-cov==4.1.0"]
+
+[tool.uv.sources]
+# LOCAL: points to worktree at feat/runtime-adapter-port branch
+# TODO: once PR-0 (validation-contract) merges to main with sha=<merge-sha>, switch to git source:
+# continuo-validation-contract = { git = "https://github.com/carolsimone/continuo", subdirectory = "validation-contract", rev = "<PR-0-merge-sha>" }
+# Then replace with PyPI pin in PR-8 once 0.3.0 publishes.
+continuo-validation-contract = { path = "/Users/simonecarolini/github/continuo/.claude/worktrees/runtime-adapter-port/validation-contract", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["continuo_python_runtime"]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.14"
+strict = false

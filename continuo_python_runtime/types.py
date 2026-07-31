@@ -52,7 +52,10 @@ def parse_sql_type(raw: str) -> SqlType:
     # Normalize to uppercase for parsing
     normalized = raw.upper()
 
-    # Handle DOUBLE PRECISION specially (has a space)
+    # Handle DOUBLE PRECISION specially (has a space). Only the authored
+    # spelling with a space is part of the contract grammar; the internal
+    # canonical spelling (with an underscore) is not accepted as input even
+    # though it is the SqlType.base value produced above.
     if normalized == "DOUBLE PRECISION":
         return SqlType("DOUBLE_PRECISION")
 
@@ -78,6 +81,15 @@ def parse_sql_type(raw: str) -> SqlType:
                 )
             precision = int(numeric_match.group(1))
             scale = int(numeric_match.group(2))
+            if not (1 <= precision <= 38):
+                raise ContractError(
+                    f"type: NUMERIC precision must be between 1 and 38, got {precision}"
+                )
+            if not (0 <= scale <= precision):
+                raise ContractError(
+                    f"type: NUMERIC scale must be between 0 and precision ({precision}), "
+                    f"got {scale}"
+                )
             return SqlType("NUMERIC", precision=precision, scale=scale)
 
         elif base_name == "VARCHAR":
@@ -128,10 +140,13 @@ def parse_sql_type(raw: str) -> SqlType:
         normalized_base = "NUMERIC"
 
     # List of supported bare types
+    # Note: "DOUBLE_PRECISION" (underscored) is deliberately excluded here.
+    # It is the canonical SqlType.base value, but only the authored spelling
+    # "DOUBLE PRECISION" (with a space) is part of the contract grammar and
+    # is handled above.
     supported_bare = {
         "BIGINT",
         "INTEGER",
-        "DOUBLE_PRECISION",
         "TEXT",
         "TIMESTAMP",
         "DATE",

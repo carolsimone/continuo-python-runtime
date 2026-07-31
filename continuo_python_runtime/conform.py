@@ -26,18 +26,65 @@ from continuo_python_runtime.types import arrow_type, parse_sql_type
 
 logger = logging.getLogger("continuo_python_runtime.conform")
 
+# Cast pairs that pyarrow's `safe=True` cast does NOT reject, but that
+# silently corrupt data rather than raising:
+#   - floating -> decimal128 rounds to the target scale (e.g. 1.234 -> 1.23)
+#   - non-boolean -> boolean coerces truthiness (e.g. 2 -> True) instead of
+#     requiring an actual boolean value
+#   - timestamp -> date32 truncates the time-of-day component
+# These must be rejected before Arrow ever sees the cast. Safe source types
+# for a decimal target remain integer, decimal, and string (numeric strings
+# still go through Arrow's own overflow/parse checks).
+
+
+def _reject_lossy_cast(name: str, source: pa.DataType, target: pa.DataType) -> None:
+    """Raise ConformError for source/target type pairs that pyarrow's
+    ``safe=True`` cast accepts but that are not value-lossless.
+
+    Args:
+        name: The column name (for the error message).
+        source: The incoming Arrow type.
+        target: The declared target Arrow type.
+
+    Raises:
+        ConformError: If the pair is a known-lossy cast.
+    """
+    if pa.types.is_decimal(target) and pa.types.is_floating(source):
+        raise ConformError(
+            f"column {name}: cannot cast {source} to {target}; casting a "
+            "floating-point column to a decimal type is not lossless "
+            "(pyarrow silently rounds to the target scale) -- source must "
+            "be an integer, decimal, or string column"
+        )
+    if pa.types.is_boolean(target) and not pa.types.is_boolean(source):
+        raise ConformError(
+            f"column {name}: cannot cast {source} to {target}; casting a "
+            "non-boolean column to BOOLEAN is not lossless (pyarrow "
+            "coerces truthiness instead of requiring an actual boolean "
+            "value)"
+        )
+    if pa.types.is_date(target) and pa.types.is_timestamp(source):
+        raise ConformError(
+            f"column {name}: cannot cast {source} to {target}; casting a "
+            "TIMESTAMP column to DATE is not lossless (pyarrow silently "
+            "truncates the time-of-day component)"
+        )
+
 
 def to_arrow(obj: Any) -> pa.Table:
     """Normalize a node's ``run()`` return value into a ``pyarrow.Table``.
 
     Accepts, in order:
     - a ``pyarrow.Table`` (returned as-is, same object identity);
-    - any object implementing the Arrow C stream protocol
-      (``__arrow_c_stream__``), converted via ``pa.table(obj)``;
     - a pandas ``DataFrame`` (detected by duck-typing on module/class name,
       so pandas is never imported unless the object actually looks like a
       DataFrame), converted via ``pa.Table.from_pandas(obj,
-      preserve_index=False)``.
+      preserve_index=False)``. Checked *before* the generic Arrow C stream
+      branch below because pandas 3.x DataFrames also implement
+      ``__arrow_c_stream__``, and exporting through that protocol directly
+      can leak the DataFrame's index as an extra column;
+    - any other object implementing the Arrow C stream protocol
+      (``__arrow_c_stream__``), converted via ``pa.table(obj)``.
 
     Anything else raises ``ScriptError``.
 
@@ -53,9 +100,14 @@ def to_arrow(obj: Any) -> pa.Table:
     if isinstance(obj, pa.Table):
         return obj
 
-    if hasattr(obj, "__arrow_c_stream__"):
-        return pa.table(obj)
-
+    # pandas is checked (by duck-typing on module/class name, so pandas is
+    # never imported unless the object actually looks like a DataFrame)
+    # *before* the generic __arrow_c_stream__ branch below. pandas 3.x
+    # DataFrames implement __arrow_c_stream__ themselves, but exporting
+    # through that protocol can surface the DataFrame's index as an extra
+    # column (e.g. "__index_level_0__"), which the declared-schema/
+    # extra-column policy would then reject. Routing pandas DataFrames
+    # through `from_pandas(..., preserve_index=False)` avoids that.
     obj_type = type(obj)
     if obj_type.__module__.split(".")[0] == "pandas" and obj_type.__name__ == "DataFrame":
         try:
@@ -64,6 +116,9 @@ def to_arrow(obj: Any) -> pa.Table:
             pass
         else:
             return pa.Table.from_pandas(obj, preserve_index=False)
+
+    if hasattr(obj, "__arrow_c_stream__"):
+        return pa.table(obj)
 
     raise ScriptError(
         f"run() returned {type(obj).__name__}; expected an Arrow-convertible value"
@@ -131,6 +186,10 @@ def conform(
     target = pa.schema(
         [pa.field(c.name, arrow_type(parse_sql_type(c.type)), nullable=True) for c in columns]
     )
+
+    for field in target:
+        _reject_lossy_cast(field.name, table.schema.field(field.name).type, field.type)
+
     try:
         table = table.cast(target, safe=True)
     except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError, ValueError) as exc:
@@ -150,4 +209,12 @@ def conform(
                     f"{sql_t.base}({sql_t.length})"
                 )
 
-    return table
+    # Restore each field's declared nullability on the returned schema. This
+    # is safe now: nulls have already been checked above against the
+    # declared `nullable: false` constraints, so re-casting to a
+    # non-nullable field here cannot raise on data we haven't already
+    # validated.
+    declared_schema = pa.schema(
+        [pa.field(c.name, arrow_type(parse_sql_type(c.type)), nullable=c.nullable) for c in columns]
+    )
+    return table.cast(declared_schema)

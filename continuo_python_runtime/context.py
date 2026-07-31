@@ -2,13 +2,13 @@
 
 from typing import TYPE_CHECKING, Any
 
-import pyarrow as pa
+import pyarrow as pa  # type: ignore[import-untyped]
 
 from continuo_python_runtime.contract.model import Node
 from continuo_python_runtime.errors import ReadError
 
 if TYPE_CHECKING:
-    from continuo_validation_contract.port import RuntimeAdapter
+    from continuo_validation_contract.port import RuntimeAdapter  # type: ignore[import-untyped]
 
 
 class RunContext:

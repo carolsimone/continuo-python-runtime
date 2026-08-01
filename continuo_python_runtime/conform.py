@@ -1,0 +1,220 @@
+"""Strict output-shape enforcer.
+
+``conform()`` guards every python node's write: it enforces the declared
+column set (extra/missing columns), reorders columns to the declared order,
+performs a *strict* cast to the declared Arrow schema (raising rather than
+silently truncating or corrupting data), enforces not-null constraints, and
+checks VARCHAR/CHAR length limits.
+
+``to_arrow()`` normalizes whatever a node's ``run()`` returned into a
+``pyarrow.Table``.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections import Counter
+from collections.abc import Sequence
+from typing import Any
+
+import pyarrow as pa  # type: ignore[import-untyped]
+import pyarrow.compute as pc  # type: ignore[import-untyped]
+
+from continuo_python_runtime.contract.model import Column
+from continuo_python_runtime.errors import ConformError, ScriptError
+from continuo_python_runtime.types import arrow_type, parse_sql_type
+
+logger = logging.getLogger("continuo_python_runtime.conform")
+
+# Cast pairs that pyarrow's `safe=True` cast does NOT reject, but that
+# silently corrupt data rather than raising:
+#   - floating -> decimal128 rounds to the target scale (e.g. 1.234 -> 1.23)
+#   - non-boolean -> boolean coerces truthiness (e.g. 2 -> True) instead of
+#     requiring an actual boolean value
+#   - timestamp -> date32 truncates the time-of-day component
+# These must be rejected before Arrow ever sees the cast. Safe source types
+# for a decimal target remain integer, decimal, and string (numeric strings
+# still go through Arrow's own overflow/parse checks).
+
+
+def _reject_lossy_cast(name: str, source: pa.DataType, target: pa.DataType) -> None:
+    """Raise ConformError for source/target type pairs that pyarrow's
+    ``safe=True`` cast accepts but that are not value-lossless.
+
+    Args:
+        name: The column name (for the error message).
+        source: The incoming Arrow type.
+        target: The declared target Arrow type.
+
+    Raises:
+        ConformError: If the pair is a known-lossy cast.
+    """
+    if pa.types.is_decimal(target) and pa.types.is_floating(source):
+        raise ConformError(
+            f"column {name}: cannot cast {source} to {target}; casting a "
+            "floating-point column to a decimal type is not lossless "
+            "(pyarrow silently rounds to the target scale) -- source must "
+            "be an integer, decimal, or string column"
+        )
+    if pa.types.is_boolean(target) and not pa.types.is_boolean(source):
+        raise ConformError(
+            f"column {name}: cannot cast {source} to {target}; casting a "
+            "non-boolean column to BOOLEAN is not lossless (pyarrow "
+            "coerces truthiness instead of requiring an actual boolean "
+            "value)"
+        )
+    if pa.types.is_date(target) and pa.types.is_timestamp(source):
+        raise ConformError(
+            f"column {name}: cannot cast {source} to {target}; casting a "
+            "TIMESTAMP column to DATE is not lossless (pyarrow silently "
+            "truncates the time-of-day component)"
+        )
+
+
+def to_arrow(obj: Any) -> pa.Table:
+    """Normalize a node's ``run()`` return value into a ``pyarrow.Table``.
+
+    Accepts, in order:
+    - a ``pyarrow.Table`` (returned as-is, same object identity);
+    - a pandas ``DataFrame`` (detected by duck-typing on module/class name,
+      so pandas is never imported unless the object actually looks like a
+      DataFrame), converted via ``pa.Table.from_pandas(obj,
+      preserve_index=False)``. Checked *before* the generic Arrow C stream
+      branch below because pandas 3.x DataFrames also implement
+      ``__arrow_c_stream__``, and exporting through that protocol directly
+      can leak the DataFrame's index as an extra column;
+    - any other object implementing the Arrow C stream protocol
+      (``__arrow_c_stream__``), converted via ``pa.table(obj)``.
+
+    Anything else raises ``ScriptError``.
+
+    Args:
+        obj: The value returned by a node's ``run()`` function.
+
+    Returns:
+        A ``pyarrow.Table``.
+
+    Raises:
+        ScriptError: If ``obj`` is not Arrow-convertible.
+    """
+    if isinstance(obj, pa.Table):
+        return obj
+
+    # pandas is checked (by duck-typing on module/class name, so pandas is
+    # never imported unless the object actually looks like a DataFrame)
+    # *before* the generic __arrow_c_stream__ branch below. pandas 3.x
+    # DataFrames implement __arrow_c_stream__ themselves, but exporting
+    # through that protocol can surface the DataFrame's index as an extra
+    # column (e.g. "__index_level_0__"), which the declared-schema/
+    # extra-column policy would then reject. Routing pandas DataFrames
+    # through `from_pandas(..., preserve_index=False)` avoids that.
+    obj_type = type(obj)
+    if obj_type.__module__.split(".")[0] == "pandas" and obj_type.__name__ == "DataFrame":
+        try:
+            import pandas  # type: ignore[import-untyped]  # noqa: F401
+        except ImportError:
+            pass
+        else:
+            return pa.Table.from_pandas(obj, preserve_index=False)
+
+    if hasattr(obj, "__arrow_c_stream__"):
+        return pa.table(obj)
+
+    raise ScriptError(
+        f"run() returned {type(obj).__name__}; expected an Arrow-convertible value"
+    )
+
+
+def conform(
+    table: pa.Table, columns: Sequence[Column], extra_columns: str = "raise"
+) -> pa.Table:
+    """Enforce the declared output shape on an Arrow table.
+
+    Order of checks:
+    0. Duplicate column names in the input table (always raises).
+    1. Extra-column policy (raise or warn+drop).
+    2. Missing columns (always raises).
+    3. Select columns in declared order.
+    4. Strict cast to the declared Arrow schema.
+    5. Not-null enforcement.
+    6. VARCHAR/CHAR length enforcement.
+
+    Args:
+        table: The Arrow table produced by a node's ``run()``.
+        columns: The declared output columns, in declared order.
+        extra_columns: ``"raise"`` (default) to fail on undeclared columns,
+            or ``"warn"`` to drop them with a logged warning.
+
+    Returns:
+        A new ``pyarrow.Table`` matching the declared schema, column order,
+        and constraints.
+
+    Raises:
+        ConformError: On any structural mismatch, strict-cast failure,
+            null violation, or VARCHAR/CHAR overflow.
+        ValueError: If ``extra_columns`` is not ``"raise"`` or ``"warn"``.
+    """
+    if extra_columns not in ("raise", "warn"):
+        raise ValueError(f"extra_columns must be 'raise' or 'warn', got {extra_columns!r}")
+
+    declared = [c.name for c in columns]
+
+    counts = Counter(table.column_names)
+    dups = sorted(name for name, count in counts.items() if count > 1)
+    if dups:
+        raise ConformError(f"dataframe has duplicate column(s): {dups}")
+
+    extra = [n for n in table.column_names if n not in declared]
+    if extra:
+        if extra_columns == "raise":
+            raise ConformError(
+                f"dataframe has undeclared column(s): {extra}; declared: {declared}"
+            )
+        logger.warning("conform: dropping undeclared column(s) %s", extra)
+
+    missing = [n for n in declared if n not in table.column_names]
+    if missing:
+        raise ConformError(f"dataframe is missing column(s): {missing}")
+
+    table = table.select(declared)
+
+    # The cast target schema is always nullable here: nullability is a
+    # *value* constraint (checked below against actual data), not something
+    # we want pyarrow's cast to enforce structurally — a non-nullable target
+    # field makes `cast()` raise ValueError on any null, before we get a
+    # chance to report it as a ConformError with a useful message.
+    target = pa.schema(
+        [pa.field(c.name, arrow_type(parse_sql_type(c.type)), nullable=True) for c in columns]
+    )
+
+    for field in target:
+        _reject_lossy_cast(field.name, table.schema.field(field.name).type, field.type)
+
+    try:
+        table = table.cast(target, safe=True)
+    except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError, ValueError) as exc:
+        raise ConformError(f"strict cast to declared schema failed: {exc}") from exc
+
+    for col in columns:
+        if not col.nullable and table.column(col.name).null_count:
+            raise ConformError(
+                f"column {col.name} is declared nullable: false but contains nulls"
+            )
+        sql_t = parse_sql_type(col.type)
+        if sql_t.length is not None:
+            max_len = pc.max(pc.utf8_length(table.column(col.name))).as_py()
+            if max_len is not None and max_len > sql_t.length:
+                raise ConformError(
+                    f"column {col.name}: value length {max_len} exceeds "
+                    f"{sql_t.base}({sql_t.length})"
+                )
+
+    # Restore each field's declared nullability on the returned schema. This
+    # is safe now: nulls have already been checked above against the
+    # declared `nullable: false` constraints, so re-casting to a
+    # non-nullable field here cannot raise on data we haven't already
+    # validated.
+    declared_schema = pa.schema(
+        [pa.field(c.name, arrow_type(parse_sql_type(c.type)), nullable=c.nullable) for c in columns]
+    )
+    return table.cast(declared_schema)

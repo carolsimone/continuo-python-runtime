@@ -75,3 +75,10 @@ def test_lint_bad_scripts_returns_1(tmp_path, caplog):
     rc = main(["lint", str(scripts_dir)])
     assert rc == 1
     assert any("psycopg2" in r.message for r in caplog.records)
+
+
+def test_lint_nonexistent_path_returns_1(caplog):
+    # Nonexistent path should exit 1 with path error, not crash
+    rc = main(["lint", "/nonexistent/path/to/script.py"])
+    assert rc == 1
+    assert any("path does not exist" in r.message for r in caplog.records)

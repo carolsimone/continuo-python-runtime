@@ -1,0 +1,13 @@
+.venv/
+.git/
+.superpowers/
+.idea/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+docs/
+template/
+tests/

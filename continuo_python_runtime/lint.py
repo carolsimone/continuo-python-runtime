@@ -146,10 +146,11 @@ def lint_source(source: str, filename: str) -> list[str]:
                 violations.append(
                     f"{filename}:{node.lineno}: SQL string literal '{snippet}'"
                 )
-            # Mark constants in this BinOp as consumed
-            for n in ast.walk(node):
-                if isinstance(n, ast.Constant):
-                    consumed_constants.add(id(n))
+            # Only mark constants as consumed if reconstruction succeeded
+            if reconstructed_text is not None:
+                for n in ast.walk(node):
+                    if isinstance(n, ast.Constant):
+                        consumed_constants.add(id(n))
 
         # L2: Check for SQL in plain string literals (skip if consumed by compound)
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):

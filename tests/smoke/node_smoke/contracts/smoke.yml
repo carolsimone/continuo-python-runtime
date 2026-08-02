@@ -1,0 +1,13 @@
+nodes:
+  - schema: analytics
+    table: smoke
+    owner: platform
+    schedule: daily
+    criticality: SECONDARY
+    script: scripts/smoke.py
+    reads:
+      ids: select id from analytics.src
+    output_columns:
+      - name: id
+        type: INTEGER
+        nullable: false

@@ -10,6 +10,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      # PRECONDITION: continuo-python-runtime must be published to PyPI (this repo's release pipeline).
+      # Until then, install from git: uv tool install git+https://github.com/carolsimone/continuo-python-runtime
       - name: Install runtime tooling
         run: uv tool install continuo-python-runtime
       - name: Lint scripts (no hand-written SQL)
@@ -36,6 +38,12 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       - name: POST /releases            # strictly after build+push and upload
         run: |
+          body=$(jq -n \
+            --arg service "$SERVICE" \
+            --arg release_id "$RELEASE_ID" \
+            --arg image_tag "$IMAGE_TAG" \
+            --arg repo "${{ github.repository }}" \
+            --arg commit_sha "$GITHUB_SHA" \
+            '{service: $service, release_id: $release_id, image_tag: $image_tag, repo: $repo, commit_sha: $commit_sha, kind: "python"}')
           curl --fail-with-body -X POST "${{ vars.RELEASE_ENDPOINT }}/releases" \
-            -H 'Content-Type: application/json' \
-            -d "{\"service\":\"${SERVICE}\",\"release_id\":\"${RELEASE_ID}\",\"image_tag\":\"${IMAGE_TAG}\",\"repo\":\"${{ github.repository }}\",\"commit_sha\":\"${GITHUB_SHA}\",\"kind\":\"python\"}"
+            -H 'Content-Type: application/json' -d "$body"

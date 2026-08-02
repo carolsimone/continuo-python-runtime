@@ -29,4 +29,4 @@ The CI/CD pipeline (`release.yml`) performs the six-step orchestration:
 ## Resources
 
 - [Continuo Python Runtime Documentation](https://github.com/carolsimone/continuo-python-runtime)
-- [Contract Schema Reference](https://github.com/carolsimone/continuo-python-runtime/blob/main/docs/contract.md)
+- [Boundary Contract (design §13)](https://github.com/carolsimone/continuo-python-runtime/blob/main/docs/boundary-contract.md)

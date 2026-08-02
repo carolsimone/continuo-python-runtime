@@ -1,0 +1,41 @@
+name: release
+on:
+  push: { branches: [main] }
+env:
+  SERVICE: your-service-name          # one service name per domain repo
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install runtime tooling
+        run: uv tool install continuo-python-runtime
+      - name: Lint scripts (no hand-written SQL)
+        run: continuo-runtime lint scripts/
+      - name: Validate contracts
+        run: continuo-runtime validate contracts/
+      - name: Domain tests
+        run: |
+          if [ -d tests ]; then uv run --with pytest pytest -v; fi
+      - name: Compute release id
+        run: echo "RELEASE_ID=${{ github.run_number }}-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - name: Merge contracts
+        run: continuo-runtime merge contracts/ --service "$SERVICE" --repo-root . --out contract.yaml
+      - name: Build and push image
+        run: |
+          IMAGE="${{ vars.REGISTRY }}/${SERVICE}:${RELEASE_ID}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE_TAG=$IMAGE" >> "$GITHUB_ENV"
+      - name: Upload contract artifact
+        run: aws s3 cp contract.yaml "s3://${{ vars.BUCKET }}/${SERVICE}/${RELEASE_ID}/contract.yaml"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: POST /releases            # strictly after build+push and upload
+        run: |
+          curl --fail-with-body -X POST "${{ vars.RELEASE_ENDPOINT }}/releases" \
+            -H 'Content-Type: application/json' \
+            -d "{\"service\":\"${SERVICE}\",\"release_id\":\"${RELEASE_ID}\",\"image_tag\":\"${IMAGE_TAG}\",\"repo\":\"${{ github.repository }}\",\"commit_sha\":\"${GITHUB_SHA}\",\"kind\":\"python\"}"

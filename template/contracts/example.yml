@@ -1,0 +1,12 @@
+nodes:
+  - schema: analytics
+    table: example
+    description: "Replace with your node"
+    owner: your-team
+    schedule: daily
+    criticality: SECONDARY
+    script: scripts/example.py
+    reads:
+      ids: select id from analytics.some_upstream
+    output_columns:
+      - {name: id, type: INTEGER, nullable: false}

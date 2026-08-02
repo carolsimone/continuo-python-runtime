@@ -156,3 +156,20 @@ def test_build_adapter_uses_discovery_seam(monkeypatch, harness_repo):
         lambda: ("dummy", DummyAdapter),
     )
     assert run_node(_env(harness_repo)) == 0
+
+
+def test_adapter_construction_failure_emits_single_load_error_block(monkeypatch, harness_repo, capsys):
+    import continuo_python_runtime.harness as harness_mod
+
+    class BoomAdapterDiscoveryError(Exception):
+        pass
+
+    def _raise():
+        raise BoomAdapterDiscoveryError("no adapter installed")
+
+    monkeypatch.setattr(harness_mod, "build_adapter", _raise)
+
+    assert run_node(_env(harness_repo)) == 1
+    out = capsys.readouterr().out
+    assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
+    assert '"message":"LoadError:' in out

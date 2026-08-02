@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
+import logging
 import sys
 import uuid
 from collections.abc import Mapping
@@ -29,6 +30,8 @@ from continuo_python_runtime.context import RunContext
 from continuo_python_runtime.contract.loader import load_contract_dir
 from continuo_python_runtime.contract.model import Node
 from continuo_python_runtime.errors import ContractError, HarnessError, LoadError, ScriptError
+
+logger = logging.getLogger("continuo_python_runtime.harness")
 
 
 def _require_env(env: Mapping[str, str], key: str) -> str:
@@ -135,12 +138,22 @@ def run_node(env: Mapping[str, str], adapter: Any = None) -> int:
         contract_dir = Path(env.get("CONTRACT_DIR") or "/app/contracts")
         app_root = Path(env["APP_ROOT"]) if env.get("APP_ROOT") else contract_dir.parent
 
+        logger.info("running node %s -> %s.%s", node_id, target_schema, table_name)
+
         nodes = load_contract_dir(contract_dir)
         node = select_node(nodes, node_id)
 
         module = load_script(node, app_root)
 
-        active_adapter = adapter if adapter is not None else build_adapter()
+        if adapter is not None:
+            active_adapter = adapter
+        else:
+            try:
+                active_adapter = build_adapter()
+            except HarnessError:
+                raise
+            except Exception as exc:
+                raise LoadError(f"adapter construction failed: {exc}") from exc
 
         ctx = RunContext(node, active_adapter)
         raw_result = _execute_script(module, ctx)

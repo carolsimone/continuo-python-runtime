@@ -34,8 +34,11 @@ in `template/.github/workflows/release.yml`.
    S3 bucket for contract artifacts), `RELEASE_ENDPOINT` (the release
    webhook endpoint).
 4. Configure repository secrets: `AWS_ACCESS_KEY_ID` and
-   `AWS_SECRET_ACCESS_KEY` for the S3 upload, plus registry credentials if
-   your registry is private.
+   `AWS_SECRET_ACCESS_KEY` for the S3 upload. The template workflow pushes
+   the built image to GHCR using the workflow's own `GITHUB_TOKEN` (granted
+   `packages: write`) — no registry secret is needed for that. If you point
+   `REGISTRY` at a different or private registry, add your own `docker
+   login` step to `release.yml`.
 5. Write a contract file under `contracts/` (see
    `template/contracts/example.yml`) and a script under `scripts/` that
    implements `run(ctx)` (see `template/scripts/example.py`).
@@ -62,9 +65,11 @@ def run(ctx):
   `pa.Table.from_pandas(..., preserve_index=False)`), or any object
   implementing the Arrow C stream protocol (`__arrow_c_stream__`) — for
   example a polars DataFrame. Returning anything else raises `ScriptError`.
-- The dataframe library is your choice. The runtime itself only depends on
-  `pyarrow`; add whatever you script against (pandas, polars, …) as a `RUN
-  pip install` line in your own `Dockerfile`, on top of the base image.
+- The dataframe library is your choice. No dataframe library is baked into
+  the base image — the package's own runtime dependencies are `pyarrow`,
+  `PyYAML`, and `continuo-validation-contract`. Add whatever you script
+  against (pandas, polars, …) as a `RUN pip install` line in your own
+  `Dockerfile`, on top of the base image.
 - Scripts do not import warehouse drivers, write raw SQL literals, or call
   data-access methods directly — `continuo-runtime lint` rejects those
   (forbidden driver imports such as `psycopg2`/`sqlalchemy`/`trino`, SQL

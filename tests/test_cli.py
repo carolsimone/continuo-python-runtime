@@ -54,3 +54,31 @@ def test_hash_missing_script_exits_1(contract_repo, caplog):
     )
     assert rc == 1
     assert any("script not found" in r.message for r in caplog.records)
+
+
+def test_lint_good_scripts_returns_0(tmp_path):
+    # Create a good script directory
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "good.py").write_text("def run(ctx):\n    return ctx.read('ids')\n")
+
+    rc = main(["lint", str(scripts_dir)])
+    assert rc == 0
+
+
+def test_lint_bad_scripts_returns_1(tmp_path, caplog):
+    # Create a bad script directory with forbidden import
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "bad.py").write_text("import psycopg2\ndef run(ctx):\n    return None\n")
+
+    rc = main(["lint", str(scripts_dir)])
+    assert rc == 1
+    assert any("psycopg2" in r.message for r in caplog.records)
+
+
+def test_lint_nonexistent_path_returns_1(caplog):
+    # Nonexistent path should exit 1 with path error, not crash
+    rc = main(["lint", "/nonexistent/path/to/script.py"])
+    assert rc == 1
+    assert any("path does not exist" in r.message for r in caplog.records)

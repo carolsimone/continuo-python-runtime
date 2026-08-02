@@ -1,7 +1,8 @@
-"""CLI for continuo-runtime: validate, merge, hash, and lint contract workflows."""
+"""CLI for continuo-runtime: validate, merge, hash, lint, and run contract workflows."""
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from continuo_python_runtime.contract.merge import (
 )
 from continuo_python_runtime.errors import HarnessError
 from continuo_python_runtime.lint import lint_paths
+from continuo_python_runtime import harness
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     lint_parser.add_argument("path", nargs="+", help="Paths to lint (files or directories)")
 
+    # run subcommand
+    subparsers.add_parser(
+        "run", help="Execute a node script (container entrypoint)"
+    )
+
     args = parser.parse_args(argv)
 
     try:
@@ -69,6 +76,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_hash(args.contract_dir, args.repo_root)
         elif args.command == "lint":
             return cmd_lint(args.path)
+        elif args.command == "run":
+            return cmd_run()
     except HarnessError as exc:
         logger.error("%s", exc)
         return 1
@@ -118,3 +127,13 @@ def cmd_lint(paths: list[str]) -> int:
             logger.error("%s", violation)
         return 1
     return 0
+
+
+def cmd_run() -> int:
+    """Execute a node script reading configuration from os.environ.
+
+    This is the container entrypoint: reads NODE_ID, TABLE_NAME, TARGET_SCHEMA,
+    CONTRACT_DIR, and APP_ROOT from environment, then calls harness.run_node()
+    which produces exactly one sentinel result block.
+    """
+    return harness.run_node(os.environ)

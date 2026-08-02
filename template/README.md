@@ -12,7 +12,9 @@ This is a copy-ready template for implementing a [Continuo Python domain repo](h
    - `RELEASE_ENDPOINT`: Your release webhook endpoint
 4. **Configure repository secrets**:
    - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for S3 uploads
-   - Docker registry credentials (if using a private registry)
+   - `release.yml` already logs in to `ghcr.io` with the built-in `GITHUB_TOKEN`
+     (no extra secret needed) — only add your own login step if `REGISTRY`
+     points at a registry other than `ghcr.io`
 5. **Write your contracts** in `contracts/` and **implement scripts** in `scripts/`
 6. **Push to main** to trigger the release pipeline
 

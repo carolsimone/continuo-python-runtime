@@ -25,6 +25,12 @@ jobs:
         run: echo "RELEASE_ID=${{ github.run_number }}-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
       - name: Merge contracts
         run: continuo-runtime merge contracts/ --service "$SERVICE" --repo-root . --out contract.yaml
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push image
         run: |
           IMAGE="${{ vars.REGISTRY }}/${SERVICE}:${RELEASE_ID}"

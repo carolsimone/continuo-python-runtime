@@ -15,3 +15,14 @@ def test_template_passes_lint_validate_merge(tmp_path):
     assert main(["merge", str(TEMPLATE / "contracts"), "--service", "example",
                  "--repo-root", str(TEMPLATE), "--out", str(out)]) == 0
     assert out.exists()
+
+
+def test_template_passes_hash(capsys):
+    """Template must also pass the hash subcommand, one tab-separated sha256 line."""
+    assert main(["hash", str(TEMPLATE / "contracts"), "--repo-root", str(TEMPLATE)]) == 0
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line]
+    assert len(lines) == 1
+    relation, hash_value = lines[0].split("\t")
+    assert relation == "analytics.example"
+    assert hash_value.startswith("sha256:")

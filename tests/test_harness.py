@@ -158,6 +158,92 @@ def test_build_adapter_uses_discovery_seam(monkeypatch, harness_repo):
     assert run_node(_env(harness_repo)) == 0
 
 
+def test_script_import_syntax_error_emits_single_sentinel_block(harness_repo, capsys):
+    (harness_repo / "scripts" / "t.py").write_text("def run(ctx:\n    return 1\n")
+    assert run_node(_env(harness_repo), adapter=FakeRuntimeAdapter()) == 1
+    out = capsys.readouterr().out
+    assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
+    body = json.loads(out.split("BEGIN===\n")[1].split("\n===CONTINUO")[0])
+    assert body["message"].startswith("ScriptError:")
+
+
+def test_script_import_time_exception_emits_single_sentinel_block(harness_repo, capsys):
+    (harness_repo / "scripts" / "t.py").write_text(
+        "raise RuntimeError('boom at import')\n"
+    )
+    assert run_node(_env(harness_repo), adapter=FakeRuntimeAdapter()) == 1
+    out = capsys.readouterr().out
+    assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
+    body = json.loads(out.split("BEGIN===\n")[1].split("\n===CONTINUO")[0])
+    assert body["message"].startswith("ScriptError:")
+
+
+def test_unexpected_exception_still_emits_single_sentinel_block(
+    monkeypatch, harness_repo, capsys
+):
+    import continuo_python_runtime.harness as harness_mod
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("totally unexpected")
+
+    monkeypatch.setattr(harness_mod, "conform", _boom)
+    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    assert run_node(_env(harness_repo), adapter=ad) == 1
+    out = capsys.readouterr().out
+    assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
+    body = json.loads(out.split("BEGIN===\n")[1].split("\n===CONTINUO")[0])
+    assert body["message"].startswith("ScriptError: unexpected failure:")
+
+
+def test_module_level_print_does_not_reach_stdout(harness_repo, capsys):
+    (harness_repo / "scripts" / "t.py").write_text(
+        "print('module-level noise')\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
+    )
+    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    run_node(_env(harness_repo), adapter=ad)
+    out = capsys.readouterr().out
+    assert "module-level noise" not in out
+
+
+def test_missing_required_warehouse_env_is_load_error(monkeypatch, harness_repo, capsys):
+    import continuo_python_runtime.harness as harness_mod
+
+    class DummyAdapter(FakeRuntimeAdapter):
+        @classmethod
+        def required_env(cls):
+            return ["WAREHOUSE_HOST", "WAREHOUSE_PASSWORD"]
+
+        @classmethod
+        def from_env(cls):
+            return cls()
+
+    monkeypatch.setattr(
+        harness_mod, "discover_runtime_adapter", lambda: ("dummy", DummyAdapter)
+    )
+    monkeypatch.delenv("WAREHOUSE_HOST", raising=False)
+    monkeypatch.delenv("WAREHOUSE_PASSWORD", raising=False)
+
+    assert run_node(_env(harness_repo)) == 1
+    out = capsys.readouterr().out
+    assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
+    body = json.loads(out.split("BEGIN===\n")[1].split("\n===CONTINUO")[0])
+    assert body["message"].startswith("LoadError:")
+    assert "WAREHOUSE_HOST" in body["message"]
+    assert "WAREHOUSE_PASSWORD" in body["message"]
+
+
+def test_adapter_close_called_on_success(harness_repo, capsys):
+    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    assert run_node(_env(harness_repo), adapter=ad) == 0
+    assert ad.closed is True
+
+
+def test_adapter_close_called_on_failure(harness_repo, capsys):
+    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"wrong": [1]})})
+    assert run_node(_env(harness_repo), adapter=ad) == 1
+    assert ad.closed is True
+
+
 def test_adapter_construction_failure_emits_single_load_error_block(monkeypatch, harness_repo, capsys):
     import continuo_python_runtime.harness as harness_mod
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import logging
+import os
 import sys
 import uuid
 from collections.abc import Mapping
@@ -94,7 +95,10 @@ def load_script(node: Node, repo_root: Path) -> ModuleType:
         raise ContractError(f"cannot load script: {node.script}")
 
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise ScriptError(f"script import failed: {exc}") from exc
 
     if not callable(getattr(module, "run", None)):
         raise ScriptError(f"script {node.script} has no callable 'run'")
@@ -103,8 +107,17 @@ def load_script(node: Node, repo_root: Path) -> ModuleType:
 
 
 def build_adapter() -> Any:
-    """Discover and construct the single installed runtime adapter."""
+    """Discover and construct the single installed runtime adapter.
+
+    Raises:
+        LoadError: If any of the adapter's ``required_env()`` vars are unset
+            or empty in ``os.environ``.
+    """
     _, cls = discover_runtime_adapter()
+    required = cls.required_env()
+    missing = [key for key in required if not os.environ.get(key)]
+    if missing:
+        raise LoadError(f"missing required warehouse env: {sorted(missing)}")
     return cls.from_env()
 
 
@@ -130,6 +143,7 @@ def run_node(env: Mapping[str, str], adapter: Any = None) -> int:
     Returns 0 on success, 1 on any :class:`HarnessError`.
     """
     node_id = env.get("NODE_ID") or ""
+    active_adapter: Any = None
     try:
         node_id = _require_env(env, "NODE_ID")
         table_name = _require_env(env, "TABLE_NAME")
@@ -143,7 +157,8 @@ def run_node(env: Mapping[str, str], adapter: Any = None) -> int:
         nodes = load_contract_dir(contract_dir)
         node = select_node(nodes, node_id)
 
-        module = load_script(node, app_root)
+        with contextlib.redirect_stdout(sys.stderr):
+            module = load_script(node, app_root)
 
         if adapter is not None:
             active_adapter = adapter
@@ -182,3 +197,20 @@ def run_node(env: Mapping[str, str], adapter: Any = None) -> int:
             )
         )
         return 1
+    except Exception as exc:
+        logger.exception("unexpected failure running node %s", node_id)
+        print(
+            result_block(
+                "error",
+                message=f"ScriptError: unexpected failure: {exc}",
+                failures=1,
+                unique_id=node_id,
+            )
+        )
+        return 1
+    finally:
+        if active_adapter is not None:
+            try:
+                active_adapter.close()
+            except Exception:
+                logger.warning("adapter.close() failed", exc_info=True)

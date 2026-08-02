@@ -87,6 +87,28 @@ def test_fstring_concat_with_nonliteral_flagged():
     assert any("SQL string literal" in v for v in violations)
 
 
+def test_private_attribute_access_flagged():
+    bad = GOOD + "def f(ctx):\n    return ctx._fetch('x')\n"
+    violations = lint_source(bad, "s.py")
+    assert any("private attribute access '_fetch'" in v for v in violations)
+
+
+def test_dunder_attribute_access_flagged():
+    bad = GOOD + "def f(x):\n    return x.__dict__\n"
+    violations = lint_source(bad, "s.py")
+    assert any("private attribute access '__dict__'" in v for v in violations)
+
+
+def test_normal_read_call_clean():
+    assert lint_source(GOOD, "s.py") == []
+
+
+def test_name_dunder_name_comparison_not_flagged():
+    source = GOOD + "if __name__ == '__main__':\n    pass\n"
+    violations = lint_source(source, "s.py")
+    assert not any("private attribute access" in v for v in violations)
+
+
 def test_full_concat_no_double_report():
     """Fully-literal concat should not double-report."""
     source = GOOD + "q = 'select id ' + 'from t'\n"

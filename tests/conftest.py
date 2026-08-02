@@ -43,6 +43,15 @@ class FakeRuntimeAdapter:
         self.tables = tables or {}  # sql -> pa.Table
         self.loaded = None
         self.ensured = None
+        self.closed = False
+
+    @classmethod
+    def required_env(cls):
+        return []
+
+    @classmethod
+    def from_env(cls):
+        return cls()
 
     def fetch(self, sql):
         return self.tables[sql]
@@ -54,7 +63,7 @@ class FakeRuntimeAdapter:
         self.loaded = (schema, table, data)
 
     def close(self):
-        pass
+        self.closed = True
 
 
 @pytest.fixture

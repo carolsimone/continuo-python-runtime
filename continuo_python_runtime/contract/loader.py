@@ -40,7 +40,7 @@ _REQUIRED_STRING_FIELDS = ("schema", "table", "owner", "schedule", "script")
 _ALLOWED_OUTPUT_COLUMN_KEYS = {"name", "type", "nullable"}
 
 
-def _mask_string_literals(sql: str) -> str:
+def _mask_string_literals(sql: str) -> str | None:
     """Return ``sql`` with the contents of single/double-quoted string
     literals removed, so a ``;`` scan doesn't trip on one embedded in a
     literal (e.g. ``split_part(tags, ';', 1)``).
@@ -49,6 +49,12 @@ def _mask_string_literals(sql: str) -> str:
     delimiters themselves are kept; only the interior characters are
     dropped. The result is not valid SQL - it exists solely for the
     semicolon check below.
+
+    Returns ``None`` if a single- or double-quoted literal is left
+    unterminated (no closing quote before the end of the string): silently
+    truncating in that case would drop everything after the opening quote
+    -- including any ``;`` it was hiding -- and let a multi-statement read
+    through undetected.
     """
     result = []
     i = 0
@@ -58,6 +64,7 @@ def _mask_string_literals(sql: str) -> str:
         if ch == "'":
             result.append(ch)
             i += 1
+            closed = False
             while i < n:
                 if sql[i] == "'":
                     if i + 1 < n and sql[i + 1] == "'":
@@ -66,18 +73,25 @@ def _mask_string_literals(sql: str) -> str:
                         continue
                     result.append(sql[i])
                     i += 1
+                    closed = True
                     break
                 i += 1
+            if not closed:
+                return None
             continue
         if ch == '"':
             result.append(ch)
             i += 1
+            closed = False
             while i < n:
                 if sql[i] == '"':
                     result.append(sql[i])
                     i += 1
+                    closed = True
                     break
                 i += 1
+            if not closed:
+                return None
             continue
         result.append(ch)
         i += 1
@@ -118,7 +132,9 @@ def _validate_read_shape(label: str, name: str, sql: str) -> None:
     start with ``select``, ``with``, or a leading ``(`` (a parenthesized
     SELECT), case-insensitive. It must contain no ``;`` except one optional
     trailing semicolon; the semicolon scan is literal-aware, ignoring ``;``
-    characters inside single/double-quoted string literals.
+    characters inside single/double-quoted string literals. An unterminated
+    string literal is itself rejected -- it can otherwise hide arbitrary
+    trailing SQL (including a ``;``) from the scan.
     Schema-qualification is left to the control plane's sqlglot validation.
 
     Raises:
@@ -126,7 +142,12 @@ def _validate_read_shape(label: str, name: str, sql: str) -> None:
     """
     stripped = sql.strip()
     body = stripped[:-1] if stripped.endswith(";") else stripped
-    if ";" in _mask_string_literals(body):
+    masked = _mask_string_literals(body)
+    if masked is None:
+        raise ContractError(
+            f"{label}: read '{name}' has an unterminated string literal"
+        )
+    if ";" in masked:
         raise ContractError(
             f"{label}: 'reads.{name}' must be a single SQL statement "
             f"(only one optional trailing semicolon allowed)"

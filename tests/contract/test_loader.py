@@ -213,6 +213,26 @@ def test_reads_allows_leading_parenthesized_select():
     assert n.reads["ids"] == sql
 
 
+def test_reads_rejects_unterminated_single_quote():
+    """An unterminated single-quoted string literal must not silently
+    truncate the semicolon scan and let a multi-statement read through."""
+    sql = "select 'unterminated from analytics.a; drop table x"
+    with pytest.raises(ContractError, match="unterminated"):
+        parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+
+
+def test_reads_rejects_unterminated_double_quote():
+    sql = 'select "unterminated from analytics.a; drop table x'
+    with pytest.raises(ContractError, match="unterminated"):
+        parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+
+
+def test_reads_allows_properly_terminated_literal_with_doubled_quote_escape():
+    sql = "select 'it''s fine' as tag from analytics.a"
+    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+    assert n.reads["ids"] == sql
+
+
 def test_reads_still_rejects_drop_then_select():
     with pytest.raises(ContractError, match="reads.ids"):
         parse_node({**VALID, "reads": {"ids": "drop table x; select 1"}}, "f.yml")

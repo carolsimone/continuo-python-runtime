@@ -86,9 +86,18 @@ def _mask_string_literals(sql: str) -> str:
 
 def _strip_leading_sql_comments(sql: str) -> str:
     """Strip leading whitespace, ``-- ...`` line comments, and ``/* ... */``
-    block comments from the start of ``sql``."""
+    block comments from the start of ``sql``.
+
+    An unterminated ``/*`` block comment (no closing ``*/``) consumes the
+    rest of the string, so callers see an empty statement rather than a
+    crash. Bounded by ``len(sql) + 1`` iterations (each iteration strictly
+    shrinks ``text``) with an explicit trailing return, so every path
+    returns a definite ``str`` rather than relying on an unbounded
+    ``while True`` loop that a type checker can't prove always exits via
+    ``return``.
+    """
     text = sql
-    while True:
+    for _ in range(len(sql) + 1):
         stripped = text.lstrip()
         if stripped.startswith("--"):
             newline = stripped.find("\n")
@@ -99,6 +108,7 @@ def _strip_leading_sql_comments(sql: str) -> str:
             text = stripped[end + 2 :] if end != -1 else ""
             continue
         return stripped
+    return text.lstrip()
 
 
 def _validate_read_shape(label: str, name: str, sql: str) -> None:

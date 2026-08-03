@@ -198,6 +198,15 @@ def test_reads_allows_leading_block_comment():
     assert n.reads["ids"] == sql
 
 
+def test_reads_unterminated_block_comment_treated_as_rest_is_comment():
+    """An unterminated /* block comment consumes the rest of the string, so
+    the shape check sees an empty statement and reports the normal
+    "must start with SELECT or WITH" error (not a crash)."""
+    sql = "/* not closed select id from analytics.a"
+    with pytest.raises(ContractError, match="must start with SELECT or WITH"):
+        parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+
+
 def test_reads_allows_leading_parenthesized_select():
     sql = "(select 1) union all (select 2)"
     n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")

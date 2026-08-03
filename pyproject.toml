@@ -24,11 +24,6 @@ continuo-runtime = "continuo_python_runtime.cli:main"
 dev = ["ruff==0.3.0", "mypy==1.18.2", "types-PyYAML==6.0.12.20250915"]
 test = ["pytest==9.0.3", "pytest-cov==4.1.0"]
 
-[tool.uv.sources]
-# Git source pinned at the continuo PR #380 merge commit (validation-contract 0.3.0).
-# Replaced with a plain PyPI pin in PR 9 once 0.3.0 publishes.
-continuo-validation-contract = { git = "https://github.com/carolsimone/continuo", subdirectory = "validation-contract", rev = "d414c8a4c27f16dcc3e067e00fd70af22b3c35ef" }
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

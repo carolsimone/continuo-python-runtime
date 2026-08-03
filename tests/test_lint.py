@@ -1,6 +1,6 @@
 """Tests for script linting: forbidden imports, SQL literals, data-access calls."""
 
-from continuo_python_runtime.lint import lint_source
+from continuo_python_runtime.lint import lint_paths, lint_source
 
 GOOD = "def run(ctx):\n    ids = ctx.read('ids')\n    return ids\n"
 
@@ -116,3 +116,95 @@ def test_full_concat_no_double_report():
     # Should have exactly one violation (from the BinOp reconstruction)
     sql_violations = [v for v in violations if "SQL string literal" in v]
     assert len(sql_violations) == 1
+
+
+def test_formatted_value_constant_not_swallowed_by_binop_consumption():
+    """A SQL literal nested inside an f-string's FormattedValue expression must
+    still be flagged, even when the f-string is one operand of a BinOp concat
+    whose overall reconstructed text is benign. Previously the BinOp branch
+    walked ALL descendant Constants (including ones inside FormattedValue
+    expressions) and marked them consumed, hiding this literal entirely."""
+    source = GOOD + "q = f'{\"select a from analytics.t\"}' + ' x'\n"
+    violations = lint_source(source, "s.py")
+    sql_violations = [v for v in violations if "SQL string literal" in v]
+    assert len(sql_violations) == 1
+
+
+def test_module_docstring_prose_not_flagged():
+    source = '"""Select the rows from the upstream table."""\n' + GOOD
+    violations = lint_source(source, "s.py")
+    assert not any("SQL string literal" in v for v in violations)
+
+
+def test_function_docstring_prose_not_flagged():
+    source = (
+        "def run(ctx):\n"
+        '    """Select the rows from the upstream table."""\n'
+        "    return ctx.read('ids')\n"
+    )
+    violations = lint_source(source, "s.py")
+    assert not any("SQL string literal" in v for v in violations)
+
+
+def test_class_docstring_prose_not_flagged():
+    source = (
+        "class Foo:\n"
+        '    """Select the rows from the upstream table."""\n'
+        "    pass\n"
+    )
+    violations = lint_source(source, "s.py")
+    assert not any("SQL string literal" in v for v in violations)
+
+
+def test_same_prose_as_variable_still_flagged():
+    """The docstring exemption is positional, not content-based: the same
+    sentence assigned to a variable (not the first statement of a body) must
+    still be flagged."""
+    source = GOOD + "msg = 'Select the rows from the upstream table.'\n"
+    violations = lint_source(source, "s.py")
+    assert any("SQL string literal" in v for v in violations)
+
+
+def test_self_private_call_not_flagged():
+    source = (
+        "class Foo:\n"
+        "    def run(self, ctx):\n"
+        "        return self._helper()\n"
+        "    def _helper(self):\n"
+        "        return 1\n"
+    )
+    violations = lint_source(source, "s.py")
+    assert not any("private attribute access" in v for v in violations)
+
+
+def test_cls_private_call_not_flagged():
+    source = (
+        "class Foo:\n"
+        "    @classmethod\n"
+        "    def run(cls, ctx):\n"
+        "        return cls._helper()\n"
+        "    @classmethod\n"
+        "    def _helper(cls):\n"
+        "        return 1\n"
+    )
+    violations = lint_source(source, "s.py")
+    assert not any("private attribute access" in v for v in violations)
+
+
+def test_other_private_attribute_access_still_flagged():
+    """Non-self/cls private attribute access (e.g. ctx._fetch) must still be
+    flagged; the self/cls exemption is narrow."""
+    bad = GOOD + "def f(ctx):\n    return ctx._fetch('x')\n"
+    violations = lint_source(bad, "s.py")
+    assert any("private attribute access '_fetch'" in v for v in violations)
+
+
+def test_lint_paths_unreadable_file_reports_violation_not_crash(tmp_path):
+    """A file that can't be decoded (e.g. latin-1 bytes) should produce an
+    'unreadable' violation instead of raising UnicodeDecodeError."""
+    bad_file = tmp_path / "bad.py"
+    bad_file.write_bytes(b"# caf\xe9\n")
+    violations = lint_paths([bad_file])
+    assert len(violations) == 1
+    assert "unreadable" in violations[0]
+    assert str(bad_file) in violations[0]

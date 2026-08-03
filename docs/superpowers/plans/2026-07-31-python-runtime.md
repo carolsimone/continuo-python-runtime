@@ -16,7 +16,7 @@
 - Sentinel block: reuse `continuo_validation_contract.result.result_block(status, message, failures, unique_id)`; never re-implement the markers. Error class travels as the deterministic message prefix `"<ErrorClass>: <detail>"`.
 - Supported `output_columns` types (exact set): `BIGINT`, `INT`/`INTEGER`, `DOUBLE PRECISION`, `NUMERIC(p,s)`/`DECIMAL(p,s)`, `VARCHAR(n)`/`CHAR(n)`/`TEXT`, `TIMESTAMP`, `DATE`, `BOOLEAN`.
 - `content_hash` algorithm is spec §13.2 of the parent design, byte-exact: `"sha256:" + sha256(canonical_json(entry_without_content_hash) + b"\x00" + script_bytes)`, `reads` values whitespace-normalized, JSON sorted keys / compact separators.
-- Until `continuo-validation-contract==0.3.0` is on PyPI, depend on it via a uv path source: `[tool.uv.sources] continuo-validation-contract = { path = "../continuo/validation-contract", editable = true }`. Remove the override in PR 8 (images) — images must install from PyPI.
+- Until `continuo-validation-contract==0.3.0` is on PyPI, depend on it via a uv path source: `[tool.uv.sources] continuo-validation-contract = { path = "../continuo/validation-contract", editable = true }`. Remove the override in PR 9 (images) — images must install from PyPI.
 - Commit messages: conventional (`feat:`, `test:`, `chore:`), each ending with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 
 ## PR map (merge order)

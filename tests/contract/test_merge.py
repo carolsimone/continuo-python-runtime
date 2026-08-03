@@ -4,7 +4,7 @@ import yaml
 
 import pytest
 
-from continuo_python_runtime.contract.merge import build_wire_contract
+from continuo_python_runtime.contract.merge import build_wire_contract, write_wire_contract
 from continuo_python_runtime.errors import ContractError
 
 
@@ -106,3 +106,13 @@ def test_script_path_pointing_at_directory_rejected(tmp_path):
 
     with pytest.raises(ContractError, match="script not found"):
         build_wire_contract(repo / "contracts", repo, "s")
+
+
+def test_write_wire_contract_creates_missing_out_dir(contract_repo, tmp_path):
+    """write_wire_contract should create --out's parent directory rather than
+    crashing with FileNotFoundError."""
+    doc = build_wire_contract(contract_repo / "contracts", contract_repo, "s")
+    out = tmp_path / "does" / "not" / "exist" / "contract.yaml"
+    write_wire_contract(doc, out)
+    assert out.exists()
+    assert yaml.safe_load(out.read_text())["service"] == "s"

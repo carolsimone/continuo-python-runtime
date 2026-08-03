@@ -178,6 +178,71 @@ def test_reads_disallows_multiple_semicolons():
         parse_node({**VALID, "reads": {"ids": "select 1; select 2;"}}, "f.yml")
 
 
+def test_reads_allows_semicolon_inside_string_literal():
+    """A ';' inside a single-quoted string literal argument must not trip the
+    literal-unaware semicolon scan."""
+    sql = "select split_part(tags, ';', 1) as tag from analytics.a"
+    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+    assert n.reads["ids"] == sql
+
+
+def test_reads_allows_leading_line_comment():
+    sql = "-- note\nselect id from analytics.a"
+    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+    assert n.reads["ids"] == sql
+
+
+def test_reads_allows_leading_block_comment():
+    sql = "/* note */ select id from analytics.a"
+    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+    assert n.reads["ids"] == sql
+
+
+def test_reads_unterminated_block_comment_treated_as_rest_is_comment():
+    """An unterminated /* block comment consumes the rest of the string, so
+    the shape check sees an empty statement and reports the normal
+    "must start with SELECT or WITH" error (not a crash)."""
+    sql = "/* not closed select id from analytics.a"
+    with pytest.raises(ContractError, match="must start with SELECT or WITH"):
+        parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+
+
+def test_reads_allows_leading_parenthesized_select():
+    sql = "(select 1) union all (select 2)"
+    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+    assert n.reads["ids"] == sql
+
+
+def test_reads_rejects_unterminated_single_quote():
+    """An unterminated single-quoted string literal must not silently
+    truncate the semicolon scan and let a multi-statement read through."""
+    sql = "select 'unterminated from analytics.a; drop table x"
+    with pytest.raises(ContractError, match="unterminated"):
+        parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+
+
+def test_reads_rejects_unterminated_double_quote():
+    sql = 'select "unterminated from analytics.a; drop table x'
+    with pytest.raises(ContractError, match="unterminated"):
+        parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+
+
+def test_reads_allows_properly_terminated_literal_with_doubled_quote_escape():
+    sql = "select 'it''s fine' as tag from analytics.a"
+    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+    assert n.reads["ids"] == sql
+
+
+def test_reads_still_rejects_drop_then_select():
+    with pytest.raises(ContractError, match="reads.ids"):
+        parse_node({**VALID, "reads": {"ids": "drop table x; select 1"}}, "f.yml")
+
+
+def test_reads_still_rejects_two_selects():
+    with pytest.raises(ContractError, match="reads.ids"):
+        parse_node({**VALID, "reads": {"ids": "select 1; select 2"}}, "f.yml")
+
+
 def test_output_column_unknown_key_rejected():
     cols = [{"name": "id", "type": "INTEGER", "nullabel": True}]
     with pytest.raises(ContractError, match="nullabel"):

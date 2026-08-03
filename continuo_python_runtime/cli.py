@@ -81,6 +81,9 @@ def main(argv: list[str] | None = None) -> int:
     except HarnessError as exc:
         logger.error("%s", exc)
         return 1
+    except OSError as exc:
+        logger.error("%s", exc)
+        return 1
 
     return 0
 

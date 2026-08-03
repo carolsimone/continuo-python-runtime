@@ -32,7 +32,8 @@ in `template/.github/workflows/release.yml`.
 3. Configure repository variables in GitHub (Settings → Secrets and
    variables → Actions): `REGISTRY` (your Docker registry), `BUCKET` (your
    S3 bucket for contract artifacts), `RELEASE_ENDPOINT` (the release
-   webhook endpoint).
+   webhook endpoint). `RELEASE_ENDPOINT` is the **base URL** of the Continuo
+   API (no `/releases` suffix) — the workflow appends `/releases` itself.
 4. Configure repository secrets: `AWS_ACCESS_KEY_ID` and
    `AWS_SECRET_ACCESS_KEY` for the S3 upload. The template workflow pushes
    the built image to GHCR using the workflow's own `GITHUB_TOKEN` (granted
@@ -71,10 +72,21 @@ def run(ctx):
   against (pandas, polars, …) as a `RUN pip install` line in your own
   `Dockerfile`, on top of the base image.
 - Scripts do not import warehouse drivers, write raw SQL literals, or call
-  data-access methods directly — `continuo-runtime lint` rejects those
-  (forbidden driver imports such as `psycopg2`/`sqlalchemy`/`trino`, SQL
-  string literals, and calls like `execute`/`read_sql`). All warehouse
-  access goes through `ctx.read()`.
+  data-access methods directly — `continuo-runtime lint` rejects those:
+  - forbidden driver imports (`psycopg2`/`sqlalchemy`/`trino`/etc.),
+  - SQL string literals (in plain strings, f-strings, and `+` concatenation),
+  - forbidden data-access calls (`execute`/`read_sql`/etc.), including ones
+    reached via a `from ... import` alias (e.g. `from pandas import
+    read_sql as rs` then calling `rs(...)`),
+  - private/protected attribute access (`obj._x`) — except on `self`/`cls`,
+    so a script's own class-private helpers (`self._helper()`) aren't
+    flagged.
+
+  The SQL-literal rule is best-effort: docstrings are exempt, but other
+  prose may still occasionally match. The hard guarantees enforced by lint
+  are the driver-import and data-access-call rules, together with the fact
+  that `RunContext` only exposes `ctx.read()` — all warehouse access goes
+  through it.
 - The harness — not the script — performs the write. It calls `conform()`
   on whatever `run()` returned and issues the only INSERT; the script never
   writes directly.

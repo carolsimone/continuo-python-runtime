@@ -37,3 +37,22 @@ target-version = "py312"
 [tool.mypy]
 python_version = "3.14"
 strict = false
+
+[tool.uv.workspace]
+members = ["python-runtime-postgres", "python-runtime-trino"]
+
+[tool.pytest.ini_options]
+# importlib import-mode: each workspace member's tests/ is its own `tests`
+# package (carries __init__.py). Even in importlib mode, two files with the
+# SAME basename in different `tests` packages resolve to one module name
+# (tests.<basename>) and the second silently collects the first's functions —
+# so every test module basename must be unique across the root suite and both
+# adapter suites (test_adapter_runtime_<engine>.py, etc). Dropping the
+# __init__.py files instead is not an option: pytest's parent-module
+# insertion would then claim the top-level `trino/` directory name and shadow
+# the installed trino DBAPI package (see python-runtime-trino/tests).
+addopts = "--tb=short --import-mode=importlib"
+testpaths = ["tests"]
+markers = [
+    "integration: needs a live docker-compose stack running (see tests/smoke/*-stack)",
+]

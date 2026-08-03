@@ -1,0 +1,112 @@
+name: images
+on:
+  pull_request:
+    paths:
+      - "Dockerfile.*"
+      - "tests/smoke/**"
+      - "continuo_python_runtime/**"
+      - "pyproject.toml"
+      - ".github/workflows/images.yml"
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-postgres:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build postgres image
+        run: docker build -f Dockerfile.postgres -t cpr-smoke .
+      - name: Save image
+        run: docker save cpr-smoke -o /tmp/cpr-smoke.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cpr-smoke-image
+          path: /tmp/cpr-smoke.tar
+          retention-days: 1
+
+  smoke-postgres:
+    needs: build-postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: continuo
+          POSTGRES_PASSWORD: continuo
+          POSTGRES_DB: warehouse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U continuo -d warehouse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cpr-smoke-image
+          path: /tmp
+      - name: Load image
+        run: docker load -i /tmp/cpr-smoke.tar
+      - name: Install psql client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client
+      - name: Seed source table
+        env:
+          PGPASSWORD: continuo
+        run: |
+          psql -h localhost -U continuo -d warehouse -c \
+            "CREATE SCHEMA analytics; CREATE TABLE analytics.src(id int); INSERT INTO analytics.src VALUES (1),(2),(3);"
+      - name: Run smoke node
+        run: |
+          docker run --rm --network host \
+            -v "$PWD/tests/smoke/node_smoke:/app" \
+            -e NODE_ID=python-model.smoke.analytics.smoke \
+            -e TABLE_NAME=smoke \
+            -e TARGET_SCHEMA=analytics \
+            -e POSTGRES_HOST=localhost \
+            -e POSTGRES_PORT=5432 \
+            -e POSTGRES_DB=warehouse \
+            -e POSTGRES_USER=continuo \
+            -e POSTGRES_PASSWORD=continuo \
+            cpr-smoke | tee /tmp/smoke.out
+          test "${PIPESTATUS[0]}" -eq 0
+        shell: bash
+      - name: Assert success sentinel
+        run: grep -q '"status":"success"' /tmp/smoke.out
+      - name: Assert row count
+        env:
+          PGPASSWORD: continuo
+        run: |
+          count=$(psql -h localhost -U continuo -d warehouse -t -c "select count(*) from analytics.smoke" | tr -d '[:space:]')
+          test "$count" = "3"
+
+  # On tag push: log in to ghcr.io and push ghcr.io/${{ github.repository }}:<tag>-postgres.
+  # `uv build && uv publish` joins this job once PyPI credentials exist for the
+  # continuo-validation-contract / continuo-runtime-postgres / continuo-python-runtime
+  # packages (currently installed from pinned git revs, see Dockerfile.postgres).
+  publish-postgres:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: smoke-postgres
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push postgres image
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          image="ghcr.io/${{ github.repository }}:${tag}-postgres"
+          docker build -f Dockerfile.postgres -t "$image" .
+          docker push "$image"

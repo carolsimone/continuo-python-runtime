@@ -8,7 +8,7 @@ COPY pyproject.toml README.md /src/
 COPY continuo_python_runtime /src/continuo_python_runtime
 RUN pip install --no-cache-dir \
       "continuo-validation-contract @ git+https://github.com/carolsimone/continuo@d414c8a4c27f16dcc3e067e00fd70af22b3c35ef#subdirectory=validation-contract" \
-      "continuo-runtime-postgres @ git+https://github.com/carolsimone/continuo-validation-runners@d0b610a47bd7897464cc1995924bcc8e02b04524#subdirectory=runtime-postgres" \
+      "continuo-runtime-postgres @ git+https://github.com/carolsimone/continuo-validation-runners@888527c1250d1f8c87b869aee33150de871852d3#subdirectory=runtime-postgres" \
       /src
 ENV CONTRACT_DIR=/app/contracts APP_ROOT=/app
 WORKDIR /app

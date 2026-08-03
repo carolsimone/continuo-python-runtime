@@ -10,10 +10,16 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       # continuo-validation-contract resolves from PyPI (==0.3.0).
       - name: Sync
-        run: uv sync --all-groups
+        run: uv sync --all-packages --all-groups
       - name: Lint
         run: uv run ruff check .
-      - name: Types
+      - name: Types (runtime)
         run: uv run mypy continuo_python_runtime
-      - name: Tests
+      - name: Types (postgres adapter)
+        run: uv run --package continuo-python-runtime-postgres mypy python-runtime-postgres/continuo_python_runtime_postgres
+      - name: Types (trino adapter)
+        run: uv run --package continuo-python-runtime-trino mypy python-runtime-trino/continuo_python_runtime_trino
+      - name: Tests (runtime)
         run: uv run pytest --cov=continuo_python_runtime -v
+      - name: Tests (adapter units)
+        run: uv run pytest python-runtime-postgres/tests python-runtime-trino/tests -m "not integration" -v

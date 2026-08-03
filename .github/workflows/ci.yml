@@ -8,8 +8,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      # continuo-validation-contract resolves from the continuo git repo, pinned at the
-      # PR #380 merge commit (see [tool.uv.sources]); moves to the PyPI pin in PR 9.
+      # continuo-validation-contract resolves from PyPI (==0.3.0).
       - name: Sync
         run: uv sync --all-groups
       - name: Lint

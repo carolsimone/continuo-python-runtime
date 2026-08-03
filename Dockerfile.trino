@@ -1,13 +1,13 @@
 FROM python:3.14-slim
 # Until the packages publish to (Test)PyPI, install the runtime from the build
-# context and its deps from pinned git revs; swap all three to version pins later.
+# context; the contract from PyPI; the adapter from a pinned git rev until it publishes.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml README.md /src/
 COPY continuo_python_runtime /src/continuo_python_runtime
 RUN pip install --no-cache-dir \
-      "continuo-validation-contract @ git+https://github.com/carolsimone/continuo@d414c8a4c27f16dcc3e067e00fd70af22b3c35ef#subdirectory=validation-contract" \
+      "continuo-validation-contract==0.3.0" \
       "continuo-runtime-trino @ git+https://github.com/carolsimone/continuo-validation-runners@888527c1250d1f8c87b869aee33150de871852d3#subdirectory=runtime-trino" \
       /src
 ENV CONTRACT_DIR=/app/contracts APP_ROOT=/app

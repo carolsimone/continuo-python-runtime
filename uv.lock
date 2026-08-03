@@ -34,7 +34,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "continuo-validation-contract", git = "https://github.com/carolsimone/continuo?subdirectory=validation-contract&rev=d414c8a4c27f16dcc3e067e00fd70af22b3c35ef" },
+    { name = "continuo-validation-contract", specifier = "==0.3.0" },
     { name = "pyarrow", specifier = "==25.0.0" },
     { name = "pyyaml", specifier = "==6.0.3" },
 ]
@@ -53,7 +53,11 @@ test = [
 [[package]]
 name = "continuo-validation-contract"
 version = "0.3.0"
-source = { git = "https://github.com/carolsimone/continuo?subdirectory=validation-contract&rev=d414c8a4c27f16dcc3e067e00fd70af22b3c35ef#d414c8a4c27f16dcc3e067e00fd70af22b3c35ef" }
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/44/96/eefda557ed3191449d88ed92d7fccf3940b0a5d2e77b442c636120120974/continuo_validation_contract-0.3.0.tar.gz", hash = "sha256:96c11865bb280464a2b12dc8f579171abbfce31c03f8f0dd04b09a05dfe726df", size = 16790, upload-time = "2026-08-03T11:55:48.013Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/90/79/d47c7e1723593c6e98cb835ce78292b9a6df211b734b8fee4562c54aa256/continuo_validation_contract-0.3.0-py3-none-any.whl", hash = "sha256:431f3682757a3b34cd0f784583ad0d2373aae0f4b09d89ca5a30e3a762d74fcf", size = 5162, upload-time = "2026-08-03T11:55:46.718Z" },
+]
 
 [[package]]
 name = "coverage"

@@ -28,40 +28,87 @@ SQL_PATTERN = re.compile(
 FORBIDDEN_CALLS = {"read_sql", "read_sql_query", "read_sql_table", "execute", "read_database"}
 
 
-def _reconstruct_joined_str(node: ast.JoinedStr) -> str:
-    """Reconstruct text from a JoinedStr (f-string) by joining Constant parts with space placeholders."""
+def _reconstruct_joined_str(node: ast.JoinedStr) -> tuple[str, set[int]]:
+    """Reconstruct text from a JoinedStr (f-string) by joining Constant parts
+    with space placeholders.
+
+    Returns the reconstructed text together with the ids of the Constant
+    nodes that were actually folded into it (the JoinedStr's direct literal
+    parts). Constants nested inside a ``FormattedValue`` expression (e.g.
+    ``f'{"select ... from ..."}'``) are NEVER consumed here — they are
+    replaced with a space placeholder and remain visible to the plain-Constant
+    pass in ``lint_source``.
+    """
     parts = []
+    consumed: set[int] = set()
     for value in node.values:
         if isinstance(value, ast.Constant) and isinstance(value.value, str):
             parts.append(value.value)
+            consumed.add(id(value))
         else:
-            # FormattedValue or other node type - use space placeholder
+            # FormattedValue or other node type - use space placeholder.
+            # Its contents (including any nested Constants) are intentionally
+            # left unconsumed.
             parts.append(" ")
-    return "".join(parts)
+    return "".join(parts), consumed
 
 
-def _reconstruct_binop_concat(node: ast.BinOp) -> str | None:
-    """Reconstruct string from BinOp(Add) with string Constant/JoinedStr leaves."""
+def _reconstruct_binop_concat(node: ast.BinOp) -> tuple[str, set[int]] | None:
+    """Reconstruct string from BinOp(Add) with string Constant/JoinedStr leaves.
+
+    Returns the reconstructed text together with the ids of the Constant
+    nodes actually folded into it: leaf string Constants and the literal
+    fragments of any JoinedStr operand (including nested JoinedStr/BinOp
+    fragments). Constants that live inside a FormattedValue expression are
+    never included, matching ``_reconstruct_joined_str``.
+    """
     if not isinstance(node.op, ast.Add):
         return None
 
     # Collect all parts of the binary operation tree
-    def collect_parts(n: ast.expr) -> list[str] | None:
+    def collect_parts(n: ast.expr) -> tuple[list[str], set[int]] | None:
         if isinstance(n, ast.Constant) and isinstance(n.value, str):
-            return [n.value]
+            return [n.value], {id(n)}
         elif isinstance(n, ast.JoinedStr):
-            return [_reconstruct_joined_str(n)]
+            text, consumed = _reconstruct_joined_str(n)
+            return [text], consumed
         elif isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add):
             left = collect_parts(n.left)
             right = collect_parts(n.right)
             if left is not None and right is not None:
-                return left + right
+                return left[0] + right[0], left[1] | right[1]
             return None
         else:
             return None
 
-    parts = collect_parts(node)
-    return "".join(parts) if parts is not None else None
+    result = collect_parts(node)
+    if result is None:
+        return None
+    parts, consumed = result
+    return "".join(parts), consumed
+
+
+def _docstring_constant_ids(tree: ast.Module) -> set[int]:
+    """Return ids of Constant nodes that are docstrings.
+
+    A str Constant is a docstring if it is the value of an ``ast.Expr``
+    statement appearing as the FIRST statement of a Module/ClassDef/
+    FunctionDef/AsyncFunctionDef body.
+    """
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                ids.add(id(body[0].value))
+    return ids
 
 
 def lint_source(source: str, filename: str) -> list[str]:
@@ -77,7 +124,15 @@ def lint_source(source: str, filename: str) -> list[str]:
     - L4: private/protected attribute access (any ``ast.Attribute`` whose
       ``attr`` starts with ``_``), closing bypasses like ``ctx._fetch``.
       ``__name__``/``__main__`` are ``ast.Name`` nodes, not attributes, so
-      they are never matched and need no exemption.
+      they are never matched and need no exemption. Exempted: attribute
+      access on ``self``/``cls`` (e.g. ``self._helper()``), so a script's own
+      class-private helpers aren't flagged.
+
+    Docstrings (the first statement of a Module/ClassDef/FunctionDef/
+    AsyncFunctionDef body, when it is a bare string Expr) are exempt from the
+    L2 constant pass, since prose commonly contains words like "select" and
+    "from". This is a best-effort, position-based exemption: the same prose
+    assigned to a variable is still flagged.
     """
     violations = []
 
@@ -123,11 +178,14 @@ def lint_source(source: str, filename: str) -> list[str]:
     # Track constants consumed in compound expressions (to avoid double-reporting)
     consumed_constants: set[int] = set()
 
+    # Docstrings are exempt from the L2 constant pass (prose false positives)
+    docstring_constants = _docstring_constant_ids(tree)
+
     # Second pass: check for SQL and L3 violations
     for node in ast.walk(tree):
         # L2: Check for SQL in JoinedStr (f-strings)
         if isinstance(node, ast.JoinedStr):
-            reconstructed = _reconstruct_joined_str(node)
+            reconstructed, consumed = _reconstruct_joined_str(node)
             if SQL_PATTERN.search(reconstructed):
                 snippet = reconstructed[:40]
                 if len(reconstructed) > 40:
@@ -135,30 +193,31 @@ def lint_source(source: str, filename: str) -> list[str]:
                 violations.append(
                     f"{filename}:{node.lineno}: SQL string literal '{snippet}'"
                 )
-            # Mark constants in this JoinedStr as consumed
-            for value in node.values:
-                if isinstance(value, ast.Constant):
-                    consumed_constants.add(id(value))
+            # Only the literal fragments actually folded into the
+            # reconstruction are consumed; FormattedValue contents are not.
+            consumed_constants |= consumed
 
         # L2: Check for SQL in BinOp concatenation
         elif isinstance(node, ast.BinOp):
-            reconstructed_text = _reconstruct_binop_concat(node)
-            if reconstructed_text is not None and SQL_PATTERN.search(reconstructed_text):
-                snippet = reconstructed_text[:40]
-                if len(reconstructed_text) > 40:
-                    snippet += "..."
-                violations.append(
-                    f"{filename}:{node.lineno}: SQL string literal '{snippet}'"
-                )
-            # Only mark constants as consumed if reconstruction succeeded
-            if reconstructed_text is not None:
-                for n in ast.walk(node):
-                    if isinstance(n, ast.Constant):
-                        consumed_constants.add(id(n))
+            result = _reconstruct_binop_concat(node)
+            if result is not None:
+                reconstructed_text, consumed = result
+                if SQL_PATTERN.search(reconstructed_text):
+                    snippet = reconstructed_text[:40]
+                    if len(reconstructed_text) > 40:
+                        snippet += "..."
+                    violations.append(
+                        f"{filename}:{node.lineno}: SQL string literal '{snippet}'"
+                    )
+                # Only the leaf Constants actually folded into the
+                # reconstruction are consumed - never descendants of a
+                # FormattedValue expression.
+                consumed_constants |= consumed
 
-        # L2: Check for SQL in plain string literals (skip if consumed by compound)
+        # L2: Check for SQL in plain string literals (skip if consumed by
+        # compound reconstruction, or if it's a docstring)
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if id(node) not in consumed_constants:
+            if id(node) not in consumed_constants and id(node) not in docstring_constants:
                 if SQL_PATTERN.search(node.value):
                     snippet = node.value[:40]
                     if len(node.value) > 40:
@@ -185,7 +244,11 @@ def lint_source(source: str, filename: str) -> list[str]:
 
         # L4: Check for private/protected attribute access
         elif isinstance(node, ast.Attribute):
-            if node.attr.startswith("_"):
+            is_self_or_cls = isinstance(node.value, ast.Name) and node.value.id in (
+                "self",
+                "cls",
+            )
+            if node.attr.startswith("_") and not is_self_or_cls:
                 violations.append(
                     f"{filename}:{node.lineno}: private attribute access '{node.attr}'"
                 )

@@ -1,6 +1,9 @@
 name: release
 on:
   push: { branches: [main] }
+concurrency:
+  group: release
+  cancel-in-progress: true
 env:
   SERVICE: your-service-name          # one service name per domain repo
 jobs:

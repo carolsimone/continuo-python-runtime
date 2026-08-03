@@ -115,9 +115,9 @@ A domain repo picks its warehouse engine by which base image it builds
 `FROM`:
 
 ```dockerfile
-FROM ghcr.io/carolsimone/continuo-python-runtime:0.1.0-postgres
+FROM ghcr.io/carolsimone/continuo-python-runtime:v0.1.0-postgres
 # or
-FROM ghcr.io/carolsimone/continuo-python-runtime:0.1.0-trino
+FROM ghcr.io/carolsimone/continuo-python-runtime:v0.1.0-trino
 ```
 
 Each image bakes in exactly one `RuntimeAdapter` for that engine; the

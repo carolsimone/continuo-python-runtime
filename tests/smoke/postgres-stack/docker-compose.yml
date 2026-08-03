@@ -1,0 +1,16 @@
+# Tier-2 integration stack for python-runtime-postgres. Non-default host port
+# (15499) to avoid colliding with other local postgres stacks.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: continuo
+      POSTGRES_PASSWORD: continuo
+      POSTGRES_DB: warehouse
+    ports:
+      - "15499:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U continuo -d warehouse"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

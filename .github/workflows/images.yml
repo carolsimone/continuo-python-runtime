@@ -5,6 +5,8 @@ on:
       - "Dockerfile.*"
       - "tests/smoke/**"
       - "continuo_python_runtime/**"
+      - "python-runtime-postgres/**"
+      - "python-runtime-trino/**"
       - "pyproject.toml"
       - ".github/workflows/images.yml"
   push:
@@ -132,10 +134,10 @@ jobs:
         run: docker compose -f tests/smoke/trino-stack/docker-compose.yml down -v
 
   # On tag push: log in to ghcr.io and push ghcr.io/${{ github.repository }}:<tag>-postgres
-  # and :<tag>-trino. `uv build && uv publish` joins this job once PyPI credentials
-  # exist for the continuo-validation-contract / continuo-runtime-postgres /
-  # continuo-runtime-trino / continuo-python-runtime packages (currently installed
-  # from pinned git revs, see Dockerfile.postgres / Dockerfile.trino).
+  # and :<tag>-trino. continuo-validation-contract, continuo-python-runtime-postgres,
+  # and continuo-python-runtime-trino are all installed from the build context /
+  # PyPI already (see Dockerfile.postgres / Dockerfile.trino and
+  # publish-pypi.yml) — nothing pending here.
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [smoke-postgres, smoke-trino]

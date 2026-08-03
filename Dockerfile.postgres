@@ -1,14 +1,12 @@
 FROM python:3.14-slim
-# Until the packages publish to (Test)PyPI, install the runtime from the build
-# context; the contract from PyPI; the adapter from a pinned git rev until it publishes.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
+# Until the runtime and adapter packages publish to (Test)PyPI, install both
+# from the build context; the contract from PyPI.
 COPY pyproject.toml README.md /src/
 COPY continuo_python_runtime /src/continuo_python_runtime
+COPY python-runtime-postgres /src/python-runtime-postgres
 RUN pip install --no-cache-dir \
       "continuo-validation-contract==0.3.0" \
-      "continuo-runtime-postgres @ git+https://github.com/carolsimone/continuo-validation-runners@888527c1250d1f8c87b869aee33150de871852d3#subdirectory=runtime-postgres" \
+      /src/python-runtime-postgres \
       /src
 ENV CONTRACT_DIR=/app/contracts APP_ROOT=/app
 WORKDIR /app

@@ -84,5 +84,10 @@ def build_wire_contract(contract_dir: Path, repo_root: Path, service: str) -> di
 
 
 def write_wire_contract(doc: dict, out: Path) -> None:
-    """Write a wire contract document to a YAML file."""
+    """Write a wire contract document to a YAML file.
+
+    Creates ``out``'s parent directory (and any missing ancestors) first, so
+    callers don't need to pre-create the output directory.
+    """
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(yaml.safe_dump(doc, sort_keys=False))

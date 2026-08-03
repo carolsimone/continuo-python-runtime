@@ -178,6 +178,42 @@ def test_reads_disallows_multiple_semicolons():
         parse_node({**VALID, "reads": {"ids": "select 1; select 2;"}}, "f.yml")
 
 
+def test_reads_allows_semicolon_inside_string_literal():
+    """A ';' inside a single-quoted string literal argument must not trip the
+    literal-unaware semicolon scan."""
+    sql = "select split_part(tags, ';', 1) as tag from analytics.a"
+    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+    assert n.reads["ids"] == sql
+
+
+def test_reads_allows_leading_line_comment():
+    sql = "-- note\nselect id from analytics.a"
+    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+    assert n.reads["ids"] == sql
+
+
+def test_reads_allows_leading_block_comment():
+    sql = "/* note */ select id from analytics.a"
+    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+    assert n.reads["ids"] == sql
+
+
+def test_reads_allows_leading_parenthesized_select():
+    sql = "(select 1) union all (select 2)"
+    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+    assert n.reads["ids"] == sql
+
+
+def test_reads_still_rejects_drop_then_select():
+    with pytest.raises(ContractError, match="reads.ids"):
+        parse_node({**VALID, "reads": {"ids": "drop table x; select 1"}}, "f.yml")
+
+
+def test_reads_still_rejects_two_selects():
+    with pytest.raises(ContractError, match="reads.ids"):
+        parse_node({**VALID, "reads": {"ids": "select 1; select 2"}}, "f.yml")
+
+
 def test_output_column_unknown_key_rejected():
     cols = [{"name": "id", "type": "INTEGER", "nullabel": True}]
     with pytest.raises(ContractError, match="nullabel"):

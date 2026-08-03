@@ -1,6 +1,6 @@
 """Tests for script linting: forbidden imports, SQL literals, data-access calls."""
 
-from continuo_python_runtime.lint import lint_source
+from continuo_python_runtime.lint import lint_paths, lint_source
 
 GOOD = "def run(ctx):\n    ids = ctx.read('ids')\n    return ids\n"
 
@@ -197,3 +197,14 @@ def test_other_private_attribute_access_still_flagged():
     bad = GOOD + "def f(ctx):\n    return ctx._fetch('x')\n"
     violations = lint_source(bad, "s.py")
     assert any("private attribute access '_fetch'" in v for v in violations)
+
+
+def test_lint_paths_unreadable_file_reports_violation_not_crash(tmp_path):
+    """A file that can't be decoded (e.g. latin-1 bytes) should produce an
+    'unreadable' violation instead of raising UnicodeDecodeError."""
+    bad_file = tmp_path / "bad.py"
+    bad_file.write_bytes(b"# caf\xe9\n")
+    violations = lint_paths([bad_file])
+    assert len(violations) == 1
+    assert "unreadable" in violations[0]
+    assert str(bad_file) in violations[0]

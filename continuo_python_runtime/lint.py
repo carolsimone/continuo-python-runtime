@@ -284,7 +284,11 @@ def lint_paths(paths: list[Path]) -> list[str]:
 
     # Lint each file
     for filepath in files_to_lint:
-        source = filepath.read_text(encoding="utf-8")
+        try:
+            source = filepath.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            violations.append(f"{filepath}: unreadable: {exc}")
+            continue
         file_violations = lint_source(source, str(filepath))
         violations.extend(file_violations)
 

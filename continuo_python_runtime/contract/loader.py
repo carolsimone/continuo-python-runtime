@@ -40,26 +40,93 @@ _REQUIRED_STRING_FIELDS = ("schema", "table", "owner", "schedule", "script")
 _ALLOWED_OUTPUT_COLUMN_KEYS = {"name", "type", "nullable"}
 
 
+def _mask_string_literals(sql: str) -> str:
+    """Return ``sql`` with the contents of single/double-quoted string
+    literals removed, so a ``;`` scan doesn't trip on one embedded in a
+    literal (e.g. ``split_part(tags, ';', 1)``).
+
+    Handles doubled ``''`` escapes inside single-quoted strings. The quote
+    delimiters themselves are kept; only the interior characters are
+    dropped. The result is not valid SQL - it exists solely for the
+    semicolon check below.
+    """
+    result = []
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch == "'":
+            result.append(ch)
+            i += 1
+            while i < n:
+                if sql[i] == "'":
+                    if i + 1 < n and sql[i + 1] == "'":
+                        # doubled '' escape: part of the literal, drop both
+                        i += 2
+                        continue
+                    result.append(sql[i])
+                    i += 1
+                    break
+                i += 1
+            continue
+        if ch == '"':
+            result.append(ch)
+            i += 1
+            while i < n:
+                if sql[i] == '"':
+                    result.append(sql[i])
+                    i += 1
+                    break
+                i += 1
+            continue
+        result.append(ch)
+        i += 1
+    return "".join(result)
+
+
+def _strip_leading_sql_comments(sql: str) -> str:
+    """Strip leading whitespace, ``-- ...`` line comments, and ``/* ... */``
+    block comments from the start of ``sql``."""
+    text = sql
+    while True:
+        stripped = text.lstrip()
+        if stripped.startswith("--"):
+            newline = stripped.find("\n")
+            text = stripped[newline + 1 :] if newline != -1 else ""
+            continue
+        if stripped.startswith("/*"):
+            end = stripped.find("*/")
+            text = stripped[end + 2 :] if end != -1 else ""
+            continue
+        return stripped
+
+
 def _validate_read_shape(label: str, name: str, sql: str) -> None:
     """Enforce the §13.1 read shape: a single SELECT/WITH statement.
 
-    The read, after stripping whitespace, must start with ``select`` or
-    ``with`` (case-insensitive) and contain no ``;`` except one optional
-    trailing semicolon. Schema-qualification is left to the control plane's
-    sqlglot validation.
+    The read, after stripping whitespace and leading SQL comments, must
+    start with ``select``, ``with``, or a leading ``(`` (a parenthesized
+    SELECT), case-insensitive. It must contain no ``;`` except one optional
+    trailing semicolon; the semicolon scan is literal-aware, ignoring ``;``
+    characters inside single/double-quoted string literals.
+    Schema-qualification is left to the control plane's sqlglot validation.
 
     Raises:
         ContractError: If the shape is violated, naming the read.
     """
     stripped = sql.strip()
     body = stripped[:-1] if stripped.endswith(";") else stripped
-    if ";" in body:
+    if ";" in _mask_string_literals(body):
         raise ContractError(
             f"{label}: 'reads.{name}' must be a single SQL statement "
             f"(only one optional trailing semicolon allowed)"
         )
-    lowered = body.lstrip().lower()
-    if not (lowered.startswith("select") or lowered.startswith("with")):
+    lowered = _strip_leading_sql_comments(body).lower()
+    if not (
+        lowered.startswith("select")
+        or lowered.startswith("with")
+        or lowered.startswith("(")
+    ):
         raise ContractError(
             f"{label}: 'reads.{name}' must start with SELECT or WITH"
         )

@@ -63,7 +63,7 @@ jobs:
   publish-runtime-postgres:
     if: startsWith(github.ref_name, 'python-runtime-postgres-v')
     runs-on: ubuntu-latest
-    environment: ${{ contains(github.ref_name, '-test') && 'testpypi' || 'pypi' }}
+    environment: ${{ contains(github.ref_name, '-test') && 'testpypi-postgres' || 'pypi-postgres' }}
     permissions:
       id-token: write # OIDC token for Trusted Publishing
       contents: read # actions/checkout needs read access to the repo
@@ -97,7 +97,7 @@ jobs:
   publish-runtime-trino:
     if: startsWith(github.ref_name, 'python-runtime-trino-v')
     runs-on: ubuntu-latest
-    environment: ${{ contains(github.ref_name, '-test') && 'testpypi' || 'pypi' }}
+    environment: ${{ contains(github.ref_name, '-test') && 'testpypi-trino' || 'pypi-trino' }}
     permissions:
       id-token: write # OIDC token for Trusted Publishing
       contents: read # actions/checkout needs read access to the repo

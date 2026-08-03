@@ -1,0 +1,49 @@
+name: publish-pypi
+
+# Publishes the continuo-python-runtime package via PyPI Trusted Publishing
+# (OIDC, no stored token). Tag `python-runtime-v<ver>-test<n>` publishes to
+# TestPyPI; `python-runtime-v<ver>` publishes to real PyPI. The GitHub
+# environment name is what each PyPI "pending publisher" is registered against.
+#
+# Ordering: continuo-validation-contract==0.3.0 must exist on the target index
+# before publishing here — consumers of the wheel resolve it from that index
+# ([tool.uv.sources] is dev-only and not embedded in the wheel).
+on:
+  push:
+    tags: ["python-runtime-v*"]
+
+permissions: {}
+
+jobs:
+  publish-runtime:
+    runs-on: ubuntu-latest
+    environment: ${{ contains(github.ref_name, '-test') && 'testpypi' || 'pypi' }}
+    permissions:
+      id-token: write # OIDC token for Trusted Publishing
+      contents: read # actions/checkout needs read access to the repo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Test before publishing
+        run: |
+          uv sync --all-groups
+          uv run pytest -q
+      - name: Build the sdist + wheel
+        run: uv build -o dist
+      - name: Publish to TestPyPI
+        if: contains(github.ref_name, '-test')
+        # Pinned to a commit SHA. release/v1 is a moving branch, and this job
+        # holds id-token: write for PyPI Trusted Publishing — a compromised
+        # revision could mint a token and publish under this project's name.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist
+      - name: Publish to PyPI
+        if: ${{ !contains(github.ref_name, '-test') }}
+        # Pinned to a commit SHA. release/v1 is a moving branch, and this job
+        # holds id-token: write for PyPI Trusted Publishing — a compromised
+        # revision could mint a token and publish under this project's name.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: dist

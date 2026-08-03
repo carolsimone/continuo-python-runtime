@@ -12,22 +12,25 @@ on:
       - "v*"
 
 jobs:
-  build-postgres:
+  build:
+    strategy:
+      matrix:
+        engine: [postgres, trino]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build postgres image
-        run: docker build -f Dockerfile.postgres -t cpr-smoke .
+      - name: Build ${{ matrix.engine }} image
+        run: docker build -f Dockerfile.${{ matrix.engine }} -t cpr-smoke-${{ matrix.engine }} .
       - name: Save image
-        run: docker save cpr-smoke -o /tmp/cpr-smoke.tar
+        run: docker save cpr-smoke-${{ matrix.engine }} -o /tmp/cpr-smoke-${{ matrix.engine }}.tar
       - uses: actions/upload-artifact@v4
         with:
-          name: cpr-smoke-image
-          path: /tmp/cpr-smoke.tar
+          name: cpr-smoke-${{ matrix.engine }}-image
+          path: /tmp/cpr-smoke-${{ matrix.engine }}.tar
           retention-days: 1
 
   smoke-postgres:
-    needs: build-postgres
+    needs: build
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -47,10 +50,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: cpr-smoke-image
+          name: cpr-smoke-postgres-image
           path: /tmp
       - name: Load image
-        run: docker load -i /tmp/cpr-smoke.tar
+        run: docker load -i /tmp/cpr-smoke-postgres.tar
       - name: Install psql client
         run: |
           sudo apt-get update
@@ -73,7 +76,7 @@ jobs:
             -e POSTGRES_DB=warehouse \
             -e POSTGRES_USER=continuo \
             -e POSTGRES_PASSWORD=continuo \
-            cpr-smoke | tee /tmp/smoke.out
+            cpr-smoke-postgres | tee /tmp/smoke.out
           test "${PIPESTATUS[0]}" -eq 0
         shell: bash
       - name: Assert success sentinel
@@ -85,13 +88,60 @@ jobs:
           count=$(psql -h localhost -U continuo -d warehouse -t -c "select count(*) from analytics.smoke" | tr -d '[:space:]')
           test "$count" = "3"
 
-  # On tag push: log in to ghcr.io and push ghcr.io/${{ github.repository }}:<tag>-postgres.
-  # `uv build && uv publish` joins this job once PyPI credentials exist for the
-  # continuo-validation-contract / continuo-runtime-postgres / continuo-python-runtime
-  # packages (currently installed from pinned git revs, see Dockerfile.postgres).
-  publish-postgres:
+  smoke-trino:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cpr-smoke-trino-image
+          path: /tmp
+      - name: Load image
+        run: docker load -i /tmp/cpr-smoke-trino.tar
+      - name: Start trino stack
+        run: docker compose -f tests/smoke/trino-stack/docker-compose.yml up -d --wait
+      - name: Seed source table
+        run: |
+          docker exec "$(docker compose -f tests/smoke/trino-stack/docker-compose.yml ps -q trino)" \
+            trino --execute "CREATE SCHEMA IF NOT EXISTS iceberg.analytics; CREATE TABLE iceberg.analytics.src(id int); INSERT INTO iceberg.analytics.src VALUES 1,2,3"
+      - name: Run smoke node
+        run: |
+          docker run --rm \
+            -v "$PWD/tests/smoke/node_smoke:/app" \
+            -e NODE_ID=python-model.smoke.analytics.smoke \
+            -e TABLE_NAME=smoke \
+            -e TARGET_SCHEMA=analytics \
+            -e TRINO_HOST=host.docker.internal \
+            -e TRINO_PORT=18080 \
+            -e TRINO_CATALOG=iceberg \
+            -e TRINO_USER=continuo \
+            --add-host=host.docker.internal:host-gateway \
+            cpr-smoke-trino | tee /tmp/smoke-trino.out
+          test "${PIPESTATUS[0]}" -eq 0
+        shell: bash
+      - name: Assert success sentinel
+        run: grep -q '"status":"success"' /tmp/smoke-trino.out
+      - name: Assert row count
+        run: |
+          count=$(docker exec "$(docker compose -f tests/smoke/trino-stack/docker-compose.yml ps -q trino)" \
+            trino --execute "select count(*) from iceberg.analytics.smoke" | tr -d '[:space:]"')
+          test "$count" = "3"
+      - name: Tear down trino stack
+        if: always()
+        run: docker compose -f tests/smoke/trino-stack/docker-compose.yml down -v
+
+  # On tag push: log in to ghcr.io and push ghcr.io/${{ github.repository }}:<tag>-postgres
+  # and :<tag>-trino. `uv build && uv publish` joins this job once PyPI credentials
+  # exist for the continuo-validation-contract / continuo-runtime-postgres /
+  # continuo-runtime-trino / continuo-python-runtime packages (currently installed
+  # from pinned git revs, see Dockerfile.postgres / Dockerfile.trino).
+  publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: smoke-postgres
+    needs: [smoke-postgres, smoke-trino]
+    strategy:
+      matrix:
+        engine: [postgres, trino]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -104,9 +154,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push postgres image
+      - name: Build and push ${{ matrix.engine }} image
         run: |
           tag="${GITHUB_REF_NAME}"
-          image="ghcr.io/${{ github.repository }}:${tag}-postgres"
-          docker build -f Dockerfile.postgres -t "$image" .
+          image="ghcr.io/${{ github.repository }}:${tag}-${{ matrix.engine }}"
+          docker build -f Dockerfile.${{ matrix.engine }} -t "$image" .
           docker push "$image"

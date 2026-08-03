@@ -1,0 +1,60 @@
+# Self-contained trino + iceberg-rest + minio stack for the Dockerfile.trino
+# smoke test. Copied (and trimmed to the trino profile) from
+# continuo-validation-runners/docker-compose.integration.yml. Non-default host
+# ports (18080/18181/19000) to avoid colliding with other local stacks.
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "19000:9000"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  createbuckets:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/warehouse &&
+      echo bucket-ready
+      "
+
+  iceberg-rest:
+    image: apache/iceberg-rest-fixture:latest
+    depends_on:
+      createbuckets:
+        condition: service_completed_successfully
+    environment:
+      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: us-east-1
+    ports:
+      - "18181:8181"
+
+  trino:
+    image: trinodb/trino:483
+    depends_on:
+      - iceberg-rest
+    volumes:
+      - ./catalog/iceberg.properties:/etc/trino/catalog/iceberg.properties:ro
+    ports:
+      - "18080:8080"
+    healthcheck:
+      test: ["CMD", "trino", "--execute", "SHOW SCHEMAS FROM iceberg"]
+      interval: 5s
+      timeout: 10s
+      retries: 60

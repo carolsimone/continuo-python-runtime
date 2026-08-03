@@ -9,7 +9,9 @@ This is a copy-ready template for implementing a [Continuo Python domain repo](h
 3. **Configure repository variables** in GitHub (Settings → Secrets and variables → Actions):
    - `REGISTRY`: Your Docker registry (e.g., `ghcr.io/org`)
    - `BUCKET`: Your S3 bucket for contract artifacts
-   - `RELEASE_ENDPOINT`: Your release webhook endpoint
+   - `RELEASE_ENDPOINT`: Your release webhook endpoint. This is the **base
+     URL** of the Continuo API (no `/releases` suffix) — the workflow
+     appends `/releases` itself.
 4. **Configure repository secrets**:
    - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for S3 uploads
    - `release.yml` already logs in to `ghcr.io` with the built-in `GITHUB_TOKEN`

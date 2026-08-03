@@ -96,6 +96,32 @@ executor runs it as a Kubernetes Job:
 - The image embeds the same contract files CI merged — `content_hash` is
   what ties the promoted topology to the image actually running.
 
+### Python-node env contract (normative)
+
+§13.4's "the executor sets `NODE_ID`, `TABLE_NAME`, and the target schema
+env" is deliberately spelled out loosely above; this subsection pins the
+exact environment variable names `continuo-python-runtime`'s harness
+(`continuo_python_runtime.harness.run_node`) requires. These names are
+**not** the same as the dbt Job env — continuo's existing
+executor-controller injects `SCHEMA`/`DBT_TARGET_SCHEMA` for dbt Jobs and
+passes a dbt-style `UniqueID` verbatim; the python-kind dispatch path must
+inject the names below instead:
+
+| Variable | Required? | Meaning |
+| --- | --- | --- |
+| `NODE_ID` | **required** | Any identifier whose trailing two dot-separated segments MUST be `<schema>.<table>` of the declared node (e.g. `python-model.<service>.<schema>.<table>`); the harness splits on `.` and matches the last two segments against the merged contract's nodes. |
+| `TABLE_NAME` | **required** | The target table name; must match the `table` of the node selected via `NODE_ID`. |
+| `TARGET_SCHEMA` | **required** | The target schema name; must match the `schema` of the node selected via `NODE_ID`. There is no fallback — `SCHEMA` and `DBT_TARGET_SCHEMA` are **not** recognized. |
+| `CONTRACT_DIR` | optional | Path to the directory of merged contract YAML files baked into the image. Defaults to `/app/contracts`. |
+| `APP_ROOT` | optional | Repository root the node's `script:` path is resolved against. Defaults to `CONTRACT_DIR`'s parent directory. |
+| engine-native vars | **required**, per adapter | Whatever the installed `RuntimeAdapter.required_env()` declares (e.g. `POSTGRES_HOST`/`POSTGRES_DB`/`POSTGRES_USER`, optionally `POSTGRES_PORT`/`POSTGRES_PASSWORD`) — missing any of these is a `LoadError`. |
+
+The executor's python-kind dispatch (continuo PR 8) **must** inject
+`NODE_ID`/`TABLE_NAME`/`TARGET_SCHEMA` under exactly these names; they
+intentionally differ from the dbt job env (`SCHEMA`/`DBT_TARGET_SCHEMA`/dbt
+`UniqueID`) because the python-node harness has a different selection model
+(a merged contract keyed by `schema.table`, not a dbt manifest node).
+
 ## 13.5 Surface 5 — what the domain repo's CI/CD does per merge
 
 ```

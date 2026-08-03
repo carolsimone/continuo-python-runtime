@@ -5,6 +5,8 @@ on:
       - "Dockerfile.*"
       - "tests/smoke/**"
       - "continuo_python_runtime/**"
+      - "python-runtime-postgres/**"
+      - "python-runtime-trino/**"
       - "pyproject.toml"
       - ".github/workflows/images.yml"
   push:

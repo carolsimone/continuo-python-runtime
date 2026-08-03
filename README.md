@@ -39,7 +39,7 @@ data-plane adapters here.
 | `continuo-python-runtime-postgres` | `continuo_python_runtime_postgres` | this repo, `python-runtime-postgres/` | Data-plane `RuntimeAdapter` for Postgres (`fetch`/`ensure_table`/`load`). |
 | `continuo-python-runtime-trino` | `continuo_python_runtime_trino` | this repo, `python-runtime-trino/` | Data-plane `RuntimeAdapter` for Trino/Iceberg. |
 | `continuo-validation-contract` | `continuo_validation_contract` | `continuo-validation-runners` | The published contract (schema, `RuntimeAdapter` port, result-block format) both sides depend on. |
-| `continuo-runtime-postgres` / `continuo-runtime-trino` | `continuo_runtime_postgres` / `continuo_runtime_trino` | `continuo-validation-runners` | Validation-side (lint/merge, no live warehouse I/O) adapters — not to be confused with the data-plane adapters above. |
+| `continuo-validation-postgres` / `continuo-validation-trino` | `continuo_validation_postgres` / `continuo_validation_trino` | `continuo-validation-runners` | Validation-side (lint/merge, no live warehouse I/O) adapters — not to be confused with the data-plane adapters above. |
 
 All three packages built in this repo resolve `continuo-validation-contract`
 from PyPI (`==0.3.0`); the two adapter packages are uv workspace members

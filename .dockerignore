@@ -11,3 +11,4 @@ dist/
 docs/
 template/
 tests/
+python-runtime-*/tests/

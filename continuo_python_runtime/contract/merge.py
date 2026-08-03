@@ -6,7 +6,7 @@ import yaml
 
 from continuo_python_runtime.contract.loader import load_contract_dir
 from continuo_python_runtime.contract.model import CONTRACT_VERSION, Node
-from continuo_python_runtime.errors import ContractError
+from continuo_python_runtime.contract.paths import resolve_script_path
 from continuo_python_runtime.hashing import content_hash
 
 
@@ -51,20 +51,7 @@ def build_wire_contract(contract_dir: Path, repo_root: Path, service: str) -> di
     for node in nodes:
         entry = node_entry(node)
 
-        # Reject absolute script paths
-        if Path(node.script).is_absolute():
-            raise ContractError(
-                f"{node.relation}: script path {node.script!r} must be relative to the repository root"
-            )
-
-        # Resolve script path against repo_root and enforce containment
-        script_path = (repo_root / node.script).resolve()
-        if not script_path.is_relative_to(repo_root.resolve()):
-            raise ContractError(
-                f"{node.relation}: script path {node.script!r} escapes the repository root"
-            )
-        if not script_path.is_file():
-            raise ContractError(f"script not found: {node.script}")
+        script_path = resolve_script_path(node.script, repo_root, context=node.relation)
 
         # Read script bytes and compute hash
         script_bytes = script_path.read_bytes()

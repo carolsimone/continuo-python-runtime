@@ -30,6 +30,7 @@ from continuo_python_runtime.conform import conform, to_arrow
 from continuo_python_runtime.context import RunContext
 from continuo_python_runtime.contract.loader import load_contract_dir
 from continuo_python_runtime.contract.model import Node
+from continuo_python_runtime.contract.paths import resolve_script_path
 from continuo_python_runtime.errors import ContractError, HarnessError, LoadError, ScriptError
 
 logger = logging.getLogger("continuo_python_runtime.harness")
@@ -78,16 +79,7 @@ def load_script(node: Node, repo_root: Path) -> ModuleType:
             repository root, or does not exist.
         ScriptError: If the module has no callable ``run``.
     """
-    if Path(node.script).is_absolute():
-        raise ContractError(
-            f"script path {node.script!r} must be relative to the repository root"
-        )
-
-    script_path = (repo_root / node.script).resolve()
-    if not script_path.is_relative_to(repo_root.resolve()):
-        raise ContractError(f"script path {node.script!r} escapes the repository root")
-    if not script_path.is_file():
-        raise ContractError(f"script not found: {node.script}")
+    script_path = resolve_script_path(node.script, repo_root, context=node.relation)
 
     module_name = f"_continuo_node_{uuid.uuid4().hex}"
     spec = importlib.util.spec_from_file_location(module_name, script_path)

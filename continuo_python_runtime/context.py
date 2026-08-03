@@ -1,6 +1,8 @@
 """Runtime context for executing node reads."""
 
-from typing import TYPE_CHECKING, Any
+import types
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pyarrow as pa  # type: ignore[import-untyped]
 
@@ -21,8 +23,10 @@ class RunContext:
             node: The node definition with declared reads.
             adapter: Duck-typed adapter with .fetch(sql) method.
         """
-        self._node = node
-        self._adapter: Any = adapter
+        self._fetch: Callable[[str], pa.Table] = adapter.fetch
+        self._reads: types.MappingProxyType[str, str] = types.MappingProxyType(
+            dict(node.reads)
+        )
         self._memo: dict[str, pa.Table] = {}
 
     def read(self, name: str) -> pa.Table:
@@ -37,8 +41,8 @@ class RunContext:
         Raises:
             ReadError: If name is not declared, or if adapter.fetch() fails.
         """
-        if name not in self._node.reads:
-            declared = sorted(self._node.reads.keys())
+        if name not in self._reads:
+            declared = sorted(self._reads.keys())
             raise ReadError(
                 f"undeclared read {name!r}, declared: {declared}"
             )
@@ -46,9 +50,9 @@ class RunContext:
         if name in self._memo:
             return self._memo[name]
 
-        sql = self._node.reads[name]
+        sql = self._reads[name]
         try:
-            result = self._adapter.fetch(sql)
+            result = self._fetch(sql)
         except Exception as exc:
             raise ReadError(
                 f"declared read {name!r} failed: {exc}"

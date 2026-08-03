@@ -74,6 +74,10 @@ def lint_source(source: str, filename: str) -> list[str]:
     - L1: forbidden warehouse driver import
     - L2: SQL string literal (including in f-strings and concatenated strings)
     - L3: forbidden data-access call (attribute or imported function)
+    - L4: private/protected attribute access (any ``ast.Attribute`` whose
+      ``attr`` starts with ``_``), closing bypasses like ``ctx._fetch``.
+      ``__name__``/``__main__`` are ``ast.Name`` nodes, not attributes, so
+      they are never matched and need no exemption.
     """
     violations = []
 
@@ -178,6 +182,13 @@ def lint_source(source: str, filename: str) -> list[str]:
                     violations.append(
                         f"{filename}:{node.lineno}: forbidden data-access call '{node.func.id}'"
                     )
+
+        # L4: Check for private/protected attribute access
+        elif isinstance(node, ast.Attribute):
+            if node.attr.startswith("_"):
+                violations.append(
+                    f"{filename}:{node.lineno}: private attribute access '{node.attr}'"
+                )
 
     return violations
 

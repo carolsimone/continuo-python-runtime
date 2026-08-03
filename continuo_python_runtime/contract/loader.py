@@ -37,6 +37,33 @@ _ALLOWED_KEYS = {
 
 _REQUIRED_STRING_FIELDS = ("schema", "table", "owner", "schedule", "script")
 
+_ALLOWED_OUTPUT_COLUMN_KEYS = {"name", "type", "nullable"}
+
+
+def _validate_read_shape(label: str, name: str, sql: str) -> None:
+    """Enforce the §13.1 read shape: a single SELECT/WITH statement.
+
+    The read, after stripping whitespace, must start with ``select`` or
+    ``with`` (case-insensitive) and contain no ``;`` except one optional
+    trailing semicolon. Schema-qualification is left to the control plane's
+    sqlglot validation.
+
+    Raises:
+        ContractError: If the shape is violated, naming the read.
+    """
+    stripped = sql.strip()
+    body = stripped[:-1] if stripped.endswith(";") else stripped
+    if ";" in body:
+        raise ContractError(
+            f"{label}: 'reads.{name}' must be a single SQL statement "
+            f"(only one optional trailing semicolon allowed)"
+        )
+    lowered = body.lstrip().lower()
+    if not (lowered.startswith("select") or lowered.startswith("with")):
+        raise ContractError(
+            f"{label}: 'reads.{name}' must start with SELECT or WITH"
+        )
+
 
 class _StrictLoader(yaml.SafeLoader):
     """SafeLoader that rejects duplicate mapping keys instead of keeping the last."""
@@ -127,6 +154,7 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
             raise ContractError(
                 f"{label}: 'reads.{name}' must be a non-empty SQL string"
             )
+        _validate_read_shape(label, name, sql)
 
     raw_columns = raw.get("output_columns")
     if not isinstance(raw_columns, list) or not raw_columns:
@@ -138,6 +166,11 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
         if not isinstance(entry, dict):
             raise ContractError(
                 f"{label}: each 'output_columns' entry must be a mapping, got {entry!r}"
+            )
+        unknown_col_keys = set(entry) - _ALLOWED_OUTPUT_COLUMN_KEYS
+        if unknown_col_keys:
+            raise ContractError(
+                f"{label}: output column has unknown key(s) {sorted(unknown_col_keys)}"
             )
         name = entry.get("name")
         if not isinstance(name, str) or not name.strip():

@@ -35,3 +35,17 @@ def test_adapter_failure_wrapped(node_fixture):
             raise RuntimeError("db down")
     with pytest.raises(ReadError, match="'ids' failed: db down"):
         RunContext(node_fixture, Boom()).read("ids")
+
+
+def test_no_adapter_attribute_kept(node_fixture):
+    ad = FakeAdapter()
+    ctx = RunContext(node_fixture, ad)
+    assert not hasattr(ctx, "_adapter")
+
+
+def test_mutating_original_reads_dict_does_not_leak(node_fixture):
+    ad = FakeAdapter()
+    ctx = RunContext(node_fixture, ad)
+    node_fixture.reads["sneaky"] = "select * from analytics.secret"
+    with pytest.raises(ReadError, match="undeclared read 'sneaky'"):
+        ctx.read("sneaky")

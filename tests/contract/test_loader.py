@@ -151,6 +151,39 @@ def test_reads_blank_name_rejected():
         parse_node({**VALID, "reads": {" ": "select 1"}}, "f.yml")
 
 
+def test_reads_disallows_non_select_statement():
+    with pytest.raises(ContractError, match="reads.ids"):
+        parse_node({**VALID, "reads": {"ids": "drop table x; select 1"}}, "f.yml")
+
+
+def test_reads_disallows_delete():
+    with pytest.raises(ContractError, match="reads.ids"):
+        parse_node({**VALID, "reads": {"ids": "delete from t"}}, "f.yml")
+
+
+def test_reads_allows_with_clause():
+    n = parse_node(
+        {**VALID, "reads": {"ids": "WITH c AS (select 1) select * from c"}}, "f.yml"
+    )
+    assert n.reads["ids"] == "WITH c AS (select 1) select * from c"
+
+
+def test_reads_allows_single_trailing_semicolon():
+    n = parse_node({**VALID, "reads": {"ids": "select id from analytics.a;"}}, "f.yml")
+    assert n.reads["ids"] == "select id from analytics.a;"
+
+
+def test_reads_disallows_multiple_semicolons():
+    with pytest.raises(ContractError, match="reads.ids"):
+        parse_node({**VALID, "reads": {"ids": "select 1; select 2;"}}, "f.yml")
+
+
+def test_output_column_unknown_key_rejected():
+    cols = [{"name": "id", "type": "INTEGER", "nullabel": True}]
+    with pytest.raises(ContractError, match="nullabel"):
+        parse_node({**VALID, "output_columns": cols}, "f.yml")
+
+
 def test_extra_columns_non_string_rejected():
     with pytest.raises(ContractError, match="extra_columns"):
         parse_node({**VALID, "extra_columns": ["raise"]}, "f.yml")

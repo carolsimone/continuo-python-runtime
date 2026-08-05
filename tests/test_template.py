@@ -30,6 +30,21 @@ def test_template_passes_hash(capsys):
     assert hash_value.startswith("sha256:")
 
 
+def test_template_demonstrates_multiple_named_reads():
+    """The example must declare more than one read, and use each by name.
+
+    Node authors copy this file verbatim, so a single-entry `reads:` map reads
+    as a limit of the runtime rather than as the minimal case.
+    """
+    doc = yaml.safe_load((TEMPLATE / "contracts" / "example.yml").read_text())
+    reads = doc["nodes"][0]["reads"]
+    assert len(reads) >= 2, "template must show the named-read map with 2+ entries"
+
+    script = (TEMPLATE / "scripts" / "example.py").read_text()
+    for name in reads:
+        assert f'ctx.read("{name}")' in script, f"declared read {name!r} unused by the script"
+
+
 def test_release_workflow_cancels_superseded_main_runs():
     """Only the newest main-branch release may finish publishing."""
     workflow = yaml.safe_load(

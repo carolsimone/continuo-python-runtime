@@ -6,7 +6,16 @@ nodes:
     schedule: daily
     criticality: SECONDARY
     script: scripts/example.py
+    # One entry per query. The key is the name the script passes to
+    # ctx.read(); reading any other name raises ReadError. Read names are
+    # part of the node's content_hash, so renaming one is a content change.
+    # Each value must be a single statement starting with SELECT or WITH — so
+    # a read may itself be a joined SELECT if you would rather the warehouse
+    # do the join than the script.
     reads:
-      ids: select id from analytics.some_upstream
+      orders: select order_id, customer_id, amount from analytics.upstream_orders
+      customers: select customer_id, name from analytics.upstream_customers
     output_columns:
-      - {name: id, type: INTEGER, nullable: false}
+      - {name: order_id, type: INTEGER, nullable: false}
+      - {name: customer_name, type: "VARCHAR(64)", nullable: true}
+      - {name: amount, type: "NUMERIC(10,2)", nullable: false}

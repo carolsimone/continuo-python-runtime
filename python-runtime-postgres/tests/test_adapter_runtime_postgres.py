@@ -25,6 +25,8 @@ import pyarrow as pa
 import pytest
 from continuo_validation_contract.types import validate_column_type  # type: ignore[import-untyped]
 
+import continuo_python_runtime_postgres.adapter as adapter_module
+
 from continuo_python_runtime_postgres.adapter import (
     PostgresRuntimeAdapter,
     _arrow_table_from_rows,
@@ -383,3 +385,23 @@ def test_validate_config_is_a_classmethod_needing_no_connection():
     """The harness calls it before any adapter I/O; it must not need a connection."""
     with pytest.raises(ValueError, match="nope"):
         PostgresRuntimeAdapter.validate_config({"indexes": [{"columns": ["nope"]}]}, ["id"])
+
+
+def test_config_validation_survives_a_second_recognized_top_level_key(monkeypatch):
+    """A config without `indexes` must not KeyError once the vocabulary grows.
+
+    `_validated_indexes` is the function whose entire job is failing closed
+    with a named message; a bare `config["indexes"]` subscript was safe only
+    while `_KNOWN_CONFIG_KEYS` had exactly one member, and would have turned
+    the first added key into a bare KeyError. Simulated here by widening the
+    vocabulary, so the guarantee is pinned before the vocabulary actually
+    grows rather than after.
+    """
+    monkeypatch.setattr(
+        adapter_module, "_KNOWN_CONFIG_KEYS", ("indexes", "fillfactor")
+    )
+    assert PostgresRuntimeAdapter.validate_config({"fillfactor": 90}, ["id"]) is None
+
+    conn = _FakeConnection()
+    PostgresRuntimeAdapter(conn).ensure_table("s", "t", _ONE_COL, config={"fillfactor": 90})
+    assert conn.committed  # DDL ran; no KeyError on the way in

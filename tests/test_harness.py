@@ -270,7 +270,7 @@ def test_ensure_table_value_error_surfaces_as_load_error(harness_repo, capsys):
     converts any non-HarnessError into LoadError for the sentinel block.
     """
     class BadConfigAdapter(FakeRuntimeAdapter):
-        def ensure_table(self, schema, table, columns, config=None):
+        def ensure_table(self, schema, table, columns, *, config=None):
             raise ValueError("unrecognized config key: 'sortkey'")
 
     ad = BadConfigAdapter({"select id from analytics.a": pa.table({"id": [1]})})

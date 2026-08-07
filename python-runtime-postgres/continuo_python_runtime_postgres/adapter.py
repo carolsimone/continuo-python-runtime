@@ -73,7 +73,11 @@ def _validated_indexes(
         if key not in _KNOWN_CONFIG_KEYS:
             raise ValueError(f"unrecognized config key: {key!r}")
 
-    raw_indexes = config["indexes"]
+    # .get, not a bare subscript: this function's whole job is failing closed
+    # with a named message, and `indexes` is only guaranteed present while
+    # _KNOWN_CONFIG_KEYS has exactly one member. A second postgres key would
+    # otherwise turn `{"newkey": ...}` into a bare KeyError right here.
+    raw_indexes = config.get("indexes", [])
     if not isinstance(raw_indexes, list):
         raise ValueError(f"config 'indexes' must be a list, got {type(raw_indexes).__name__}")
 

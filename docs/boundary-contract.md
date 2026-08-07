@@ -20,10 +20,14 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
 ```
 
 - Schema per §3: `contract_version: 1`, `service`, `nodes: [...]` — every
-  node carries `schema`, `table`, `owner`, `schedule`, `criticality`,
-  `script`, `reads`, `output_columns`, the four hash fields (`source_hash`,
-  `shared_code_hash`, `config_hash`, `content_hash`), and optionally
-  `config` (physical layout — see below).
+  node's wire entry carries `schema`, `table`, `owner`, `schedule`,
+  `criticality`, `script`, `reads`, `output_columns`, `description`,
+  `extra_columns`, the four hash fields (`source_hash`, `shared_code_hash`,
+  `config_hash`, `content_hash`), and `config` (physical layout — see
+  below), which is present on every wire entry, defaulting to `{}` when
+  the author's contract file didn't declare one. "Optional" describes the
+  contract *file* an author writes, not the merged wire artifact, where
+  every field above is always present.
 - **Reads must be single-statement SELECTs with every table reference
   schema-qualified** (`analytics.table_a`, never `table_a`) — the resolver
   raises `UnqualifiedTableReference` and rejects the whole release otherwise
@@ -60,7 +64,9 @@ parse time.
   excuse an unknown key into.
 - Recognized keys as shipped:
   - **postgres** → `indexes`: a list of `{columns: [...], unique: bool,
-    name: str}` entries. `unique` defaults to `false`; `name` defaults to
+    name: str}` entries. Every `columns` entry must name a column already
+    declared in `output_columns`; an index on an undeclared column raises
+    before any DDL runs. `unique` defaults to `false`; `name` defaults to
     `ix_<table>_<col1>_<col2>...` (truncated to 63 bytes if longer).
   - **trino (Iceberg)** → `partitioning` and `sorted_by` (each a
     non-empty list of non-empty strings — column names or Iceberg
@@ -73,16 +79,25 @@ parse time.
       - columns: [order_id]
         unique: true
   ```
-- Applied at runtime by `RuntimeAdapter.ensure_table` on **create-if-absent
-  only** — postgres emits `CREATE INDEX IF NOT EXISTS`; Iceberg's
-  properties are set in the `WITH (...)` clause of the `CREATE TABLE`
-  itself. Neither is a migration mechanism: flipping `unique: false →
-  true` under a fixed index `name`, or changing `partitioning` on a table
-  that already exists, is a **silent no-op** — not an applied change and
-  not an error. The table is left exactly as it was first created. Once
-  continuo-validation step 3a lands, the same vocabulary is checked ahead
-  of runtime by `build_empty_from_columns`, so a malformed config fails
-  the release gate rather than surfacing in production.
+- Applied at runtime by `RuntimeAdapter.ensure_table`, per SQL object, on
+  **create-if-absent** — this is not gated on whether the table itself was
+  newly created. Postgres evaluates each `indexes` entry's `CREATE INDEX
+  IF NOT EXISTS` independently, on every `ensure_table` call, so adding a
+  new index entry to a node whose table already exists **does** create
+  that index — as does changing `columns` on an entry with no explicit
+  `name`, since that changes the derived default name. Iceberg's
+  properties instead all ride on a single `WITH (...)` clause attached to
+  the `CREATE TABLE`'s own `IF NOT EXISTS`, so once the table exists
+  nothing in `config` is applied at all. Neither engine is a migration
+  mechanism for an index/property that already exists under the same
+  name: flipping `unique: false → true` under a fixed index `name` is a
+  **silent no-op** on postgres (the name already resolves, so `IF NOT
+  EXISTS` skips it), and changing `partitioning` on a trino table that
+  already exists is a silent no-op for the reason above — not an applied
+  change and not an error in either case. Once continuo-validation step 3a
+  lands, the same vocabulary is checked ahead of runtime by
+  `build_empty_from_columns`, so a malformed config fails the release gate
+  rather than surfacing in production.
 - Trino's `format` is case-normalized to uppercase in the emitted DDL, so
   `format: parquet` and `format: PARQUET` produce identical `WITH (...)`
   text — but they are different bytes in the contract entry, so they
@@ -108,8 +123,9 @@ recomputes only the fold (see below).
 ```
 source_hash      = sha256(script_bytes)                            # bare hex
 shared_code_hash = ""  if the in-repo import closure is empty, else
-                    sha256(concat(sorted(sha256(member_bytes)
-                                          for member in closure)))   # bare hex
+                    sha256(concat(sorted(
+                        sha256(member_bytes).hexdigest()
+                        for member in closure)))                    # bare hex
 config_hash      = sha256(canonical_json(entry))                    # bare hex
 content_hash     = "sha256:" + sha256(source_hash + "|" + shared_code_hash
                                        + "|" + config_hash)
@@ -119,6 +135,9 @@ content_hash     = "sha256:" + sha256(source_hash + "|" + shared_code_hash
 - `member_bytes` — the byte content of every file in the node's in-repo
   import closure (defined below); the script itself is never a closure
   member, so `source_hash` and `shared_code_hash` never double-count it.
+  `shared_code_hash`'s `sorted(...)` sorts the per-member **hex digest
+  strings**, not the raw bytes, and `concat` joins those sorted hex
+  strings before the outer `sha256`.
 - `canonical_json(entry)` — the node's wire entry, yaml-parsed then
   re-serialized to JSON with sorted keys and no whitespace
   (`json.dumps(..., sort_keys=True, separators=(",", ":"))`); every
@@ -138,9 +157,7 @@ The fold (`content_hash = "sha256:" + sha256(source|shared|config)`) is
 byte-identical to manifest-controller's dbt-side fold — one formula spans
 both runtimes. Continuo's side **recomputes the fold from the three part
 fields already on the wire entry and rejects the release if it doesn't
-match the submitted `content_hash`** — verified against Continuo's
-`parse_python_contract` for an empty closure (`shared_code_hash: ''`), a
-non-empty closure, and a `config` block threaded through unchanged.
+match the submitted `content_hash`**.
 
 ### Closure definition and its documented limits
 
@@ -167,13 +184,15 @@ own `import` statements, resolved by static AST analysis
   over-inclusion only costs one extra revalidation — the tradeoff
   `closure.py`'s own module docstring documents as deliberate.
 - **Limit — dynamic imports are rejected, not approximated.**
-  `importlib` (in any form), `__import__`, `exec`, and `eval` are refused
-  wherever `continuo-runtime lint` is pointed (typically `scripts/`), and
-  — regardless of what lint was pointed at — unconditionally in the
-  script **and every closure member** by the merger itself
-  (`resolve_closure` raises `ContractError` on the first one found), so
-  even a shared helper module outside the linted path cannot smuggle one
-  in. What static analysis cannot see must not exist.
+  `importlib` (in any form), `__import__`, `exec`, `eval`, and any
+  `.import_module(...)` attribute access (on any receiver — the predicate
+  doesn't care what object it's called on) are refused wherever
+  `continuo-runtime lint` is pointed (typically `scripts/`), and —
+  regardless of what lint was pointed at — unconditionally in the script
+  **and every closure member** by the merger itself (`resolve_closure`
+  raises `ContractError` on the first one found), so even a shared helper
+  module outside the linted path cannot smuggle one in. What static
+  analysis cannot see must not exist.
 - **Limit — data files are not members.** A script reading a non-`.py`
   file from the repo (a CSV, a JSON fixture) does not fingerprint that
   file — such inputs belong in the warehouse or in a declared `reads`
@@ -216,10 +235,11 @@ executor runs it as a Kubernetes Job:
   layout on create, see §13.1 — and performs the only INSERT. Scripts get
   a read-only connection surface. The harness calls `ensure_table(...,
   config=...)` as a keyword unconditionally, so every `RuntimeAdapter`
-  implementation must accept it — even though the
-  `continuo-validation-contract` 0.3.0 port pinned by this repo doesn't
-  yet declare the parameter on the abstract method;
-  `continuo-validation-contract` 0.5.0 makes it part of the port itself.
+  implementation must accept it today even though no released
+  `continuo-validation-contract` version's abstract `ensure_table`
+  declares the parameter (the `0.3.0` port pinned by this repo still
+  reads `ensure_table(self, schema, table, columns)`); a future contract
+  release is expected to add `config` to the port itself.
 - **Result envelope**: stdout is reserved for exactly one sentinel-framed
   result block as the last line — reuse `continuo_validation_contract.result`
   (already on PyPI) rather than reimplementing the markers. All diagnostics
@@ -257,7 +277,7 @@ intentionally differ from the dbt job env (`SCHEMA`/`DBT_TARGET_SCHEMA`/dbt
 
 ```
 1. lint/test the scripts; validate contract files against the v1 schema
-2. merge contract files → contract.yaml; compute per-node content_hash (§13.2)
+2. merge contract files → contract.yaml; compute the per-node hash fields (§13.2)
 3. build + push the image (scripts + contracts + harness baked in)
 4. upload contract.yaml → s3://<bucket>/<service>/<release_id>/contract.yaml
 5. POST /releases {…, kind: "python"}          # only after 3 and 4 succeed

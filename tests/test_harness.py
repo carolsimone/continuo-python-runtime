@@ -281,6 +281,63 @@ def test_ensure_table_value_error_surfaces_as_load_error(harness_repo, capsys):
     assert "sortkey" in out
 
 
+# --- the runtime does not re-run the read-shape gate ---
+
+
+def _repo_with_read(tmp_path, sql):
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "t.py").write_text(
+        "def run(ctx):\n    return ctx.read('ids')\n"
+    )
+    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
+        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
+        "criticality": "SECONDARY", "script": "scripts/t.py",
+        "reads": {"ids": sql},
+        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
+    }]}))
+    return tmp_path
+
+
+@pytest.mark.parametrize("sql", [
+    "select id from analytics.a where a ~ 'x'",          # postgres regex match
+    "select id from analytics.a where data @> '{\"k\":1}'",  # jsonb containment
+])
+def test_dialect_specific_read_does_not_fail_at_container_start(tmp_path, sql, capsys):
+    """A read CI accepted under --dialect postgres must not be re-judged neutrally.
+
+    --dialect reaches validate/merge/hash but not run_node, which would
+    otherwise re-parse every read with sqlglot's stricter dialect-neutral
+    grammar at container start -- turning ordinary postgres into a node that
+    fails on every run after a green release.
+    """
+    repo = _repo_with_read(tmp_path, sql)
+    ad = FakeRuntimeAdapter({sql: pa.table({"id": [1]})})
+    assert run_node(_env(repo), adapter=ad) == 0
+
+
+def test_runtime_still_rejects_a_structurally_invalid_contract(tmp_path, capsys):
+    """Only ensure_single_read is skipped; every other loader rule still runs."""
+    repo = _repo_with_read(tmp_path, "select id from analytics.a")
+    doc = yaml.safe_load((repo / "contracts" / "t.yml").read_text())
+    doc["nodes"][0]["criticality"] = "WHENEVER"
+    (repo / "contracts" / "t.yml").write_text(yaml.safe_dump(doc))
+    assert run_node(_env(repo), adapter=FakeRuntimeAdapter()) == 1
+    assert '"message":"ContractError:' in capsys.readouterr().out
+
+
+def test_runtime_still_rejects_an_empty_reads_map(tmp_path, capsys):
+    """The reads map's own shape rules are not part of the skipped gate."""
+    repo = _repo_with_read(tmp_path, "select id from analytics.a")
+    doc = yaml.safe_load((repo / "contracts" / "t.yml").read_text())
+    doc["nodes"][0]["reads"] = {}
+    (repo / "contracts" / "t.yml").write_text(yaml.safe_dump(doc))
+    assert run_node(_env(repo), adapter=FakeRuntimeAdapter()) == 1
+    out = capsys.readouterr().out
+    assert '"message":"ContractError:' in out
+    assert "reads" in out
+
+
 # --- in-repo import closure must be importable at run time ---
 #
 # CI folds the transitive in-repo import closure into `shared_code_hash`, so a

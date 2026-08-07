@@ -486,3 +486,80 @@ def test_parse_node_dialect_defaults_to_none(monkeypatch):
     )
     parse_node(VALID, "f.yml")
     assert calls == [None]
+
+
+# --- check_reads=False: the runtime's opt-out from the read-shape gate ---
+
+
+def test_check_reads_false_skips_ensure_single_read(monkeypatch):
+    """The one call the runtime opts out of; nothing else in parse_node moves."""
+    calls = []
+
+    def fake_ensure_single_read(sql, dialect=None):
+        calls.append((sql, dialect))
+
+    monkeypatch.setattr(
+        "continuo_python_runtime.contract.loader.ensure_single_read",
+        fake_ensure_single_read,
+    )
+    node = parse_node(VALID, "f.yml", check_reads=False)
+    assert calls == []
+    assert node.relation == "analytics.t"
+    assert node.reads == VALID["reads"]
+
+
+def test_check_reads_false_accepts_a_read_the_neutral_parser_rejects():
+    """Ordinary postgres (`~`) that sqlglot's dialect-neutral grammar rejects."""
+    unparseable_neutrally = {**VALID, "reads": {"ids": "select id from a where b ~ 'x'"}}
+    with pytest.raises(ContractError):
+        parse_node(unparseable_neutrally, "f.yml")
+    assert parse_node(unparseable_neutrally, "f.yml", check_reads=False).relation
+
+
+def test_check_reads_false_still_enforces_the_reads_map_shape():
+    with pytest.raises(ContractError, match="non-empty mapping"):
+        parse_node({**VALID, "reads": {}}, "f.yml", check_reads=False)
+    with pytest.raises(ContractError, match="non-empty SQL string"):
+        parse_node({**VALID, "reads": {"ids": ""}}, "f.yml", check_reads=False)
+    with pytest.raises(ContractError, match="non-empty string"):
+        parse_node({**VALID, "reads": {"": "select 1"}}, "f.yml", check_reads=False)
+
+
+def test_check_reads_false_still_enforces_every_other_node_rule():
+    for bad, match in [
+        ({**VALID, "criticality": "WHENEVER"}, "criticality"),
+        ({**VALID, "output_columns": []}, "output_columns"),
+        ({**VALID, "output_columns": [{"name": "id", "type": "BLOB"}]}, "unsupported"),
+        ({**VALID, "config": ["not", "a", "mapping"]}, "must be a mapping"),
+        ({**VALID, "extra_columns": "shrug"}, "extra_columns"),
+        ({**VALID, "nope": 1}, "unknown key"),
+    ]:
+        with pytest.raises(ContractError, match=match):
+            parse_node(bad, "f.yml", check_reads=False)
+
+
+def test_load_contract_dir_check_reads_false_still_rejects_duplicate_relations(tmp_path):
+    for name in ("a.yml", "b.yml"):
+        (tmp_path / name).write_text(yaml.safe_dump({"nodes": [VALID]}))
+    with pytest.raises(ContractError, match="duplicate node"):
+        load_contract_dir(tmp_path, check_reads=False)
+
+
+def test_load_contract_dir_check_reads_false_still_validates_dialect(tmp_path):
+    """A bad --dialect is still a bad flag even when reads are not parsed."""
+    (tmp_path / "a.yml").write_text(yaml.safe_dump({"nodes": [VALID]}))
+    with pytest.raises(ContractError, match="unknown --dialect"):
+        load_contract_dir(tmp_path, dialect="POSTGRESQL-9", check_reads=False)
+
+
+def test_load_contract_dir_threads_check_reads_to_parse_node(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        "continuo_python_runtime.contract.loader.ensure_single_read",
+        lambda sql, dialect=None: calls.append(sql),
+    )
+    (tmp_path / "a.yml").write_text(yaml.safe_dump({"nodes": [VALID]}))
+    load_contract_dir(tmp_path, check_reads=False)
+    assert calls == []
+    load_contract_dir(tmp_path)
+    assert calls == [VALID["reads"]["ids"]]

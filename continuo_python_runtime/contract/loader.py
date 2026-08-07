@@ -113,7 +113,13 @@ def _validate_config(raw: Any, label: str) -> dict[str, Any]:
     return raw
 
 
-def parse_node(raw: dict[str, Any], source: str, *, dialect: str | None = None) -> Node:
+def parse_node(
+    raw: dict[str, Any],
+    source: str,
+    *,
+    dialect: str | None = None,
+    check_reads: bool = True,
+) -> Node:
     """Validate a single raw mapping and build a :class:`Node`.
 
     ``source`` is the originating filename; it appears in every error message.
@@ -121,6 +127,13 @@ def parse_node(raw: dict[str, Any], source: str, *, dialect: str | None = None) 
     each declared read is checked against via
     :func:`~continuo_validation_contract.sql.ensure_single_read`; ``None``
     (the default) uses sqlglot's dialect-neutral parser.
+
+    ``check_reads=False`` skips *only* that :func:`ensure_single_read` call —
+    the read-shape gate — leaving every other rule here (required fields,
+    criticality, the ``reads`` map's own shape, output-column types and
+    uniqueness, ``config``, ``content_hash``) in force. It exists for
+    :func:`~continuo_python_runtime.harness.run_node`; see
+    :func:`load_contract_dir` for why the runtime opts out.
     """
     if not isinstance(raw, dict):
         raise ContractError(
@@ -176,6 +189,8 @@ def parse_node(raw: dict[str, Any], source: str, *, dialect: str | None = None) 
             raise ContractError(
                 f"{label}: 'reads.{name}' must be a non-empty SQL string"
             )
+        if not check_reads:
+            continue
         try:
             ensure_single_read(sql, dialect)
         except (ValueError, TokenError) as exc:
@@ -261,8 +276,32 @@ def parse_node(raw: dict[str, Any], source: str, *, dialect: str | None = None) 
     )
 
 
-def load_contract_dir(path: Path, *, dialect: str | None = None) -> list[Node]:
+def load_contract_dir(
+    path: Path, *, dialect: str | None = None, check_reads: bool = True
+) -> list[Node]:
     """Load and validate every `*.yml`/`*.yaml` contract file under ``path``.
+
+    ``check_reads=False`` skips the per-read
+    :func:`~continuo_validation_contract.sql.ensure_single_read` gate and
+    nothing else; every other rule in :func:`parse_node` and every rule here
+    (dialect validity, document shape, duplicate relations, "no contract
+    files found") still runs. The runtime
+    (:func:`~continuo_python_runtime.harness.run_node`) passes it, because
+    re-running the read-shape gate at container start can only introduce a
+    disagreement, never catch a new problem:
+
+    - CI already gated the reads (``continuo-runtime validate``), under the
+      repo's own ``--dialect``, and Continuo gated them again with its own
+      parser and bind-check before promoting the release.
+    - The runtime has no ``--dialect`` of its own, so it would re-parse with
+      the dialect-neutral grammar — a *different* and in places stricter
+      grammar than CI used. Ordinary postgres (``a ~ 'x'``, ``data @>
+      '{...}'``) parses under ``--dialect postgres`` and not under the
+      neutral parser, so a team following the docs would get a green
+      validate, a green merge, an accepted release, and a node that fails on
+      every single run.
+    - Nothing at run time consumes the parse: ``ctx.read`` resolves declared
+      reads by name and hands the SQL to the adapter verbatim.
 
     ``dialect`` is validated once, up front, then forwarded to
     :func:`parse_node` for every node, so every declared read is checked
@@ -309,7 +348,9 @@ def load_contract_dir(path: Path, *, dialect: str | None = None) -> list[Node]:
             raise ContractError(f"{file.name}: 'nodes' must be a list")
 
         for raw_node in raw_nodes:
-            node = parse_node(raw_node, file.name, dialect=dialect)
+            node = parse_node(
+                raw_node, file.name, dialect=dialect, check_reads=check_reads
+            )
             existing_source = relation_sources.get(node.relation)
             if existing_source is not None:
                 raise ContractError(

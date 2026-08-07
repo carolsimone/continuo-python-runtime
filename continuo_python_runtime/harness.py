@@ -181,7 +181,15 @@ def run_node(env: Mapping[str, str], adapter: Any = None) -> int:
 
         logger.info("running node %s -> %s.%s", node_id, target_schema, table_name)
 
-        nodes = load_contract_dir(contract_dir)
+        # check_reads=False: the harness has no --dialect of its own, so
+        # re-running the read-shape gate here would judge the reads against
+        # sqlglot's dialect-neutral grammar -- a different, in places stricter
+        # grammar than the one CI used -- and could only disagree with the
+        # gates already passed (CI's `continuo-runtime validate`, then
+        # Continuo's own parser and bind-check), never catch a new problem.
+        # ctx.read resolves declared reads by name and never parses them.
+        # Every other loader validation still runs at container start.
+        nodes = load_contract_dir(contract_dir, check_reads=False)
         node = select_node(nodes, node_id)
 
         with contextlib.redirect_stdout(sys.stderr):

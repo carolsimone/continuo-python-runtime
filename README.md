@@ -140,7 +140,9 @@ def run(ctx):
   into `shared_code_hash`, so editing one re-fingerprints the node — but the
   hash does not put the file in the image: **`COPY` every directory your
   scripts import from in your `Dockerfile`**, or the release is valid and the
-  node dies with `ModuleNotFoundError` on its first run.
+  node dies with `ModuleNotFoundError` on its first run. Because the repo root
+  precedes the standard library on `sys.path`, avoid naming a top-level module
+  after a stdlib one (`types.py`, `json.py`, `logging.py`, …).
 - The harness — not the script — performs the write. It calls `conform()`
   on whatever `run()` returned and issues the only INSERT; the script never
   writes directly.

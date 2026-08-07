@@ -5,6 +5,7 @@ import pytest
 from continuo_python_runtime.closure import dynamic_import_violations, resolve_closure
 from continuo_python_runtime.errors import ContractError
 import ast
+import os
 
 
 def test_no_imports_returns_empty(tmp_path):
@@ -94,6 +95,27 @@ def test_stdlib_and_external_packages_are_not_members(tmp_path):
     assert resolve_closure(repo / "node.py", repo) == []
 
 
+def test_absolute_from_import_expands_alias_to_submodule(tmp_path):
+    """`from pkg import mod` may be importing a submodule (a file), not an
+    attribute of pkg - the level-0 branch must try `pkg.mod` as a candidate
+    alongside the bare `pkg` name, or the submodule file goes missing from
+    the closure."""
+    repo = tmp_path
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "__init__.py").write_text("")
+    (repo / "pkg" / "mod.py").write_text("X = 1\n")
+    (repo / "node.py").write_text("from pkg import mod\n")
+
+    result = resolve_closure(repo / "node.py", repo)
+
+    assert result == sorted(
+        [
+            (repo / "pkg" / "mod.py").resolve(),
+            (repo / "pkg" / "__init__.py").resolve(),
+        ]
+    )
+
+
 def test_relative_import_of_sibling_resolves(tmp_path):
     repo = tmp_path
     (repo / "scripts").mkdir()
@@ -142,6 +164,40 @@ def test_relative_import_escaping_repo_root_is_skipped_not_an_error(tmp_path):
     result = resolve_closure(repo_root / "node.py", repo_root)
 
     assert result == []
+
+
+def test_symlinked_file_escaping_repo_root_is_excluded(tmp_path):
+    """Rule 6's `is_relative_to` check, applied after `resolve()`, is the
+    only thing stopping a symlink from smuggling an out-of-repo file into
+    the closure (and therefore into the hash). A regression that deleted
+    that check would leave every other test in this file green."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "helpers.py").write_text("X = 1\n")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "node.py").write_text("import helpers\n")
+    os.symlink(os.path.join("..", "outside", "helpers.py"), repo / "helpers.py")
+
+    assert resolve_closure(repo / "node.py", repo) == []
+
+
+def test_symlinked_package_directory_escaping_repo_root_is_excluded(tmp_path):
+    """Same guard, pinned through the ancestor-__init__.py resolution path
+    (rule 5) rather than the primary candidate - a symlinked package
+    directory must not smuggle its __init__.py into the closure either."""
+    outside = tmp_path / "outside_pkg"
+    outside.mkdir()
+    (outside / "__init__.py").write_text("")
+    (outside / "helpers.py").write_text("X = 1\n")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "node.py").write_text("import pkg.helpers\n")
+    os.symlink(os.path.join("..", "outside_pkg"), repo / "pkg", target_is_directory=True)
+
+    assert resolve_closure(repo / "node.py", repo) == []
 
 
 DYNAMIC_IMPORT_SOURCES = [
@@ -239,8 +295,8 @@ def test_violations_reports_construct_names():
 
 
 def test_violations_sorted_by_lineno_then_construct():
-    tree = ast.parse("exec('x')\neval('x')\n")
-    assert dynamic_import_violations(tree) == [(1, "exec"), (2, "eval")]
+    tree = ast.parse("exec('x'); eval('x')\n")
+    assert dynamic_import_violations(tree) == [(1, "eval"), (1, "exec")]
 
 
 def test_importlib_submodule_import_flagged():

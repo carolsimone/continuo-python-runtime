@@ -399,8 +399,28 @@ def test_ensure_table_all_three_properties_produce_expected_with_clause():
     ("config", "match"),
     [
         pytest.param({"sortkey": ["id"]}, "sortkey", id="unknown_key"),
+        pytest.param({"partitioning": "id"}, "partitioning", id="partitioning_not_a_list"),
         pytest.param({"partitioning": []}, "partitioning", id="partitioning_empty"),
+        pytest.param(
+            {"partitioning": ["id", 3]}, "partitioning", id="partitioning_non_string_element"
+        ),
+        pytest.param(
+            {"partitioning": ["id", ""]}, "partitioning", id="partitioning_empty_string_element"
+        ),
+        pytest.param({"sorted_by": "id"}, "sorted_by", id="sorted_by_not_a_list"),
+        pytest.param({"sorted_by": []}, "sorted_by", id="sorted_by_empty"),
+        pytest.param(
+            {"sorted_by": ["id", 3]}, "sorted_by", id="sorted_by_non_string_element"
+        ),
+        pytest.param(
+            {"sorted_by": ["id", ""]}, "sorted_by", id="sorted_by_empty_string_element"
+        ),
+        pytest.param({"format": 3}, "format", id="format_not_a_string"),
+        pytest.param({"format": None}, "format", id="format_none"),
         pytest.param({"format": "AVRO2"}, "format", id="format_not_in_allowlist"),
+        pytest.param(
+            {"partitioned_by": ["event_ts"]}, "partitioned_by", id="hive_partitioned_by_spelling"
+        ),
     ],
 )
 def test_ensure_table_rejects_bad_config_and_emits_no_ddl(config, match):

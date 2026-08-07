@@ -41,15 +41,20 @@ def node_entry(node: Node) -> dict:
     }
 
 
-def build_wire_contract(contract_dir: Path, repo_root: Path, service: str) -> dict:
+def build_wire_contract(
+    contract_dir: Path, repo_root: Path, service: str, *, dialect: str | None = None
+) -> dict:
     """Build and return a wire contract document.
 
     Loads contracts from contract_dir, resolves script paths against repo_root,
     computes content hashes, and returns a contract document sorted by relation.
+    ``dialect`` is forwarded to :func:`~continuo_python_runtime.contract.loader
+    .load_contract_dir` so every declared read is checked against that sqlglot
+    dialect (``None`` -- the default -- uses sqlglot's dialect-neutral parser).
 
     Raises ContractError if any script file is missing.
     """
-    nodes = load_contract_dir(contract_dir)
+    nodes = load_contract_dir(contract_dir, dialect=dialect)
 
     wire_nodes = []
     for node in nodes:

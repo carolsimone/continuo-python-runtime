@@ -5,7 +5,7 @@ COPY pyproject.toml README.md /src/
 COPY continuo_python_runtime /src/continuo_python_runtime
 COPY python-runtime-postgres /src/python-runtime-postgres
 RUN pip install --no-cache-dir \
-      "continuo-validation-contract==0.3.0" \
+      "continuo-validation-contract==0.4.0" \
       /src/python-runtime-postgres \
       /src
 ENV CONTRACT_DIR=/app/contracts APP_ROOT=/app

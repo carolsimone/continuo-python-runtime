@@ -268,12 +268,14 @@ def test_reads_allows_leading_block_comment():
     assert n.reads["ids"] == sql
 
 
-def test_reads_unterminated_block_comment_treated_as_rest_is_comment():
-    """An unterminated /* block comment consumes the rest of the string, so
-    the shape check sees an empty statement and reports the normal
-    "must start with SELECT or WITH" error (not a crash)."""
+def test_reads_unterminated_block_comment_rejected():
+    """An unterminated /* block comment fails sqlglot's tokenizer (a
+    TokenError, not a ValueError -- ensure_single_read's own docstring
+    guarantee that only ValueError escapes is not quite right for this
+    input), so the loader must still turn it into a clean ContractError
+    naming the read rather than letting the tokenizer error escape raw."""
     sql = "/* not closed select id from analytics.a"
-    with pytest.raises(ContractError, match="must start with SELECT or WITH"):
+    with pytest.raises(ContractError, match="reads.ids"):
         parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
 
 
@@ -284,16 +286,17 @@ def test_reads_allows_leading_parenthesized_select():
 
 
 def test_reads_rejects_unterminated_single_quote():
-    """An unterminated single-quoted string literal must not silently
-    truncate the semicolon scan and let a multi-statement read through."""
+    """An unterminated single-quoted string literal must not silently let a
+    multi-statement read through -- sqlglot's tokenizer fails on it (a
+    TokenError), which the loader must still turn into a ContractError."""
     sql = "select 'unterminated from analytics.a; drop table x"
-    with pytest.raises(ContractError, match="unterminated"):
+    with pytest.raises(ContractError, match="reads.ids"):
         parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
 
 
 def test_reads_rejects_unterminated_double_quote():
     sql = 'select "unterminated from analytics.a; drop table x'
-    with pytest.raises(ContractError, match="unterminated"):
+    with pytest.raises(ContractError, match="reads.ids"):
         parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
 
 
@@ -412,3 +415,51 @@ def test_load_dir_nodes_not_list_rejected(tmp_path):
     a.write_text(yaml.safe_dump({"nodes": "not-a-list"}))
     with pytest.raises(ContractError, match="nodes"):
         load_contract_dir(tmp_path)
+
+
+def test_load_dir_dialect_rejects_what_neutral_default_accepts(tmp_path):
+    """Proves --dialect threads from load_contract_dir through parse_node to
+    ensure_single_read, not just that the parameter exists: QUALIFY parses
+    under sqlglot's dialect-neutral default but not under its trino dialect
+    (verified against sqlglot 30.15.0, pinned transitively via
+    continuo-validation-contract 0.4.0's own dependency)."""
+    sql = "select a from analytics.a qualify row_number() over (order by a) = 1"
+    node = {**VALID, "reads": {"ids": sql}}
+    a = tmp_path / "a.yml"
+    a.write_text(yaml.safe_dump({"nodes": [node]}))
+
+    load_contract_dir(tmp_path)  # neutral default: accepted
+
+    with pytest.raises(ContractError, match="reads.ids"):
+        load_contract_dir(tmp_path, dialect="trino")
+
+
+def test_parse_node_dialect_reaches_ensure_single_read(monkeypatch):
+    """A monkeypatched spy on ensure_single_read, guarding the wiring itself
+    independent of any one dialect's grammar (see the QUALIFY test above for
+    a real acceptance/rejection proof)."""
+    calls = []
+
+    def fake_ensure_single_read(sql, dialect=None):
+        calls.append((sql, dialect))
+
+    monkeypatch.setattr(
+        "continuo_python_runtime.contract.loader.ensure_single_read",
+        fake_ensure_single_read,
+    )
+    parse_node(VALID, "f.yml", dialect="postgres")
+    assert calls == [(VALID["reads"]["ids"], "postgres")]
+
+
+def test_parse_node_dialect_defaults_to_none(monkeypatch):
+    calls = []
+
+    def fake_ensure_single_read(sql, dialect=None):
+        calls.append(dialect)
+
+    monkeypatch.setattr(
+        "continuo_python_runtime.contract.loader.ensure_single_read",
+        fake_ensure_single_read,
+    )
+    parse_node(VALID, "f.yml")
+    assert calls == [None]

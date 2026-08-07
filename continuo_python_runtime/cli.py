@@ -30,11 +30,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="continuo-runtime")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    dialect_help = (
+        "sqlglot dialect the reads are authored in (e.g. postgres, trino); "
+        "defaults to sqlglot's dialect-neutral parser."
+    )
+
     # validate subcommand
     validate_parser = subparsers.add_parser(
         "validate", help="Validate contract directory"
     )
     validate_parser.add_argument("contract_dir", help="Path to contract directory")
+    validate_parser.add_argument("--dialect", default=None, help=dialect_help)
 
     # merge subcommand
     merge_parser = subparsers.add_parser(
@@ -44,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     merge_parser.add_argument("--service", required=True, help="Service name")
     merge_parser.add_argument("--repo-root", required=True, help="Repository root path")
     merge_parser.add_argument("--out", required=True, help="Output file path")
+    merge_parser.add_argument("--dialect", default=None, help=dialect_help)
 
     # hash subcommand
     hash_parser = subparsers.add_parser(
@@ -53,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     hash_parser.add_argument(
         "--repo-root", required=True, help="Repository root path"
     )
+    hash_parser.add_argument("--dialect", default=None, help=dialect_help)
 
     # lint subcommand
     lint_parser = subparsers.add_parser(
@@ -69,11 +77,13 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "validate":
-            return cmd_validate(args.contract_dir)
+            return cmd_validate(args.contract_dir, args.dialect)
         elif args.command == "merge":
-            return cmd_merge(args.contract_dir, args.service, args.repo_root, args.out)
+            return cmd_merge(
+                args.contract_dir, args.service, args.repo_root, args.out, args.dialect
+            )
         elif args.command == "hash":
-            return cmd_hash(args.contract_dir, args.repo_root)
+            return cmd_hash(args.contract_dir, args.repo_root, args.dialect)
         elif args.command == "lint":
             return cmd_lint(args.path)
         elif args.command == "run":
@@ -88,27 +98,35 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def cmd_validate(contract_dir: str) -> int:
+def cmd_validate(contract_dir: str, dialect: str | None = None) -> int:
     """Validate contracts in a directory."""
-    load_contract_dir(Path(contract_dir))
+    load_contract_dir(Path(contract_dir), dialect=dialect)
     return 0
 
 
-def cmd_merge(contract_dir: str, service: str, repo_root: str, out: str) -> int:
+def cmd_merge(
+    contract_dir: str,
+    service: str,
+    repo_root: str,
+    out: str,
+    dialect: str | None = None,
+) -> int:
     """Merge contracts into a wire contract file."""
-    doc = build_wire_contract(Path(contract_dir), Path(repo_root), service)
+    doc = build_wire_contract(Path(contract_dir), Path(repo_root), service, dialect=dialect)
     write_wire_contract(doc, Path(out))
     return 0
 
 
-def cmd_hash(contract_dir: str, repo_root: str) -> int:
+def cmd_hash(contract_dir: str, repo_root: str, dialect: str | None = None) -> int:
     """Print relation and content hash for each node.
 
     Reuses build_wire_contract for consistent hashing and error handling.
     Service value is irrelevant to per-node hashes since entries don't include it.
     """
     # Reuse build_wire_contract for consistent hashing and error handling
-    doc = build_wire_contract(Path(contract_dir), Path(repo_root), service="_hash")
+    doc = build_wire_contract(
+        Path(contract_dir), Path(repo_root), service="_hash", dialect=dialect
+    )
 
     # Print relation\thash from wire contract nodes (already sorted by relation)
     for node_entry in doc["nodes"]:

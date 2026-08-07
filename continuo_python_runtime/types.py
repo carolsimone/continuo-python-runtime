@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass
 
 import pyarrow as pa  # type: ignore[import-untyped]
+from continuo_validation_contract.types import validate_column_type  # type: ignore[import-untyped]
 
 from continuo_python_runtime.errors import ContractError
 
@@ -36,6 +37,14 @@ class SqlType:
 def parse_sql_type(raw: str) -> SqlType:
     """Parse a SQL type string into a canonical SqlType.
 
+    ``continuo_validation_contract.types.validate_column_type`` is the single
+    acceptance authority for the grammar shape (case-insensitive, injection-
+    guarded): it runs first, and anything it rejects is rejected here too. The
+    logic below only extracts precision/scale/length and enforces the NUMERIC
+    range this repo's Arrow mapping additionally requires (1-38 precision,
+    0-precision scale) -- a semantic check the shared grammar deliberately
+    doesn't make, since it's specific to this repo's decimal128 mapping.
+
     Args:
         raw: A SQL type string (case-insensitive).
 
@@ -43,44 +52,39 @@ def parse_sql_type(raw: str) -> SqlType:
         A SqlType with canonicalized base and parsed parameters.
 
     Raises:
-        ContractError: If the type is unsupported or malformed.
+        ContractError: If the type is unsupported or malformed, or a NUMERIC's
+            precision/scale is out of range.
     """
     raw = raw.strip()
-    if not raw:
-        raise ContractError("type: empty string is not a valid SQL type")
+    try:
+        validate_column_type(raw)
+    except ValueError as exc:
+        raise ContractError(str(exc)) from exc
 
     # Normalize to uppercase for parsing
     normalized = raw.upper()
 
-    # Handle DOUBLE PRECISION specially (has a space). Only the authored
-    # spelling with a space is part of the contract grammar; the internal
-    # canonical spelling (with an underscore) is not accepted as input even
-    # though it is the SqlType.base value produced above.
+    # Handle DOUBLE PRECISION specially (has a space). It is the only grammar
+    # member whose canonical SqlType.base spelling (DOUBLE_PRECISION, with an
+    # underscore) differs from its authored one.
     if normalized == "DOUBLE PRECISION":
         return SqlType("DOUBLE_PRECISION")
 
-    # Try to match parametrized types: TYPE(args)
+    # Parametrized types: TYPE(args). validate_column_type above has already
+    # rejected every shape but (NUMERIC|DECIMAL)(\d+,\s*\d+) and
+    # (VARCHAR|CHAR)(\d+), so no further shape checking is needed here.
     match = re.match(r"^([A-Z_]+)\s*\((.*)\)$", normalized)
     if match:
         base_name = match.group(1).strip()
         params_str = match.group(2).strip()
 
-        # Alias handling
-        if base_name == "INT":
-            base_name = "INTEGER"
-        elif base_name == "DECIMAL":
+        if base_name == "DECIMAL":
             base_name = "NUMERIC"
 
         if base_name == "NUMERIC":
-            # Parse NUMERIC(precision, scale) - strict format: \d+,\s*\d+ (spaces only after comma)
-            numeric_match = re.match(r"^(\d+),\s*(\d+)$", params_str)
-            if not numeric_match:
-                raise ContractError(
-                    f"type: NUMERIC requires precision and scale as unsigned integers, "
-                    f"got ({params_str})"
-                )
-            precision = int(numeric_match.group(1))
-            scale = int(numeric_match.group(2))
+            precision_str, scale_str = params_str.split(",")
+            precision = int(precision_str)
+            scale = int(scale_str)
             if not (1 <= precision <= 38):
                 raise ContractError(
                     f"type: NUMERIC precision must be between 1 and 38, got {precision}"
@@ -92,82 +96,14 @@ def parse_sql_type(raw: str) -> SqlType:
                 )
             return SqlType("NUMERIC", precision=precision, scale=scale)
 
-        elif base_name == "VARCHAR":
-            # Parse VARCHAR(length) - strict format: \d+ only
-            if "," in params_str:
-                raise ContractError(
-                    f"type: VARCHAR takes a single parameter (length), "
-                    f"got {params_str!r}"
-                )
-            varchar_match = re.match(r"^(\d+)$", params_str)
-            if not varchar_match:
-                raise ContractError(
-                    f"type: VARCHAR length must be an unsigned integer, "
-                    f"got {params_str!r}"
-                )
-            length = int(varchar_match.group(1))
-            return SqlType("VARCHAR", length=length)
+        # VARCHAR(length) or CHAR(length)
+        return SqlType(base_name, length=int(params_str))
 
-        elif base_name == "CHAR":
-            # Parse CHAR(length) - strict format: \d+ only
-            if "," in params_str:
-                raise ContractError(
-                    f"type: CHAR takes a single parameter (length), "
-                    f"got {params_str!r}"
-                )
-            char_match = re.match(r"^(\d+)$", params_str)
-            if not char_match:
-                raise ContractError(
-                    f"type: CHAR length must be an unsigned integer, "
-                    f"got {params_str!r}"
-                )
-            length = int(char_match.group(1))
-            return SqlType("CHAR", length=length)
-
-        else:
-            # No other types accept parameters
-            raise ContractError(
-                f"type: {base_name} does not accept parameters, got ({params_str})"
-            )
-
-    # No parameters - must be a bare base type
-    normalized_base = normalized
-
-    # Alias handling
-    if normalized_base == "INT":
-        normalized_base = "INTEGER"
-    elif normalized_base == "DECIMAL":
-        normalized_base = "NUMERIC"
-
-    # List of supported bare types
-    # Note: "DOUBLE_PRECISION" (underscored) is deliberately excluded here.
-    # It is the canonical SqlType.base value, but only the authored spelling
-    # "DOUBLE PRECISION" (with a space) is part of the contract grammar and
-    # is handled above.
-    supported_bare = {
-        "BIGINT",
-        "INTEGER",
-        "TEXT",
-        "TIMESTAMP",
-        "DATE",
-        "BOOLEAN",
-    }
-
-    if normalized_base in supported_bare:
-        return SqlType(normalized_base)
-
-    # Bare VARCHAR and CHAR require a length parameter
-    if normalized_base == "VARCHAR":
-        raise ContractError(f"type: VARCHAR requires a length parameter, got {raw!r}")
-    if normalized_base == "CHAR":
-        raise ContractError(f"type: CHAR requires a length parameter, got {raw!r}")
-
-    # Bare NUMERIC and DECIMAL require parameters
-    if normalized_base == "NUMERIC":
-        raise ContractError(f"type: NUMERIC requires precision and scale parameters, got {raw!r}")
-
-    # Unknown type
-    raise ContractError(f"type: unknown SQL type {raw!r}")
+    # Bare base type: BIGINT, INT, INTEGER, TEXT, TIMESTAMP, DATE, BOOLEAN --
+    # the only shapes left once DOUBLE PRECISION and the parametrized types
+    # above are ruled out.
+    normalized_base = "INTEGER" if normalized == "INT" else normalized
+    return SqlType(normalized_base)
 
 
 def arrow_type(t: SqlType) -> pa.DataType:

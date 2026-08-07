@@ -45,18 +45,17 @@ are unsupported because their target renames would race. Swap relations use a
 per-load UUID, so distinct targets cannot collide with each other's temporary
 names or with legitimate user tables.
 
-The contract's SQL-type grammar (copied verbatim from the postgres adapter, same
-regex) admits type spellings Trino does not recognize as type names (``TEXT``,
-``DOUBLE PRECISION``, ``NUMERIC(p,s)``); ``_trino_type`` maps those three to
-Trino's own spellings (``VARCHAR``, ``DOUBLE``, ``DECIMAL(p,s)``) after the
-grammar guard has already rejected anything injection-shaped. Every other
-grammar token (``BIGINT``, ``INT``, ``INTEGER``, ``BOOLEAN``, ``TIMESTAMP``,
-``DATE``, ``VARCHAR(n)``, ``CHAR(n)``, ``DECIMAL(p,s)``) is valid Trino DDL
-unchanged (verified live).
+The contract's SQL-type grammar (``continuo_validation_contract.types``, shared
+with the postgres adapter) admits type spellings Trino does not recognize as
+type names (``TEXT``, ``DOUBLE PRECISION``, ``NUMERIC(p,s)``); ``_trino_type``
+maps those three to Trino's own spellings (``VARCHAR``, ``DOUBLE``,
+``DECIMAL(p,s)``) after the grammar guard has already rejected anything
+injection-shaped. Every other grammar token (``BIGINT``, ``INT``, ``INTEGER``,
+``BOOLEAN``, ``TIMESTAMP``, ``DATE``, ``VARCHAR(n)``, ``CHAR(n)``,
+``DECIMAL(p,s)``) is valid Trino DDL unchanged (verified live).
 """
 import logging
 import os
-import re
 import uuid
 
 from typing import Any
@@ -65,25 +64,13 @@ from urllib.parse import urlsplit, urlunsplit
 import pyarrow as pa  # type: ignore[import-untyped]
 
 from continuo_validation_contract.port import RuntimeAdapter  # type: ignore[import-untyped]
+from continuo_validation_contract.types import validate_column_type  # type: ignore[import-untyped]
 
 import trino
 
 from trino.auth import BasicAuthentication
 
 logger = logging.getLogger("continuo_python_runtime_trino")
-
-# Contract SQL-type grammar (case-insensitive), identical to the postgres
-# adapter's guard. The matched text is interpolated directly into DDL, so this
-# is an injection guard, not just validation — anything that doesn't match this
-# shape is rejected outright.
-_TYPE_RE = re.compile(
-    r"^("
-    r"BIGINT|INT|INTEGER|DOUBLE PRECISION|TEXT|TIMESTAMP|DATE|BOOLEAN|"
-    r"(NUMERIC|DECIMAL)\(\d+,\s*\d+\)|"
-    r"(VARCHAR|CHAR)\(\d+\)"
-    r")\Z",
-    re.IGNORECASE | re.ASCII,
-)
 
 # Grammar spellings that are not valid Trino type names, mapped to the Trino
 # spelling with equivalent semantics. Matching is case-insensitive; lookup keys
@@ -93,19 +80,15 @@ _TRINO_TYPE_ALIASES = {
     "DOUBLE PRECISION": "DOUBLE",
 }
 
-def _validate_column_type(type_str: str) -> None:
-    """Raise ValueError unless *type_str* matches the contract's SQL type grammar."""
-    if not _TYPE_RE.match(type_str):
-        raise ValueError(f"unsupported or invalid SQL type: {type_str!r}")
-
 
 def _trino_type(type_str: str) -> str:
     """Map a validated contract type string to its Trino DDL spelling.
 
-    Must only be called after :func:`_validate_column_type` has accepted
-    *type_str*. ``NUMERIC(p,s)`` maps to ``DECIMAL(p,s)``; ``TEXT`` and ``DOUBLE
-    PRECISION`` map via ``_TRINO_TYPE_ALIASES``; everything else in the grammar is
-    already valid Trino DDL and passes through unchanged.
+    Must only be called after :func:`~continuo_validation_contract.types.
+    validate_column_type` has accepted *type_str*. ``NUMERIC(p,s)`` maps to
+    ``DECIMAL(p,s)``; ``TEXT`` and ``DOUBLE PRECISION`` map via
+    ``_TRINO_TYPE_ALIASES``; everything else in the grammar is already valid
+    Trino DDL and passes through unchanged.
     """
     upper = type_str.upper()
     if upper.startswith("NUMERIC("):
@@ -368,7 +351,7 @@ class TrinoRuntimeAdapter(RuntimeAdapter):
         """
         properties = _table_properties(config)
         for col in columns:
-            _validate_column_type(col["type"])
+            validate_column_type(col["type"])
 
         self._ensure_schema(schema)
 

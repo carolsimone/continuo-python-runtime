@@ -23,12 +23,12 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
+from continuo_validation_contract.types import validate_column_type  # type: ignore[import-untyped]
 
 from continuo_python_runtime_postgres.adapter import (
     PostgresRuntimeAdapter,
     _arrow_table_from_rows,
     _index_name,
-    _validate_column_type,
 )
 from psycopg2 import sql as pg_sql
 
@@ -107,7 +107,7 @@ def test_entry_point_registered_and_loads_adapter():
 )
 def test_validate_column_type_accepts_grammar(type_str):
     """Test that every SQL type in the contract's grammar is accepted."""
-    _validate_column_type(type_str)  # must not raise
+    validate_column_type(type_str)  # must not raise
 
 
 @pytest.mark.parametrize(
@@ -126,7 +126,7 @@ def test_validate_column_type_accepts_grammar(type_str):
 def test_validate_column_type_rejects_unknown_or_malicious(type_str):
     """Test that unknown or injection-shaped type strings raise ValueError."""
     with pytest.raises(ValueError):
-        _validate_column_type(type_str)
+        validate_column_type(type_str)
 
 
 def test_validate_column_type_rejects_non_ascii_digits():
@@ -137,13 +137,13 @@ def test_validate_column_type_rejects_non_ascii_digits():
     the injection guard before being interpolated into DDL.
     """
     with pytest.raises(ValueError):
-        _validate_column_type("VARCHAR(１０)")  # fullwidth "10"
+        validate_column_type("VARCHAR(１０)")  # fullwidth "10"
 
 
 def test_validate_column_type_rejects_trailing_newline():
     r"""Test that a trailing newline after the type text is rejected (\Z, not $)."""
     with pytest.raises(ValueError):
-        _validate_column_type("TEXT\n")
+        validate_column_type("TEXT\n")
 
 
 def test_arrow_table_from_rows_duplicate_column_names_raise():

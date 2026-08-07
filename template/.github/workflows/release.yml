@@ -19,6 +19,9 @@ jobs:
         run: uv tool install continuo-python-runtime
       - name: Lint scripts (no hand-written SQL)
         run: continuo-runtime lint scripts/
+      # To check reads against the SQL dialect Continuo's install will actually
+      # use (not just sqlglot's dialect-neutral parser), add --dialect <name>:
+      # continuo-runtime validate contracts/ --dialect postgres
       - name: Validate contracts
         run: continuo-runtime validate contracts/
       - name: Domain tests
@@ -26,6 +29,7 @@ jobs:
           if [ -d tests ]; then uv run --with pytest pytest -v; fi
       - name: Compute release id
         run: echo "RELEASE_ID=${{ github.run_number }}-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      # As above, add --dialect <name> to check reads against your warehouse's dialect.
       - name: Merge contracts
         run: continuo-runtime merge contracts/ --service "$SERVICE" --repo-root . --out contract.yaml
       - name: Log in to ghcr.io

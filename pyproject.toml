@@ -7,9 +7,10 @@ maintainers = [{ name = "Simone Carolini" }]
 readme = "README.md"
 requires-python = ">= 3.14"
 dependencies = [
-    "continuo-validation-contract==0.3.0",
+    "continuo-validation-contract==0.4.0",
     "pyarrow==25.0.0",
     "PyYAML==6.0.3",
+    "sqlglot==30.15.0",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

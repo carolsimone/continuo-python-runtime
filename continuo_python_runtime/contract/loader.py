@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from continuo_validation_contract.sql import ensure_single_read  # type: ignore[import-untyped]
+from sqlglot.errors import SqlglotError
 
 from continuo_python_runtime.contract.model import (
     CRITICALITIES,
@@ -39,129 +41,6 @@ _ALLOWED_KEYS = {
 _REQUIRED_STRING_FIELDS = ("schema", "table", "owner", "schedule", "script")
 
 _ALLOWED_OUTPUT_COLUMN_KEYS = {"name", "type", "nullable"}
-
-
-def _mask_string_literals(sql: str) -> str | None:
-    """Return ``sql`` with the contents of single/double-quoted string
-    literals removed, so a ``;`` scan doesn't trip on one embedded in a
-    literal (e.g. ``split_part(tags, ';', 1)``).
-
-    Handles doubled ``''`` escapes inside single-quoted strings. The quote
-    delimiters themselves are kept; only the interior characters are
-    dropped. The result is not valid SQL - it exists solely for the
-    semicolon check below.
-
-    Returns ``None`` if a single- or double-quoted literal is left
-    unterminated (no closing quote before the end of the string): silently
-    truncating in that case would drop everything after the opening quote
-    -- including any ``;`` it was hiding -- and let a multi-statement read
-    through undetected.
-    """
-    result = []
-    i = 0
-    n = len(sql)
-    while i < n:
-        ch = sql[i]
-        if ch == "'":
-            result.append(ch)
-            i += 1
-            closed = False
-            while i < n:
-                if sql[i] == "'":
-                    if i + 1 < n and sql[i + 1] == "'":
-                        # doubled '' escape: part of the literal, drop both
-                        i += 2
-                        continue
-                    result.append(sql[i])
-                    i += 1
-                    closed = True
-                    break
-                i += 1
-            if not closed:
-                return None
-            continue
-        if ch == '"':
-            result.append(ch)
-            i += 1
-            closed = False
-            while i < n:
-                if sql[i] == '"':
-                    result.append(sql[i])
-                    i += 1
-                    closed = True
-                    break
-                i += 1
-            if not closed:
-                return None
-            continue
-        result.append(ch)
-        i += 1
-    return "".join(result)
-
-
-def _strip_leading_sql_comments(sql: str) -> str:
-    """Strip leading whitespace, ``-- ...`` line comments, and ``/* ... */``
-    block comments from the start of ``sql``.
-
-    An unterminated ``/*`` block comment (no closing ``*/``) consumes the
-    rest of the string, so callers see an empty statement rather than a
-    crash. Bounded by ``len(sql) + 1`` iterations (each iteration strictly
-    shrinks ``text``) with an explicit trailing return, so every path
-    returns a definite ``str`` rather than relying on an unbounded
-    ``while True`` loop that a type checker can't prove always exits via
-    ``return``.
-    """
-    text = sql
-    for _ in range(len(sql) + 1):
-        stripped = text.lstrip()
-        if stripped.startswith("--"):
-            newline = stripped.find("\n")
-            text = stripped[newline + 1 :] if newline != -1 else ""
-            continue
-        if stripped.startswith("/*"):
-            end = stripped.find("*/")
-            text = stripped[end + 2 :] if end != -1 else ""
-            continue
-        return stripped
-    return text.lstrip()
-
-
-def _validate_read_shape(label: str, name: str, sql: str) -> None:
-    """Enforce the §13.1 read shape: a single SELECT/WITH statement.
-
-    The read, after stripping whitespace and leading SQL comments, must
-    start with ``select``, ``with``, or a leading ``(`` (a parenthesized
-    SELECT), case-insensitive. It must contain no ``;`` except one optional
-    trailing semicolon; the semicolon scan is literal-aware, ignoring ``;``
-    characters inside single/double-quoted string literals. An unterminated
-    string literal is itself rejected -- it can otherwise hide arbitrary
-    trailing SQL (including a ``;``) from the scan.
-    Schema-qualification is left to the control plane's sqlglot validation.
-
-    Raises:
-        ContractError: If the shape is violated, naming the read.
-    """
-    stripped = sql.strip()
-    body = stripped[:-1] if stripped.endswith(";") else stripped
-    masked = _mask_string_literals(body)
-    if masked is None:
-        raise ContractError(
-            f"{label}: read '{name}' has an unterminated string literal"
-        )
-    if ";" in masked:
-        raise ContractError(
-            f"{label}: 'reads.{name}' must be a single SQL statement "
-            f"(only one optional trailing semicolon allowed)"
-        )
-    lowered = _strip_leading_sql_comments(body).lower()
-    if not (
-        lowered.startswith("select")
-        or lowered.startswith("with")
-        or lowered.startswith("(")
-    ):
-        raise ContractError(
-            f"{label}: 'reads.{name}' must start with SELECT or WITH"
-        )
 
 
 class _StrictLoader(yaml.SafeLoader):
@@ -233,10 +112,14 @@ def _validate_config(raw: Any, label: str) -> dict[str, Any]:
     return raw
 
 
-def parse_node(raw: dict[str, Any], source: str) -> Node:
+def parse_node(raw: dict[str, Any], source: str, *, dialect: str | None = None) -> Node:
     """Validate a single raw mapping and build a :class:`Node`.
 
     ``source`` is the originating filename; it appears in every error message.
+    ``dialect`` is a sqlglot dialect name (e.g. ``"postgres"``, ``"trino"``)
+    each declared read is checked against via
+    :func:`~continuo_validation_contract.sql.ensure_single_read`; ``None``
+    (the default) uses sqlglot's dialect-neutral parser.
     """
     if not isinstance(raw, dict):
         raise ContractError(
@@ -292,7 +175,20 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
             raise ContractError(
                 f"{label}: 'reads.{name}' must be a non-empty SQL string"
             )
-        _validate_read_shape(label, name, sql)
+        try:
+            ensure_single_read(sql, dialect)
+        except (ValueError, SqlglotError) as exc:
+            # ensure_single_read's own message is phrased for check_binds
+            # (its only other caller today), so it's wrapped rather than
+            # surfaced bare here. SqlglotError is also caught: an
+            # unterminated string literal or comment fails sqlglot's
+            # tokenizer with a TokenError, which is a SqlglotError sibling of
+            # ParseError, not a subclass of ValueError -- despite
+            # ensure_single_read's docstring promising every rejection is a
+            # ValueError.
+            raise ContractError(
+                f"{label}: 'reads.{name}' must be a single read query ({exc})"
+            ) from exc
 
     raw_columns = raw.get("output_columns")
     if not isinstance(raw_columns, list) or not raw_columns:
@@ -360,8 +256,12 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
     )
 
 
-def load_contract_dir(path: Path) -> list[Node]:
+def load_contract_dir(path: Path, *, dialect: str | None = None) -> list[Node]:
     """Load and validate every `*.yml`/`*.yaml` contract file under ``path``.
+
+    ``dialect`` is forwarded to :func:`parse_node` for every node, so every
+    declared read is checked against that sqlglot dialect (``None`` -- the
+    default -- uses sqlglot's dialect-neutral parser).
 
     Raises `ContractError` if no nodes are found, if any file's document is
     malformed, or if two nodes across files share the same `(schema, table)`.
@@ -391,7 +291,7 @@ def load_contract_dir(path: Path) -> list[Node]:
             raise ContractError(f"{file.name}: 'nodes' must be a list")
 
         for raw_node in raw_nodes:
-            node = parse_node(raw_node, file.name)
+            node = parse_node(raw_node, file.name, dialect=dialect)
             existing_source = relation_sources.get(node.relation)
             if existing_source is not None:
                 raise ContractError(

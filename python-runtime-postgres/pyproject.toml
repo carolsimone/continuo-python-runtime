@@ -7,7 +7,7 @@ maintainers = [{ name = "Simone Carolini" }]
 readme = "README.md"
 requires-python = ">= 3.14"
 dependencies = [
-    "continuo-validation-contract==0.3.0",
+    "continuo-validation-contract==0.4.0",
     "psycopg2-binary==2.9.11",
     "pyarrow==25.0.0",
 ]

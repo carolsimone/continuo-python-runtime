@@ -9,7 +9,6 @@ error) so no operation leaves a transaction open across calls.
 """
 import logging
 import os
-import re
 
 from typing import Any
 
@@ -17,30 +16,12 @@ import psycopg2  # type: ignore[import-untyped]
 import pyarrow as pa  # type: ignore[import-untyped]
 
 from continuo_validation_contract.port import RuntimeAdapter  # type: ignore[import-untyped]
+from continuo_validation_contract.types import validate_column_type  # type: ignore[import-untyped]
 from psycopg2 import errors as pg_errors  # type: ignore[import-untyped]
 from psycopg2 import sql as pg_sql  # type: ignore[import-untyped]
 from psycopg2.extras import execute_values  # type: ignore[import-untyped]
 
 logger = logging.getLogger("continuo_python_runtime_postgres")
-
-# Contract SQL-type grammar (case-insensitive). The matched text is interpolated
-# directly into DDL via pg_sql.SQL, so this is an injection guard, not just
-# validation — anything that doesn't match this shape is rejected outright.
-_TYPE_RE = re.compile(
-    r"^("
-    r"BIGINT|INT|INTEGER|DOUBLE PRECISION|TEXT|TIMESTAMP|DATE|BOOLEAN|"
-    r"(NUMERIC|DECIMAL)\(\d+,\s*\d+\)|"
-    r"(VARCHAR|CHAR)\(\d+\)"
-    r")\Z",
-    re.IGNORECASE | re.ASCII,
-)
-
-
-def _validate_column_type(type_str: str) -> None:
-    """Raise ValueError unless *type_str* matches the contract's SQL type grammar."""
-    if not _TYPE_RE.match(type_str):
-        raise ValueError(f"unsupported or invalid SQL type: {type_str!r}")
-
 
 # The postgres physical-layout vocabulary: `indexes` is the only recognized
 # top-level config key. This adapter is the sole owner and enforcer of this
@@ -284,7 +265,7 @@ class PostgresRuntimeAdapter(RuntimeAdapter):
         """
         indexes = _validated_indexes(config, table, [col["name"] for col in columns])
         for col in columns:
-            _validate_column_type(col["type"])
+            validate_column_type(col["type"])
 
         self._ensure_schema(schema)
 

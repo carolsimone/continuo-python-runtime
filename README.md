@@ -42,7 +42,7 @@ data-plane adapters here.
 | `continuo-validation-postgres` / `continuo-validation-trino` | `continuo_validation_postgres` / `continuo_validation_trino` | `continuo-validation-runners` | Validation-side (lint/merge, no live warehouse I/O) adapters — not to be confused with the data-plane adapters above. |
 
 All three packages built in this repo resolve `continuo-validation-contract`
-from PyPI (`==0.3.0`); the two adapter packages are uv workspace members
+from PyPI (`==0.4.0`); the two adapter packages are uv workspace members
 (`[tool.uv.workspace]` in the root `pyproject.toml`), so `uv sync
 --all-packages --all-groups` at the repo root installs everything for local
 development.

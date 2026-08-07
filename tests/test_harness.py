@@ -281,6 +281,108 @@ def test_ensure_table_value_error_surfaces_as_load_error(harness_repo, capsys):
     assert "sortkey" in out
 
 
+# --- in-repo import closure must be importable at run time ---
+#
+# CI folds the transitive in-repo import closure into `shared_code_hash`, so a
+# node script is expected to import its shared helpers. `exec_module` alone
+# puts neither the repo root nor the script's own directory on `sys.path`, so
+# without the harness's explicit insertion every one of these scripts dies at
+# import time in production — while passing under pytest, which adds the
+# rootdir to `sys.path` itself. Both forms are covered because `closure.py`
+# resolves names against exactly these two roots (repo_root, then the
+# importing file's directory).
+
+
+def test_script_can_import_sibling_helper(harness_repo, isolated_import_state, capsys):
+    """`import helpers` — the script's own directory must be importable."""
+    (harness_repo / "scripts" / "helpers.py").write_text(
+        "def only_ids(table):\n    return table.select(['id'])\n"
+    )
+    (harness_repo / "scripts" / "t.py").write_text(
+        "import helpers\n\n\ndef run(ctx):\n    return helpers.only_ids(ctx.read('ids'))\n"
+    )
+    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
+    assert run_node(_env(harness_repo), adapter=ad) == 0
+    assert ad.loaded[2].num_rows == 2
+
+
+def test_script_can_import_package_qualified_helper(
+    harness_repo, isolated_import_state, capsys
+):
+    """`import scripts.helpers` — the repo root must be importable too."""
+    (harness_repo / "scripts" / "__init__.py").write_text("")
+    (harness_repo / "scripts" / "helpers.py").write_text(
+        "def only_ids(table):\n    return table.select(['id'])\n"
+    )
+    (harness_repo / "scripts" / "t.py").write_text(
+        "import scripts.helpers\n\n\n"
+        "def run(ctx):\n    return scripts.helpers.only_ids(ctx.read('ids'))\n"
+    )
+    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
+    assert run_node(_env(harness_repo), adapter=ad) == 0
+    assert ad.loaded[2].num_rows == 2
+
+
+def test_script_can_import_helper_from_a_sibling_directory(
+    harness_repo, isolated_import_state, capsys
+):
+    """A helper in a `lib/` package outside `scripts/` resolves via the repo root."""
+    (harness_repo / "lib").mkdir()
+    (harness_repo / "lib" / "__init__.py").write_text("")
+    (harness_repo / "lib" / "shared.py").write_text(
+        "def only_ids(table):\n    return table.select(['id'])\n"
+    )
+    (harness_repo / "scripts" / "t.py").write_text(
+        "from lib.shared import only_ids\n\n\n"
+        "def run(ctx):\n    return only_ids(ctx.read('ids'))\n"
+    )
+    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
+    assert run_node(_env(harness_repo), adapter=ad) == 0
+    assert ad.loaded[2].num_rows == 2
+
+
+def test_deferred_import_inside_run_still_resolves(
+    harness_repo, isolated_import_state, capsys
+):
+    """The path entries survive past import time: `run()` may import lazily."""
+    (harness_repo / "scripts" / "helpers.py").write_text(
+        "def only_ids(table):\n    return table.select(['id'])\n"
+    )
+    (harness_repo / "scripts" / "t.py").write_text(
+        "def run(ctx):\n"
+        "    import helpers\n"
+        "    return helpers.only_ids(ctx.read('ids'))\n"
+    )
+    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
+    assert run_node(_env(harness_repo), adapter=ad) == 0
+    assert ad.loaded[2].num_rows == 2
+
+
+def test_load_script_puts_repo_root_and_script_dir_on_sys_path(
+    harness_repo, isolated_import_state
+):
+    """Both roots land at the front, repo root first — closure.py's own order."""
+    import sys
+
+    nodes = load_contract_dir(harness_repo / "contracts")
+    load_script(nodes[0], harness_repo)
+    assert sys.path[0] == str(harness_repo)
+    assert sys.path[1] == str(harness_repo / "scripts")
+
+
+def test_load_script_does_not_duplicate_sys_path_entries(
+    harness_repo, isolated_import_state
+):
+    """Re-entry is idempotent: no unbounded sys.path growth."""
+    import sys
+
+    nodes = load_contract_dir(harness_repo / "contracts")
+    load_script(nodes[0], harness_repo)
+    after_first = list(sys.path)
+    load_script(nodes[0], harness_repo)
+    assert sys.path == after_first
+
+
 def test_adapter_construction_failure_emits_single_load_error_block(monkeypatch, harness_repo, capsys):
     import continuo_python_runtime.harness as harness_mod
 

@@ -71,8 +71,42 @@ def select_node(nodes: list[Node], node_id: str) -> Node:
     )
 
 
+def ensure_import_paths(repo_root: Path, script_dir: Path) -> None:
+    """Prepend ``repo_root`` then ``script_dir`` to ``sys.path``, idempotently.
+
+    ``importlib``'s ``spec_from_file_location`` + ``exec_module`` executes a
+    file without putting anything on ``sys.path``, and ``continuo-runtime`` is
+    an installed console script, so ``sys.path[0]`` is the venv's ``bin``
+    directory — ``/app`` is on no path. A node script importing its own
+    shared helpers (exactly what ``shared_code_hash`` folds into the content
+    hash) would therefore die with ``ModuleNotFoundError`` on its first
+    production run, having passed CI and the domain repo's own pytest, which
+    adds the rootdir to ``sys.path`` itself.
+
+    The two roots and their order mirror
+    :func:`continuo_python_runtime.closure._resolve_name`'s search roots, so a
+    name the closure resolver folded into the hash is a name the interpreter
+    can resolve: ``repo_root`` first (package-qualified ``import
+    scripts.helpers``, or a helper in a sibling ``lib/``), then the importing
+    script's own directory (sibling ``import helpers``).
+
+    Entries are left in place for the process lifetime rather than removed
+    after ``exec_module``: a script may import lazily inside ``run()``, and a
+    container runs exactly one node per process. Both paths are resolved
+    first and an already-present entry is not re-inserted, so repeated calls
+    cannot grow ``sys.path`` however the caller spelled the roots.
+    """
+    for entry in (str(script_dir.resolve()), str(repo_root.resolve())):
+        if entry not in sys.path:
+            sys.path.insert(0, entry)
+
+
 def load_script(node: Node, repo_root: Path) -> ModuleType:
     """Import ``node.script`` (relative to ``repo_root``) and return the module.
+
+    ``repo_root`` and the script's own directory are put on ``sys.path`` first
+    (see :func:`ensure_import_paths`) so the script's in-repo import closure
+    is importable.
 
     Raises:
         ContractError: If the script path is absolute, escapes the
@@ -80,6 +114,7 @@ def load_script(node: Node, repo_root: Path) -> ModuleType:
         ScriptError: If the module has no callable ``run``.
     """
     script_path = resolve_script_path(node.script, repo_root, context=node.relation)
+    ensure_import_paths(repo_root, script_path.parent)
 
     module_name = f"_continuo_node_{uuid.uuid4().hex}"
     spec = importlib.util.spec_from_file_location(module_name, script_path)

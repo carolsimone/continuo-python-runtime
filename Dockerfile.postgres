@@ -8,6 +8,10 @@ RUN pip install --no-cache-dir \
       "continuo-validation-contract==0.4.0" \
       /src/python-runtime-postgres \
       /src
-ENV CONTRACT_DIR=/app/contracts APP_ROOT=/app
+# PYTHONPATH is belt-and-braces: the harness also inserts APP_ROOT and the
+# node script's own directory at the front of sys.path before executing it,
+# so a script's in-repo helper imports resolve. Neither WORKDIR nor the
+# console-script entrypoint puts /app on sys.path by itself.
+ENV CONTRACT_DIR=/app/contracts APP_ROOT=/app PYTHONPATH=/app
 WORKDIR /app
 ENTRYPOINT ["continuo-runtime", "run"]

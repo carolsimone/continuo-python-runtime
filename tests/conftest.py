@@ -1,9 +1,36 @@
 """Shared test fixtures."""
 
+import sys
+
 import pytest
 import yaml
 
 from continuo_python_runtime.contract.model import Column, Node
+
+
+@pytest.fixture
+def isolated_import_state():
+    """Snapshot/restore ``sys.path`` and ``sys.modules`` around a test.
+
+    ``load_script`` deliberately prepends the repo root and the script's own
+    directory to ``sys.path`` and leaves them there for the process lifetime
+    (deferred imports inside ``run()`` need them). In a container that is one
+    process per node; under pytest it is one process for the whole suite, so
+    without this fixture every harness test would leak two ``tmp_path``
+    entries into ``sys.path`` and — worse — leave the helper modules it
+    imported (``helpers``, ``scripts.helpers``, …) cached in ``sys.modules``,
+    where a later test importing the same name would silently get the earlier
+    test's file. Any test whose script imports an in-repo helper must use
+    this fixture.
+    """
+    original_path = list(sys.path)
+    original_modules = set(sys.modules)
+    try:
+        yield
+    finally:
+        sys.path[:] = original_path
+        for name in set(sys.modules) - original_modules:
+            del sys.modules[name]
 
 
 @pytest.fixture

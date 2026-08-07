@@ -1,5 +1,5 @@
 [project]
-version = "0.1.0"
+version = "0.2.0"
 name = "continuo-python-runtime-trino"
 description = "Trino runtime adapter for Continuo python nodes."
 authors = [{ name = "Simone Carolini" }]

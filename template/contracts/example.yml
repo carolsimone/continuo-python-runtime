@@ -19,3 +19,11 @@ nodes:
       - {name: order_id, type: INTEGER, nullable: false}
       - {name: customer_name, type: "VARCHAR(64)", nullable: true}
       - {name: amount, type: "NUMERIC(10,2)", nullable: false}
+    # Optional physical layout, in your ENGINE'S OWN vocabulary. The active
+    # engine's adapter rejects any key it does not recognize.
+    #   postgres: indexes
+    #   trino (iceberg): partitioning, sorted_by, format
+    # config:
+    #   indexes:
+    #     - columns: [order_id]
+    #       unique: true

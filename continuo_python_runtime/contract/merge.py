@@ -4,6 +4,7 @@ from pathlib import Path
 
 import yaml
 
+from continuo_python_runtime.closure import resolve_closure
 from continuo_python_runtime.contract.loader import load_contract_dir
 from continuo_python_runtime.contract.model import CONTRACT_VERSION, Node
 from continuo_python_runtime.contract.paths import resolve_script_path
@@ -13,8 +14,10 @@ from continuo_python_runtime.hashing import hash_parts
 def node_entry(node: Node) -> dict:
     """Convert a Node to its wire form dict.
 
-    Returns the node as a dict with all fields, output_columns as list of dicts,
-    and NO content_hash. The nullable field is always present in output_columns.
+    Returns the node as a dict with all fields, output_columns as list of
+    dicts. The entry carries no hash fields: build_wire_contract adds all
+    four (source_hash, shared_code_hash, config_hash, content_hash). The
+    nullable field is always present in output_columns.
     """
     return {
         "schema": node.schema,
@@ -34,6 +37,7 @@ def node_entry(node: Node) -> dict:
         ],
         "description": node.description,
         "extra_columns": node.extra_columns,
+        "config": dict(node.config),
     }
 
 
@@ -52,11 +56,10 @@ def build_wire_contract(contract_dir: Path, repo_root: Path, service: str) -> di
         entry = node_entry(node)
 
         script_path = resolve_script_path(node.script, repo_root, context=node.relation)
-
-        # Read script bytes and compute hash. Closure resolution (member_bytes)
-        # is wired in a later task; until then the shared-code part is empty.
         script_bytes = script_path.read_bytes()
-        entry["content_hash"] = hash_parts(entry, script_bytes, [])["content_hash"]
+        closure = resolve_closure(script_path, repo_root)
+        member_bytes = [member.read_bytes() for member in closure]
+        entry.update(hash_parts(entry, script_bytes, member_bytes))
 
         wire_nodes.append(entry)
 

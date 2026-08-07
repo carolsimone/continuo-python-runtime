@@ -38,10 +38,14 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   warehouse SQL dialect**, so authors write each read in their own engine's
   own dialect — a read that's valid against postgres can fail
   `InvalidCompiledSql` on an install whose warehouse is Trino, and vice
-  versa. `continuo-runtime validate|merge|hash` will gain a `--dialect
-  <name>` flag (not yet shipped on this branch) so a domain repo can check
-  its reads against that dialect locally, catching the failure in its own
-  CI instead of at Continuo's parser.
+  versa. `continuo-runtime validate|merge|hash` accept an optional
+  `--dialect <name>` flag (e.g. `postgres`, `trino`) so a domain repo can
+  check its reads against that dialect locally, catching the failure in its
+  own CI instead of at Continuo's parser. Reads are always parsed (via
+  `continuo_validation_contract.sql.ensure_single_read`, sqlglot-backed) even
+  without `--dialect` — the flag only chooses which dialect's grammar that
+  parse is checked against, defaulting to sqlglot's dialect-neutral parser
+  when omitted.
 - `output_columns` types come from the supported set: `BIGINT`,
   `INT`/`INTEGER`, `DOUBLE PRECISION`, `NUMERIC(p,s)`/`DECIMAL(p,s)`,
   `VARCHAR(n)`/`CHAR(n)`/`TEXT`, `TIMESTAMP`, `DATE`, `BOOLEAN`.

@@ -275,7 +275,7 @@ def test_reads_unterminated_block_comment_rejected():
     input), so the loader must still turn it into a clean ContractError
     naming the read rather than letting the tokenizer error escape raw."""
     sql = "/* not closed select id from analytics.a"
-    with pytest.raises(ContractError, match="reads.ids"):
+    with pytest.raises(ContractError, match=r"reads\.ids.*Error tokenizing"):
         parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
 
 
@@ -290,13 +290,13 @@ def test_reads_rejects_unterminated_single_quote():
     multi-statement read through -- sqlglot's tokenizer fails on it (a
     TokenError), which the loader must still turn into a ContractError."""
     sql = "select 'unterminated from analytics.a; drop table x"
-    with pytest.raises(ContractError, match="reads.ids"):
+    with pytest.raises(ContractError, match=r"reads\.ids.*Error tokenizing"):
         parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
 
 
 def test_reads_rejects_unterminated_double_quote():
     sql = 'select "unterminated from analytics.a; drop table x'
-    with pytest.raises(ContractError, match="reads.ids"):
+    with pytest.raises(ContractError, match=r"reads\.ids.*Error tokenizing"):
         parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
 
 
@@ -432,6 +432,29 @@ def test_load_dir_dialect_rejects_what_neutral_default_accepts(tmp_path):
 
     with pytest.raises(ContractError, match="reads.ids"):
         load_contract_dir(tmp_path, dialect="trino")
+
+
+def test_load_dir_invalid_dialect_names_the_flag_not_the_read(tmp_path):
+    """A typo'd --dialect value (e.g. the uppercased 'POSTGRES' instead of
+    'postgres') must be reported as a bad flag, not confused with a rejected
+    read: sqlglot.Dialect.get_or_raise raises a plain ValueError
+    ("Unknown dialect 'POSTGRES'.") that is otherwise indistinguishable, at
+    the per-read ensure_single_read catch site, from a read that genuinely
+    fails to parse -- so dialect must be validated once, up front, before any
+    read is even looked at. A perfectly valid read must not be blamed."""
+    a = tmp_path / "a.yml"
+    a.write_text(yaml.safe_dump({"nodes": [VALID]}))
+
+    try:
+        load_contract_dir(tmp_path, dialect="POSTGRES")
+        pytest.fail("expected ContractError")
+    except ContractError as exc:
+        message = str(exc)
+        assert "--dialect" in message
+        assert "POSTGRES" in message
+        # must not be mistaken for a read rejection
+        assert "reads.ids" not in message
+        assert "must be a single read query" not in message
 
 
 def test_parse_node_dialect_reaches_ensure_single_read(monkeypatch):

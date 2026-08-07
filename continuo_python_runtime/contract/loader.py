@@ -12,7 +12,8 @@ from typing import Any
 
 import yaml
 from continuo_validation_contract.sql import ensure_single_read  # type: ignore[import-untyped]
-from sqlglot.errors import SqlglotError
+from sqlglot import Dialect
+from sqlglot.errors import TokenError
 
 from continuo_python_runtime.contract.model import (
     CRITICALITIES,
@@ -177,15 +178,19 @@ def parse_node(raw: dict[str, Any], source: str, *, dialect: str | None = None) 
             )
         try:
             ensure_single_read(sql, dialect)
-        except (ValueError, SqlglotError) as exc:
+        except (ValueError, TokenError) as exc:
             # ensure_single_read's own message is phrased for check_binds
             # (its only other caller today), so it's wrapped rather than
-            # surfaced bare here. SqlglotError is also caught: an
-            # unterminated string literal or comment fails sqlglot's
-            # tokenizer with a TokenError, which is a SqlglotError sibling of
-            # ParseError, not a subclass of ValueError -- despite
-            # ensure_single_read's docstring promising every rejection is a
-            # ValueError.
+            # surfaced bare here. TokenError is also caught: an unterminated
+            # string literal or comment fails sqlglot's tokenizer with a
+            # TokenError, a SqlglotError sibling of ParseError and not a
+            # subclass of ValueError -- despite ensure_single_read's
+            # docstring promising every rejection is a ValueError. Only
+            # TokenError, not the broader SqlglotError, is caught here: by
+            # the time control reaches this point `dialect` has already been
+            # validated once in load_contract_dir, so any other SqlglotError
+            # a future sqlglot version might raise from this call should
+            # surface as itself, not get relabeled as a rejected read.
             raise ContractError(
                 f"{label}: 'reads.{name}' must be a single read query ({exc})"
             ) from exc
@@ -259,13 +264,26 @@ def parse_node(raw: dict[str, Any], source: str, *, dialect: str | None = None) 
 def load_contract_dir(path: Path, *, dialect: str | None = None) -> list[Node]:
     """Load and validate every `*.yml`/`*.yaml` contract file under ``path``.
 
-    ``dialect`` is forwarded to :func:`parse_node` for every node, so every
-    declared read is checked against that sqlglot dialect (``None`` -- the
-    default -- uses sqlglot's dialect-neutral parser).
+    ``dialect`` is validated once, up front, then forwarded to
+    :func:`parse_node` for every node, so every declared read is checked
+    against that sqlglot dialect (``None`` -- the default -- uses sqlglot's
+    dialect-neutral parser). Validating it here rather than leaving it to
+    the per-read ``ensure_single_read`` call matters: an unrecognized
+    dialect name (e.g. a typo'd ``--dialect POSTGRES`` instead of
+    ``postgres``) raises the same bare ``ValueError`` a genuinely
+    unparseable read would, and would otherwise be misreported as a
+    rejected read instead of a bad flag -- blaming an innocent, valid read.
 
-    Raises `ContractError` if no nodes are found, if any file's document is
-    malformed, or if two nodes across files share the same `(schema, table)`.
+    Raises `ContractError` if ``dialect`` is not a sqlglot dialect name, if
+    no nodes are found, if any file's document is malformed, or if two nodes
+    across files share the same `(schema, table)`.
     """
+    if dialect is not None:
+        try:
+            Dialect.get_or_raise(dialect)
+        except ValueError as exc:
+            raise ContractError(f"unknown --dialect {dialect!r}: {exc}") from exc
+
     files = sorted(path.glob("*.yml")) + sorted(path.glob("*.yaml"))
 
     nodes: list[Node] = []

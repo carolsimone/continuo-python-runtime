@@ -10,6 +10,16 @@ dependencies = [
     "continuo-validation-contract==0.4.0",
     "pyarrow==25.0.0",
     "PyYAML==6.0.3",
+    # Pinned in lockstep with continuo-validation-contract's OWN sqlglot pin
+    # (currently ==30.15.0) -- bump this whenever that pin moves.
+    # continuo_python_runtime/contract/loader.py imports sqlglot.errors
+    # directly to catch TokenError, which escapes
+    # continuo_validation_contract.sql.ensure_single_read uncaught despite
+    # its docstring's guarantee that only ValueError does (an unterminated
+    # string literal or comment fails sqlglot's tokenizer before the
+    # parser's own ParseError handling ever runs). Once that contract bug is
+    # fixed upstream, this direct import -- and this explicit pin, since
+    # sqlglot would then again be needed only transitively -- can be dropped.
     "sqlglot==30.15.0",
 ]
 classifiers = [

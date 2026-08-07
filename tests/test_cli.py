@@ -45,6 +45,18 @@ def test_validate_dialect_defaults_to_none(contract_repo, monkeypatch):
     assert captured["dialect"] is None
 
 
+def test_validate_invalid_dialect_reports_bad_flag_not_bad_read(contract_repo, caplog):
+    """End-to-end (no mocking of load_contract_dir): a typo'd --dialect value
+    against a contract whose only read is perfectly valid SQL must exit 1
+    with a message naming --dialect, not one that reads as though the SQL
+    itself were rejected."""
+    rc = main(["validate", str(contract_repo / "contracts"), "--dialect", "POSTGRES"])
+    assert rc == 1
+    messages = [r.message for r in caplog.records]
+    assert any("--dialect" in m and "POSTGRES" in m for m in messages)
+    assert not any("must be a single read query" in m for m in messages)
+
+
 def test_merge_writes_artifact(contract_repo, tmp_path):
     out = tmp_path / "contract.yaml"
     rc = main(

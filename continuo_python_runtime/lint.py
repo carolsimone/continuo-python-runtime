@@ -1,4 +1,5 @@
-"""Script linting for forbidden imports, SQL literals, and data-access calls."""
+"""Script linting for forbidden imports, SQL literals, data-access calls, and
+dynamic-import constructs."""
 
 import ast
 import re
@@ -143,15 +144,8 @@ def lint_source(source: str, filename: str) -> list[str]:
     "from". This is a best-effort, position-based exemption: the same prose
     assigned to a variable is still flagged.
 
-    Violations are returned sorted by line number (stable, so violations on
-    the same line keep the order the passes below found them). L5 hits come
-    from a separate walk (the shared ``dynamic_import_violations`` helper),
-    so a stable sort-by-lineno is what "alongside the others" means here,
-    rather than a copy of the predicate threaded into the walks below.
+    Violations are returned sorted by line number; ties keep discovery order.
     """
-    # (lineno, message) pairs; sorted by lineno at the end so L5 hits (found
-    # via a separate walk over the shared helper) interleave with L1-L4 by
-    # position in the file instead of landing as a trailing block.
     entries: list[tuple[int, str]] = []
 
     # Try to parse the source code
@@ -263,12 +257,8 @@ def lint_source(source: str, filename: str) -> list[str]:
             if node.attr.startswith("_") and not is_self_or_cls:
                 entries.append((node.lineno, f"private attribute access '{node.attr}'"))
 
-    # L5: dynamic-import constructs. The predicate lives in closure.py (Task
-    # 2's resolver uses it to abort on the first hit); here every hit is
-    # reported, since a linter's job is to show the author all violations at
-    # once. This is necessarily a separate walk over the shared helper
-    # rather than a branch threaded into the loops above - reusing the
-    # predicate means not re-implementing its traversal.
+    # L5: dynamic-import constructs, reported via the shared closure.py
+    # predicate (which raises on only the first hit; here every hit counts).
     for lineno, construct in dynamic_import_violations(tree):
         entries.append((lineno, f"dynamic import construct '{construct}'"))
 

@@ -273,3 +273,18 @@ def test_dynamic_import_over_matching_guard():
 def test_dynamic_import_violation_carries_location():
     (v,) = lint_source("import importlib\n", "scripts/x.py")
     assert v == "scripts/x.py:1: dynamic import construct 'importlib'"
+
+
+def test_violations_are_returned_in_line_order_across_rules():
+    """Violations must come back sorted by line number regardless of which
+    pass (L1's first pass, L2-L4's second pass, or L5's separate walk over
+    ``dynamic_import_violations``) found them. Here an L2 hit (line 1)
+    precedes an L5 hit (line 2), which precedes an L1 hit (line 3) - the
+    opposite of pass-discovery order, so this fails if the line-number sort
+    is removed, reordered, or weakened to a full-tuple comparison."""
+    source = 'q = "SELECT * FROM t"\nimport importlib\nimport psycopg2\n'
+    assert lint_source(source, "s.py") == [
+        "s.py:1: SQL string literal 'SELECT * FROM t'",
+        "s.py:2: dynamic import construct 'importlib'",
+        "s.py:3: forbidden warehouse driver import 'psycopg2'",
+    ]

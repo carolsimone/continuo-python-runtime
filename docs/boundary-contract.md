@@ -21,12 +21,23 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
 
 - Schema per §3: `contract_version: 1`, `service`, `nodes: [...]` — every
   node carries `schema`, `table`, `owner`, `schedule`, `criticality`,
-  `script`, `reads`, `output_columns`, `content_hash`.
+  `script`, `reads`, `output_columns`, the four hash fields (`source_hash`,
+  `shared_code_hash`, `config_hash`, `content_hash`), and optionally
+  `config` (physical layout — see below).
 - **Reads must be single-statement SELECTs with every table reference
   schema-qualified** (`analytics.table_a`, never `table_a`) — the resolver
   raises `UnqualifiedTableReference` and rejects the whole release otherwise
   (CTE names are exempt). References to tables outside Continuo's registry
   are allowed (external sources) and simply produce no edge.
+- **Reads are dialect-bound, not dialect-neutral** (continuo PR #400):
+  Continuo parses, rewrites, and bind-checks every read in the **install's
+  warehouse SQL dialect**, so authors write each read in their own engine's
+  own dialect — a read that's valid against postgres can fail
+  `InvalidCompiledSql` on an install whose warehouse is Trino, and vice
+  versa. `continuo-runtime validate|merge|hash` will gain a `--dialect
+  <name>` flag (not yet shipped on this branch) so a domain repo can check
+  its reads against that dialect locally, catching the failure in its own
+  CI instead of at Continuo's parser.
 - `output_columns` types come from the supported set: `BIGINT`,
   `INT`/`INTEGER`, `DOUBLE PRECISION`, `NUMERIC(p,s)`/`DECIMAL(p,s)`,
   `VARCHAR(n)`/`CHAR(n)`/`TEXT`, `TIMESTAMP`, `DATE`, `BOOLEAN`.
@@ -34,26 +45,139 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   Continuo does no existence check (D3); a POST racing its own upload
   fails at the parsing stage.
 
-## 13.2 Surface 2 — `content_hash` (computed by CI, byte-exact algorithm)
+### Physical-layout `config`
+
+Every node may carry an optional `config` mapping alongside its typed
+`output_columns`: the node's physical layout, written directly in the
+**active engine's own vocabulary**. It is deliberately *not*
+engine-namespaced (no `postgres: {...}` / `trino: {...}` wrapper) — the
+contract is already engine-bound, since reads are authored in that same
+engine's SQL dialect (see above), so there is no ambiguity to resolve at
+parse time.
+
+- The active engine's `RuntimeAdapter` **fails closed on any key it does
+  not recognize**, at any nesting level — there is no other namespace to
+  excuse an unknown key into.
+- Recognized keys as shipped:
+  - **postgres** → `indexes`: a list of `{columns: [...], unique: bool,
+    name: str}` entries. `unique` defaults to `false`; `name` defaults to
+    `ix_<table>_<col1>_<col2>...` (truncated to 63 bytes if longer).
+  - **trino (Iceberg)** → `partitioning` and `sorted_by` (each a
+    non-empty list of non-empty strings — column names or Iceberg
+    partition transforms like `day(event_ts)`), and `format` (one of
+    `PARQUET`/`ORC`/`AVRO`, case-insensitive).
+- Worked example (from `template/contracts/example.yml`):
+  ```yaml
+  config:
+    indexes:
+      - columns: [order_id]
+        unique: true
+  ```
+- Applied at runtime by `RuntimeAdapter.ensure_table` on **create-if-absent
+  only** — postgres emits `CREATE INDEX IF NOT EXISTS`; Iceberg's
+  properties are set in the `WITH (...)` clause of the `CREATE TABLE`
+  itself. Neither is a migration mechanism: flipping `unique: false →
+  true` under a fixed index `name`, or changing `partitioning` on a table
+  that already exists, is a **silent no-op** — not an applied change and
+  not an error. The table is left exactly as it was first created. Once
+  continuo-validation step 3a lands, the same vocabulary is checked ahead
+  of runtime by `build_empty_from_columns`, so a malformed config fails
+  the release gate rather than surfacing in production.
+- Trino's `format` is case-normalized to uppercase in the emitted DDL, so
+  `format: parquet` and `format: PARQUET` produce identical `WITH (...)`
+  text — but they are different bytes in the contract entry, so they
+  produce different `config_hash` (and therefore `content_hash`) values,
+  triggering a revalidation that — per the point above — re-applies
+  nothing.
+- `config` lives in the contract entry like any other field, so it
+  participates in `config_hash` with no special-casing in the hash
+  formula: adopting `config` on a previously bare node, or editing an
+  existing one, changes `content_hash` exactly as editing `reads` or
+  `output_columns` would.
+
+## 13.2 Surface 2 — the hash fields (computed by CI, byte-exact algorithms)
+
+Each node entry in `contract.yaml` carries four hash fields — three
+independently-computed parts plus `content_hash`, their fold — all
+computed by this repo's `continuo-runtime merge`
+(`continuo_python_runtime.hashing`) and shipped on the wire entry. Continuo
+never recomputes `source_hash` or `shared_code_hash` from raw bytes over
+this surface (it doesn't receive the script or closure here); it
+recomputes only the fold (see below).
 
 ```
-content_hash = "sha256:" + sha256(
-    canonical_json(contract_entry)   # yaml parsed → JSON, sorted keys, no
-                                     #   whitespace; each `reads` entry first
-                                     #   whitespace-normalized (runs of
-                                     #   whitespace → single space, stripped);
-                                     #   the content_hash field itself excluded
-  + "\x00"
-  + script_bytes                     # the node's script file, byte-for-byte
-)
+source_hash      = sha256(script_bytes)                            # bare hex
+shared_code_hash = ""  if the in-repo import closure is empty, else
+                    sha256(concat(sorted(sha256(member_bytes)
+                                          for member in closure)))   # bare hex
+config_hash      = sha256(canonical_json(entry))                    # bare hex
+content_hash     = "sha256:" + sha256(source_hash + "|" + shared_code_hash
+                                       + "|" + config_hash)
 ```
 
-Invariant: formatting-only edits (spaces in SQL, yaml indentation/key order)
-produce an identical hash; any semantic edit to reads, columns, metadata, or
-the script changes it. Continuo trusts this value verbatim — it is the sole
-change detector driving revalidation and `Changed` tagging, so the runtime
-repo's CI owns getting it right (and ships the reference implementation +
-tests).
+- `script_bytes` — the node's own script file, byte-for-byte.
+- `member_bytes` — the byte content of every file in the node's in-repo
+  import closure (defined below); the script itself is never a closure
+  member, so `source_hash` and `shared_code_hash` never double-count it.
+- `canonical_json(entry)` — the node's wire entry, yaml-parsed then
+  re-serialized to JSON with sorted keys and no whitespace
+  (`json.dumps(..., sort_keys=True, separators=(",", ":"))`); every
+  `reads` value is first whitespace-normalized (runs of whitespace
+  collapse to a single space, then stripped); `content_hash` **and all
+  three part fields** (`source_hash`, `shared_code_hash`, `config_hash`)
+  are excluded from the basis — `config_hash` cannot include itself, and
+  none of the four hash fields participates in another's basis. Every
+  other field, including `config`, participates verbatim.
+
+Invariant: formatting-only edits (spaces in SQL, yaml indentation/key
+order) leave all four hashes unchanged; any semantic edit to reads,
+columns, metadata, `config`, or the script changes at least one part and
+therefore `content_hash`.
+
+The fold (`content_hash = "sha256:" + sha256(source|shared|config)`) is
+byte-identical to manifest-controller's dbt-side fold — one formula spans
+both runtimes. Continuo's side **recomputes the fold from the three part
+fields already on the wire entry and rejects the release if it doesn't
+match the submitted `content_hash`** — verified against Continuo's
+`parse_python_contract` for an empty closure (`shared_code_hash: ''`), a
+non-empty closure, and a `config` block threaded through unchanged.
+
+### Closure definition and its documented limits
+
+`shared_code_hash` covers the node's **in-repo import closure**: the
+transitive set of repo-internal `.py` files the script reaches through its
+own `import` statements, resolved by static AST analysis
+(`continuo_python_runtime.closure.resolve_closure`).
+
+- The script itself is excluded (it is `source_hash`); stdlib and
+  installed packages are excluded — external dependencies are the image's
+  concern, pinned by `image_tag`, not the hash's.
+- Resolution tries two search roots per import — the repo root first, then
+  the importing file's own directory — with PEP-328 relative imports
+  (`from . import x`, `from ..pkg import y`) resolved against the
+  importing file's own package. Ancestor `__init__.py` files along a
+  resolved dotted path are closure members too, because they execute on
+  import.
+- **Limit — over-inclusion by design.** `from pkg import name` cannot be
+  statically distinguished from a submodule import, so a same-named
+  in-repo file (`pkg/name.py`) is pulled into the closure even when the
+  real import was an attribute of `pkg`. The cost is a spurious
+  revalidation, never a missed one: under-inclusion would be a
+  correctness bug (a stale node silently running in production), while
+  over-inclusion only costs one extra revalidation — the tradeoff
+  `closure.py`'s own module docstring documents as deliberate.
+- **Limit — dynamic imports are rejected, not approximated.**
+  `importlib` (in any form), `__import__`, `exec`, and `eval` are refused
+  wherever `continuo-runtime lint` is pointed (typically `scripts/`), and
+  — regardless of what lint was pointed at — unconditionally in the
+  script **and every closure member** by the merger itself
+  (`resolve_closure` raises `ContractError` on the first one found), so
+  even a shared helper module outside the linted path cannot smuggle one
+  in. What static analysis cannot see must not exist.
+- **Limit — data files are not members.** A script reading a non-`.py`
+  file from the repo (a CSV, a JSON fixture) does not fingerprint that
+  file — such inputs belong in the warehouse or in a declared `reads`
+  entry, not on disk next to the script.
 
 ## 13.3 Surface 3 — the release call
 
@@ -87,8 +211,15 @@ executor runs it as a Kubernetes Job:
   `POSTGRES_DB`, `POSTGRES_USER`, optional `POSTGRES_PORT`/`_PASSWORD`; ditto
   per engine), injected via the same Secret mechanism dbt Jobs use.
 - **Sole write sink**: user scripts return a dataframe; the harness runs
-  `conform()` (strict Arrow cast per §7.1) and performs the only INSERT.
-  Scripts get a read-only connection surface.
+  `conform()` (strict Arrow cast per §7.1), then calls
+  `RuntimeAdapter.ensure_table` — applying the node's `config` physical
+  layout on create, see §13.1 — and performs the only INSERT. Scripts get
+  a read-only connection surface. The harness calls `ensure_table(...,
+  config=...)` as a keyword unconditionally, so every `RuntimeAdapter`
+  implementation must accept it — even though the
+  `continuo-validation-contract` 0.3.0 port pinned by this repo doesn't
+  yet declare the parameter on the abstract method;
+  `continuo-validation-contract` 0.5.0 makes it part of the port itself.
 - **Result envelope**: stdout is reserved for exactly one sentinel-framed
   result block as the last line — reuse `continuo_validation_contract.result`
   (already on PyPI) rather than reimplementing the markers. All diagnostics

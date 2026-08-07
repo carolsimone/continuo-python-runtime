@@ -21,7 +21,13 @@ choices below lean deliberately toward over-inclusion:
 - ``from pkg import name`` (rule 3) is expanded to include both ``pkg`` and
   ``pkg.name`` as candidate dotted names, because ``name`` may be a
   submodule (a file) rather than an attribute of ``pkg`` — the two are
-  indistinguishable from the import statement's syntax alone.
+  indistinguishable from the import statement's syntax alone. The same
+  applies to relative imports: ``from . import name`` always includes the
+  bare enclosing package as a candidate too, not only when the import also
+  names a submodule (``from .mod import name``) — real Python executes the
+  package's ``__init__.py`` either way, so treating the two forms
+  asymmetrically would under-include exactly the file this module exists to
+  stop missing.
 
 Dynamic-import constructs (``importlib``, ``__import__``, ``exec``, ``eval``,
 ``.import_module``) are rejected outright rather than degrading to "resolve
@@ -92,13 +98,20 @@ def _names_from_import_from(
 
     prefix_parts = components[: len(components) - walk_up]
     prefix = ".".join(prefix_parts)
+    base = ".".join(part for part in (prefix, node.module) if part)
 
-    if node.module:
-        base = f"{prefix}.{node.module}" if prefix else node.module
-        return [base] + [f"{base}.{alias.name}" for alias in node.names]
-    if prefix:
-        return [f"{prefix}.{alias.name}" for alias in node.names]
-    return [alias.name for alias in node.names]
+    # Real Python executes the package's __init__.py for `from . import name`
+    # regardless of whether `name` is a submodule file or just an attribute
+    # defined inside __init__.py - the two are indistinguishable from the
+    # import statement's syntax alone, so the bare prefix/base is always a
+    # candidate (symmetric with the level == 0 branch above), not only when
+    # node.module is also present. Missing __init__.py here would be
+    # under-inclusion (a stale node in production); including it when it was
+    # already reachable is a no-op, and including it spuriously costs at
+    # most one revalidation - see the module docstring.
+    names = [base] if base else []
+    names.extend(f"{base}.{alias.name}" if base else alias.name for alias in node.names)
+    return names
 
 
 def _collect_import_names(tree: ast.AST, importing_file: Path, repo_root: Path) -> list[str]:

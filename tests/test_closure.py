@@ -111,6 +111,21 @@ def test_relative_import_of_sibling_resolves(tmp_path):
     )
 
 
+def test_relative_import_of_package_attribute_includes_init(tmp_path):
+    """`from . import NAME` executes the package's __init__.py regardless of
+    whether NAME is a submodule file or merely an attribute defined inside
+    __init__.py - the bare package prefix must always be a resolution
+    candidate, not only when a `node.module` part is also present."""
+    repo = tmp_path
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "__init__.py").write_text("CONSTANT = 1\n")
+    (repo / "pkg" / "node.py").write_text("from . import CONSTANT\n")
+
+    result = resolve_closure(repo / "pkg" / "node.py", repo)
+
+    assert result == [(repo / "pkg" / "__init__.py").resolve()]
+
+
 def test_relative_import_escaping_repo_root_is_skipped_not_an_error(tmp_path):
     """`from .. import other` from a top-level script would need to walk
     above repo_root. It must be silently skipped, not raise.

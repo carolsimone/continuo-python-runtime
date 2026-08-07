@@ -32,6 +32,7 @@ _ALLOWED_KEYS = {
     "extra_columns",
     "reads",
     "output_columns",
+    "config",
     "content_hash",
 }
 
@@ -193,6 +194,45 @@ def _node_label(raw: dict[str, Any], source: str) -> str:
     return source
 
 
+_JSON_SCALARS = (str, int, float, bool, type(None))
+
+
+def _validate_config(raw: Any, label: str) -> dict[str, Any]:
+    """Validate the node's physical-layout `config` as a JSON-shaped mapping.
+
+    The engine's adapter — not this loader — owns the vocabulary (§3.3), so the
+    only rules here are the ones the hash and the wire format need: it is a
+    mapping, every key at every level is a string, and every value is
+    JSON-serializable. Non-string keys would make `json.dumps(..., sort_keys=True)`
+    raise inside the hasher, and a non-serializable value would break the wire
+    artifact — both must surface here, naming the node, not deep in CI.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ContractError(f"{label}: 'config' must be a mapping")
+
+    def _check(value: Any, key: Any) -> None:
+        """Validate ``value`` (found under ``key`` in its enclosing mapping)."""
+        if isinstance(value, dict):
+            for sub_key, sub_value in value.items():
+                if not isinstance(sub_key, str):
+                    raise ContractError(
+                        f"{label}: 'config' keys must be strings, got {sub_key!r}"
+                    )
+                _check(sub_value, sub_key)
+        elif isinstance(value, list):
+            for item in value:
+                _check(item, key)
+        elif not isinstance(value, _JSON_SCALARS):
+            raise ContractError(
+                f"{label}: 'config' value for {key!r} is not JSON-serializable: {value!r}"
+            )
+
+    _check(raw, None)
+    return raw
+
+
 def parse_node(raw: dict[str, Any], source: str) -> Node:
     """Validate a single raw mapping and build a :class:`Node`.
 
@@ -298,6 +338,8 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
     if not isinstance(description, str):
         raise ContractError(f"{label}: 'description' must be a string")
 
+    config = _validate_config(raw.get("config"), label)
+
     content_hash = raw.get("content_hash")
     if content_hash is not None and not isinstance(content_hash, str):
         raise ContractError(f"{label}: 'content_hash' must be a string")
@@ -313,6 +355,7 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
         output_columns=tuple(columns),
         description=description,
         extra_columns=extra_columns,
+        config=config,
         content_hash=content_hash,
     )
 

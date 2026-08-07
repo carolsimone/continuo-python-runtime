@@ -23,3 +23,9 @@ def test_defaults_and_relation():
     assert n.description == ""
     assert n.content_hash is None
     assert n.output_columns[0].nullable is False
+    assert n.config == {}
+
+
+def test_config_accepts_nested_mapping():
+    n = _node(config={"indexes": [{"columns": ["id"], "unique": True}]})
+    assert n.config == {"indexes": [{"columns": ["id"], "unique": True}]}

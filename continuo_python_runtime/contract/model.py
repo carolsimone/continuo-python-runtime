@@ -1,6 +1,7 @@
 """Contract v1 model."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 # Module-level constants
 CRITICALITIES = frozenset({"REGULATORY", "CORE", "SECONDARY"})
@@ -31,6 +32,7 @@ class Node:
     output_columns: tuple[Column, ...]
     description: str = ""
     extra_columns: str = "raise"
+    config: dict[str, Any] = field(default_factory=dict)
     content_hash: str | None = None
 
     @property

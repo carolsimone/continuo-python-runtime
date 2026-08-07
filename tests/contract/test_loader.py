@@ -37,6 +37,45 @@ def test_parse_valid_node_accepts_content_hash():
     assert n.content_hash == "abc123"
 
 
+def test_parse_node_without_config_defaults_to_empty_mapping():
+    n = parse_node(VALID, "f.yml")
+    assert n.config == {}
+
+
+def test_config_preserves_nested_structure():
+    config = {"indexes": [{"columns": ["id"], "unique": True}]}
+    n = parse_node({**VALID, "config": config}, "f.yml")
+    assert n.config == config
+
+
+def test_config_empty_mapping_loads():
+    n = parse_node({**VALID, "config": {}}, "f.yml")
+    assert n.config == {}
+
+
+def test_config_not_a_mapping_rejected():
+    with pytest.raises(ContractError, match="config"):
+        parse_node({**VALID, "config": "not-a-mapping"}, "f.yml")
+
+
+def test_config_non_string_key_rejected():
+    with pytest.raises(ContractError, match="config"):
+        parse_node({**VALID, "config": {1: "x"}}, "f.yml")
+
+
+def test_config_nested_non_string_key_rejected():
+    with pytest.raises(ContractError, match="config"):
+        parse_node({**VALID, "config": {"indexes": [{1: "x"}]}}, "f.yml")
+
+
+def test_config_allows_unknown_vocabulary_key():
+    """The loader stays engine-blind (design §3.3): an unrecognized
+    physical-layout key such as 'sortkey' is not this loader's concern.
+    The engine adapter enforces its own vocabulary later (Task 6)."""
+    n = parse_node({**VALID, "config": {"sortkey": ["id"]}}, "f.yml")
+    assert n.config == {"sortkey": ["id"]}
+
+
 @pytest.mark.parametrize(
     "missing",
     ["schema", "table", "owner", "schedule", "script", "reads", "output_columns"],

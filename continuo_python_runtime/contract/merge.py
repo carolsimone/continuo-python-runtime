@@ -7,7 +7,7 @@ import yaml
 from continuo_python_runtime.contract.loader import load_contract_dir
 from continuo_python_runtime.contract.model import CONTRACT_VERSION, Node
 from continuo_python_runtime.contract.paths import resolve_script_path
-from continuo_python_runtime.hashing import content_hash
+from continuo_python_runtime.hashing import hash_parts
 
 
 def node_entry(node: Node) -> dict:
@@ -53,10 +53,10 @@ def build_wire_contract(contract_dir: Path, repo_root: Path, service: str) -> di
 
         script_path = resolve_script_path(node.script, repo_root, context=node.relation)
 
-        # Read script bytes and compute hash
+        # Read script bytes and compute hash. Closure resolution (member_bytes)
+        # is wired in a later task; until then the shared-code part is empty.
         script_bytes = script_path.read_bytes()
-        hash_value = content_hash(entry, script_bytes)
-        entry["content_hash"] = hash_value
+        entry["content_hash"] = hash_parts(entry, script_bytes, [])["content_hash"]
 
         wire_nodes.append(entry)
 

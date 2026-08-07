@@ -76,6 +76,37 @@ def test_config_allows_unknown_vocabulary_key():
     assert n.config == {"sortkey": ["id"]}
 
 
+def test_config_non_json_serializable_value_rejected():
+    with pytest.raises(ContractError, match="not JSON-serializable"):
+        parse_node({**VALID, "config": {"foo": object()}}, "f.yml")
+
+
+def test_load_dir_config_unquoted_yaml_date_rejected(tmp_path):
+    """An unquoted date under 'config' (e.g. 'effective_date: 2026-08-07') is
+    parsed by the YAML loader into a `datetime.date`, which is not a JSON
+    scalar/list/dict. This is a realistic authoring mistake -- someone
+    forgets to quote a date-shaped value -- and must be caught here rather
+    than surfacing as an obscure serialization failure later in CI."""
+    a = tmp_path / "a.yml"
+    a.write_text(
+        "nodes:\n"
+        "  - schema: analytics\n"
+        "    table: t\n"
+        "    owner: marketing\n"
+        "    schedule: daily\n"
+        "    criticality: SECONDARY\n"
+        "    script: scripts/t.py\n"
+        "    reads:\n"
+        "      ids: select id from analytics.a\n"
+        "    output_columns:\n"
+        "      - {name: id, type: INTEGER}\n"
+        "    config:\n"
+        "      effective_date: 2026-08-07\n"
+    )
+    with pytest.raises(ContractError, match="not JSON-serializable"):
+        load_contract_dir(tmp_path)
+
+
 @pytest.mark.parametrize(
     "missing",
     ["schema", "table", "owner", "schedule", "script", "reads", "output_columns"],

@@ -208,3 +208,68 @@ def test_lint_paths_unreadable_file_reports_violation_not_crash(tmp_path):
     assert len(violations) == 1
     assert "unreadable" in violations[0]
     assert str(bad_file) in violations[0]
+
+
+def test_import_importlib_flagged():
+    (v,) = lint_source("import importlib\n" + GOOD, "s.py")
+    assert "dynamic import construct 'importlib'" in v
+
+
+def test_import_importlib_submodule_flagged():
+    (v,) = lint_source("import importlib.util\n" + GOOD, "s.py")
+    assert "dynamic import construct 'importlib'" in v
+
+
+def test_from_importlib_import_flagged():
+    (v,) = lint_source("from importlib import import_module\n" + GOOD, "s.py")
+    assert "dynamic import construct 'importlib'" in v
+
+
+def test_dunder_import_call_flagged():
+    bad = GOOD + "def f():\n    return __import__('os')\n"
+    violations = lint_source(bad, "s.py")
+    dynamic = [v for v in violations if "dynamic import construct" in v]
+    assert len(dynamic) == 1
+    assert "dynamic import construct '__import__'" in dynamic[0]
+
+
+def test_exec_call_flagged():
+    bad = GOOD + "def f():\n    exec('x = 1')\n"
+    violations = lint_source(bad, "s.py")
+    dynamic = [v for v in violations if "dynamic import construct" in v]
+    assert len(dynamic) == 1
+    assert "dynamic import construct 'exec'" in dynamic[0]
+
+
+def test_eval_call_flagged():
+    bad = GOOD + "def f():\n    return eval('1 + 1')\n"
+    violations = lint_source(bad, "s.py")
+    dynamic = [v for v in violations if "dynamic import construct" in v]
+    assert len(dynamic) == 1
+    assert "dynamic import construct 'eval'" in dynamic[0]
+
+
+def test_import_module_attribute_call_flagged():
+    bad = GOOD + "def f(il):\n    return il.import_module('x')\n"
+    violations = lint_source(bad, "s.py")
+    dynamic = [v for v in violations if "dynamic import construct" in v]
+    assert len(dynamic) == 1
+    assert "dynamic import construct 'import_module'" in dynamic[0]
+
+
+def test_dynamic_import_over_matching_guard():
+    """A variable named `execute_something` or an attribute `obj.evaluate`
+    must NOT be flagged - the rule matches exact identifiers, not
+    substrings."""
+    source = GOOD + (
+        "def f(obj):\n"
+        "    execute_something = 1\n"
+        "    return obj.evaluate(execute_something)\n"
+    )
+    violations = lint_source(source, "s.py")
+    assert not any("dynamic import construct" in v for v in violations)
+
+
+def test_dynamic_import_violation_carries_location():
+    (v,) = lint_source("import importlib\n", "scripts/x.py")
+    assert v == "scripts/x.py:1: dynamic import construct 'importlib'"

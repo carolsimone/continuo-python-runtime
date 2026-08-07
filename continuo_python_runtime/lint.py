@@ -4,6 +4,8 @@ import ast
 import re
 from pathlib import Path
 
+from continuo_python_runtime.closure import dynamic_import_violations
+
 # Forbidden warehouse driver modules (check root module of imports)
 FORBIDDEN_DRIVERS = {
     "psycopg2",
@@ -127,14 +129,30 @@ def lint_source(source: str, filename: str) -> list[str]:
       they are never matched and need no exemption. Exempted: attribute
       access on ``self``/``cls`` (e.g. ``self._helper()``), so a script's own
       class-private helpers aren't flagged.
+    - L5: dynamic-import construct (``importlib`` in any form, ``__import__``,
+      ``exec``, ``eval``, or ``.import_module``). The content hash's import
+      closure is computed by static AST analysis (see ``closure.py``); a
+      construct that analysis cannot see must not exist, or a node could
+      import a module whose edits never re-fingerprint it. Detection is
+      delegated to ``continuo_python_runtime.closure.dynamic_import_violations``
+      so the predicate is defined in exactly one place.
 
     Docstrings (the first statement of a Module/ClassDef/FunctionDef/
     AsyncFunctionDef body, when it is a bare string Expr) are exempt from the
     L2 constant pass, since prose commonly contains words like "select" and
     "from". This is a best-effort, position-based exemption: the same prose
     assigned to a variable is still flagged.
+
+    Violations are returned sorted by line number (stable, so violations on
+    the same line keep the order the passes below found them). L5 hits come
+    from a separate walk (the shared ``dynamic_import_violations`` helper),
+    so a stable sort-by-lineno is what "alongside the others" means here,
+    rather than a copy of the predicate threaded into the walks below.
     """
-    violations = []
+    # (lineno, message) pairs; sorted by lineno at the end so L5 hits (found
+    # via a separate walk over the shared helper) interleave with L1-L4 by
+    # position in the file instead of landing as a trailing block.
+    entries: list[tuple[int, str]] = []
 
     # Try to parse the source code
     try:
@@ -152,16 +170,16 @@ def lint_source(source: str, filename: str) -> list[str]:
             for alias in node.names:
                 root_module = alias.name.split(".")[0]
                 if root_module in FORBIDDEN_DRIVERS:
-                    violations.append(
-                        f"{filename}:{node.lineno}: forbidden warehouse driver import '{root_module}'"
+                    entries.append(
+                        (node.lineno, f"forbidden warehouse driver import '{root_module}'")
                     )
 
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 root_module = node.module.split(".")[0]
                 if root_module in FORBIDDEN_DRIVERS:
-                    violations.append(
-                        f"{filename}:{node.lineno}: forbidden warehouse driver import '{root_module}'"
+                    entries.append(
+                        (node.lineno, f"forbidden warehouse driver import '{root_module}'")
                     )
 
             # Track imports of forbidden data-access functions
@@ -171,8 +189,8 @@ def lint_source(source: str, filename: str) -> list[str]:
                     if alias.name in FORBIDDEN_CALLS:
                         local_name = alias.asname if alias.asname else alias.name
                         imported_forbidden_calls[local_name] = node.lineno
-                        violations.append(
-                            f"{filename}:{node.lineno}: forbidden data-access import '{alias.name}'"
+                        entries.append(
+                            (node.lineno, f"forbidden data-access import '{alias.name}'")
                         )
 
     # Track constants consumed in compound expressions (to avoid double-reporting)
@@ -190,9 +208,7 @@ def lint_source(source: str, filename: str) -> list[str]:
                 snippet = reconstructed[:40]
                 if len(reconstructed) > 40:
                     snippet += "..."
-                violations.append(
-                    f"{filename}:{node.lineno}: SQL string literal '{snippet}'"
-                )
+                entries.append((node.lineno, f"SQL string literal '{snippet}'"))
             # Only the literal fragments actually folded into the
             # reconstruction are consumed; FormattedValue contents are not.
             consumed_constants |= consumed
@@ -206,9 +222,7 @@ def lint_source(source: str, filename: str) -> list[str]:
                     snippet = reconstructed_text[:40]
                     if len(reconstructed_text) > 40:
                         snippet += "..."
-                    violations.append(
-                        f"{filename}:{node.lineno}: SQL string literal '{snippet}'"
-                    )
+                    entries.append((node.lineno, f"SQL string literal '{snippet}'"))
                 # Only the leaf Constants actually folded into the
                 # reconstruction are consumed - never descendants of a
                 # FormattedValue expression.
@@ -222,24 +236,22 @@ def lint_source(source: str, filename: str) -> list[str]:
                     snippet = node.value[:40]
                     if len(node.value) > 40:
                         snippet += "..."
-                    violations.append(
-                        f"{filename}:{node.lineno}: SQL string literal '{snippet}'"
-                    )
+                    entries.append((node.lineno, f"SQL string literal '{snippet}'"))
 
         # L3: Check for forbidden data-access calls
         elif isinstance(node, ast.Call):
             # Attribute access: pd.read_sql(...)
             if isinstance(node.func, ast.Attribute):
                 if node.func.attr in FORBIDDEN_CALLS:
-                    violations.append(
-                        f"{filename}:{node.lineno}: forbidden data-access call '{node.func.attr}'"
+                    entries.append(
+                        (node.lineno, f"forbidden data-access call '{node.func.attr}'")
                     )
 
             # Name reference: read_sql_table(...) or rs(...) where rs is an alias
             elif isinstance(node.func, ast.Name):
                 if node.func.id in imported_forbidden_calls:
-                    violations.append(
-                        f"{filename}:{node.lineno}: forbidden data-access call '{node.func.id}'"
+                    entries.append(
+                        (node.lineno, f"forbidden data-access call '{node.func.id}'")
                     )
 
         # L4: Check for private/protected attribute access
@@ -249,11 +261,23 @@ def lint_source(source: str, filename: str) -> list[str]:
                 "cls",
             )
             if node.attr.startswith("_") and not is_self_or_cls:
-                violations.append(
-                    f"{filename}:{node.lineno}: private attribute access '{node.attr}'"
-                )
+                entries.append((node.lineno, f"private attribute access '{node.attr}'"))
 
-    return violations
+    # L5: dynamic-import constructs. The predicate lives in closure.py (Task
+    # 2's resolver uses it to abort on the first hit); here every hit is
+    # reported, since a linter's job is to show the author all violations at
+    # once. This is necessarily a separate walk over the shared helper
+    # rather than a branch threaded into the loops above - reusing the
+    # predicate means not re-implementing its traversal.
+    for lineno, construct in dynamic_import_violations(tree):
+        entries.append((lineno, f"dynamic import construct '{construct}'"))
+
+    # Stable sort by line number: this is what puts L5 hits "alongside" the
+    # L1-L4 hits found above instead of trailing as a separate block, while
+    # violations on the same line keep the order the passes above found them
+    # (L1 first pass, then L2-L4 second pass, then L5).
+    entries.sort(key=lambda entry: entry[0])
+    return [f"{filename}:{lineno}: {message}" for lineno, message in entries]
 
 
 def lint_paths(paths: list[Path]) -> list[str]:

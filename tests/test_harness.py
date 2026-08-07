@@ -4,6 +4,7 @@ import json
 
 import pyarrow as pa
 import pytest
+import yaml
 
 from continuo_python_runtime.contract.loader import load_contract_dir
 from continuo_python_runtime.errors import ContractError, ScriptError
@@ -242,6 +243,42 @@ def test_adapter_close_called_on_failure(harness_repo, capsys):
     ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"wrong": [1]})})
     assert run_node(_env(harness_repo), adapter=ad) == 1
     assert ad.closed is True
+
+
+def test_harness_passes_node_config_through_to_ensure_table(tmp_path, capsys):
+    """The harness threads node.config to ensure_table unconditionally, as a keyword."""
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "t.py").write_text("def run(ctx):\n    return ctx.read('ids')\n")
+    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
+        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
+        "criticality": "SECONDARY", "script": "scripts/t.py",
+        "reads": {"ids": "select id from analytics.a"},
+        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
+        "config": {"indexes": [{"columns": ["id"]}]},
+    }]}))
+    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    assert run_node(_env(tmp_path), adapter=ad) == 0
+    assert ad.ensured_config == {"indexes": [{"columns": ["id"]}]}
+
+
+def test_ensure_table_value_error_surfaces_as_load_error(harness_repo, capsys):
+    """A ValueError from an adapter's config validation surfaces as LoadError.
+
+    This is the runtime fail-closed behavior: ensure_table's config rejection
+    is a plain ValueError, and run_node's try/except around ensure_table/load
+    converts any non-HarnessError into LoadError for the sentinel block.
+    """
+    class BadConfigAdapter(FakeRuntimeAdapter):
+        def ensure_table(self, schema, table, columns, config=None):
+            raise ValueError("unrecognized config key: 'sortkey'")
+
+    ad = BadConfigAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    assert run_node(_env(harness_repo), adapter=ad) == 1
+    out = capsys.readouterr().out
+    assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
+    assert '"message":"LoadError:' in out
+    assert "sortkey" in out
 
 
 def test_adapter_construction_failure_emits_single_load_error_block(monkeypatch, harness_repo, capsys):

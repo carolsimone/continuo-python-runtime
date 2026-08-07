@@ -173,7 +173,7 @@ def run_node(env: Mapping[str, str], adapter: Any = None) -> int:
             for c in node.output_columns
         ]
         try:
-            active_adapter.ensure_table(target_schema, table_name, columns)
+            active_adapter.ensure_table(target_schema, table_name, columns, config=node.config)
             active_adapter.load(target_schema, table_name, conformed)
         except HarnessError:
             raise

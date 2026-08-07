@@ -43,6 +43,7 @@ class FakeRuntimeAdapter:
         self.tables = tables or {}  # sql -> pa.Table
         self.loaded = None
         self.ensured = None
+        self.ensured_config = None
         self.closed = False
 
     @classmethod
@@ -56,8 +57,9 @@ class FakeRuntimeAdapter:
     def fetch(self, sql):
         return self.tables[sql]
 
-    def ensure_table(self, schema, table, columns):
+    def ensure_table(self, schema, table, columns, config=None):
         self.ensured = (schema, table, columns)
+        self.ensured_config = config
 
     def load(self, schema, table, data):
         self.loaded = (schema, table, data)

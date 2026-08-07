@@ -126,6 +126,64 @@ def _sql_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+# The Iceberg connector's own physical-layout property names — not the Hive
+# connector's `partitioned_by`. This adapter targets Iceberg, so `partitioning`
+# is correct here; this is a deliberate decision of record, not something to
+# "correct" toward the Hive spelling. This tuple's order is the emission
+# order, so the DDL does not depend on the config mapping's own key order.
+_KNOWN_CONFIG_KEYS: tuple[str, ...] = ("partitioning", "sorted_by", "format")
+_ALLOWED_FORMATS = frozenset({"PARQUET", "ORC", "AVRO"})
+
+
+def _table_properties(config: dict[str, Any] | None) -> str:
+    """Validate *config* against the Iceberg vocabulary; render its ``WITH (...)`` clause.
+
+    Returns a leading-space ``WITH (...)`` string, or ``""`` when *config* is
+    absent, empty, or (impossible after validation) carries no recognized key.
+    Partition transforms like ``day(event_ts)`` are expressions Trino parses
+    out of a string literal, so every value is rendered through
+    :func:`_sql_string` rather than identifier-quoted.
+
+    Raises:
+        ValueError: Naming the offending key, for any of: an unrecognized
+            config key; ``partitioning``/``sorted_by`` not a non-empty list of
+            non-empty strings; ``format`` not a string, or not one of
+            ``PARQUET``/``ORC``/``AVRO`` after ``.upper()``.
+    """
+    if not config:
+        return ""
+    for key in config:
+        if key not in _KNOWN_CONFIG_KEYS:
+            raise ValueError(f"unrecognized config key: {key!r}")
+
+    rendered = []
+    for key in ("partitioning", "sorted_by"):
+        if key not in config:
+            continue
+        value = config[key]
+        if (
+            not isinstance(value, list)
+            or not value
+            or not all(isinstance(v, str) and v for v in value)
+        ):
+            raise ValueError(
+                f"config {key!r} must be a non-empty list of non-empty strings, got {value!r}"
+            )
+        rendered.append(f"{key} = ARRAY[{', '.join(_sql_string(v) for v in value)}]")
+
+    if "format" in config:
+        value = config["format"]
+        if not isinstance(value, str) or value.upper() not in _ALLOWED_FORMATS:
+            raise ValueError(
+                f"config 'format' must be one of {sorted(_ALLOWED_FORMATS)}, got {value!r}"
+            )
+        rendered.append(f"format = {_sql_string(value.upper())}")
+
+    if not rendered:
+        return ""
+    return " WITH (" + ", ".join(rendered) + ")"
+
+
 def _sibling_location(location: str, name: str) -> str:
     """Return a URI beside *location* whose final path component is *name*."""
     if not location:
@@ -286,14 +344,29 @@ class TrinoRuntimeAdapter(RuntimeAdapter):
         finally:
             cur.close()
 
-    def ensure_table(self, schema: str, table: str, columns: list[dict[str, Any]]) -> None:
+    def ensure_table(
+        self,
+        schema: str,
+        table: str,
+        columns: list[dict[str, Any]],
+        config: dict[str, Any] | None = None,
+    ) -> None:
         """CREATE TABLE IF NOT EXISTS with typed DDL compiled from *columns*.
 
         Each column dict carries ``name``, ``type`` (validated against the
         contract's SQL type grammar, then mapped to its Trino spelling),
         ``nullable`` (bool). NOT NULL is supported by this connector/version and
-        is emitted for ``nullable=False`` columns (verified live).
+        is emitted for ``nullable=False`` columns (verified live). *config*
+        carries this engine's physical-layout vocabulary — the Iceberg
+        connector's own table properties (``partitioning``, ``sorted_by``,
+        ``format``) — validated by :func:`_table_properties` before any DDL
+        runs, so a malformed config never leaves a half-built table behind
+        (fail closed), then rendered into the CREATE TABLE's ``WITH`` clause.
+        ``config`` is keyword-defaulted because the abstract
+        ``RuntimeAdapter.ensure_table`` in the pinned contract version does
+        not declare it; the harness passes it unconditionally regardless.
         """
+        properties = _table_properties(config)
         for col in columns:
             _validate_column_type(col["type"])
 
@@ -308,7 +381,7 @@ class TrinoRuntimeAdapter(RuntimeAdapter):
 
         ref = self._table_ref(schema, table)
         logger.info("ensuring table %s exists", ref)
-        self._execute(f"CREATE TABLE IF NOT EXISTS {ref} ({', '.join(col_defs)})")
+        self._execute(f"CREATE TABLE IF NOT EXISTS {ref} ({', '.join(col_defs)}){properties}")
 
     def _insert_batches(self, table_ref: str, columns: list[str], data: "pa.Table") -> None:
         """Insert *data*'s rows into *table_ref* in batches of ``_INSERT_BATCH_SIZE``."""

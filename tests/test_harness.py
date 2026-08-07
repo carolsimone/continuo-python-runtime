@@ -417,9 +417,13 @@ def test_runtime_still_rejects_an_empty_reads_map(tmp_path, capsys):
 # rootdir to `sys.path` itself. Both forms are covered because `closure.py`
 # resolves names against exactly these two roots (repo_root, then the
 # importing file's directory).
+#
+# The insertion is process-global; tests/conftest.py's autouse
+# isolated_import_state fixture undoes it (and evicts the helper modules
+# loaded through it) after every test in this suite.
 
 
-def test_script_can_import_sibling_helper(harness_repo, isolated_import_state, capsys):
+def test_script_can_import_sibling_helper(harness_repo, capsys):
     """`import helpers` — the script's own directory must be importable."""
     (harness_repo / "scripts" / "helpers.py").write_text(
         "def only_ids(table):\n    return table.select(['id'])\n"
@@ -432,9 +436,7 @@ def test_script_can_import_sibling_helper(harness_repo, isolated_import_state, c
     assert ad.loaded[2].num_rows == 2
 
 
-def test_script_can_import_package_qualified_helper(
-    harness_repo, isolated_import_state, capsys
-):
+def test_script_can_import_package_qualified_helper(harness_repo, capsys):
     """`import scripts.helpers` — the repo root must be importable too."""
     (harness_repo / "scripts" / "__init__.py").write_text("")
     (harness_repo / "scripts" / "helpers.py").write_text(
@@ -449,9 +451,7 @@ def test_script_can_import_package_qualified_helper(
     assert ad.loaded[2].num_rows == 2
 
 
-def test_script_can_import_helper_from_a_sibling_directory(
-    harness_repo, isolated_import_state, capsys
-):
+def test_script_can_import_helper_from_a_sibling_directory(harness_repo, capsys):
     """A helper in a `lib/` package outside `scripts/` resolves via the repo root."""
     (harness_repo / "lib").mkdir()
     (harness_repo / "lib" / "__init__.py").write_text("")
@@ -467,9 +467,7 @@ def test_script_can_import_helper_from_a_sibling_directory(
     assert ad.loaded[2].num_rows == 2
 
 
-def test_deferred_import_inside_run_still_resolves(
-    harness_repo, isolated_import_state, capsys
-):
+def test_deferred_import_inside_run_still_resolves(harness_repo, capsys):
     """The path entries survive past import time: `run()` may import lazily."""
     (harness_repo / "scripts" / "helpers.py").write_text(
         "def only_ids(table):\n    return table.select(['id'])\n"
@@ -484,9 +482,32 @@ def test_deferred_import_inside_run_still_resolves(
     assert ad.loaded[2].num_rows == 2
 
 
-def test_load_script_puts_repo_root_and_script_dir_on_sys_path(
-    harness_repo, isolated_import_state
-):
+def _helper_identity_repo(repo, marker):
+    (repo / "scripts" / "helpers.py").write_text(f"MARKER = {marker!r}\n")
+    (repo / "scripts" / "t.py").write_text(
+        "import helpers\n\n\n"
+        "def run(ctx):\n"
+        f"    assert helpers.MARKER == {marker!r}, helpers.MARKER\n"
+        "    return ctx.read('ids')\n"
+    )
+
+
+@pytest.mark.parametrize("marker", ["first", "second"])
+def test_a_helper_module_is_never_shared_between_two_repos(harness_repo, marker, capsys):
+    """Regression pin for the autouse isolation fixture, not for the harness.
+
+    Two runs, two tmp_path repos, one plain module name. Without the fixture's
+    sys.modules eviction the second run would import the first repo's
+    `helpers` out of the cache and trip the script's own assert — the exact
+    cross-contamination the process-global sys.path insertion enables under
+    pytest but not in a container.
+    """
+    _helper_identity_repo(harness_repo, marker)
+    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    assert run_node(_env(harness_repo), adapter=ad) == 0, capsys.readouterr().out
+
+
+def test_load_script_puts_repo_root_and_script_dir_on_sys_path(harness_repo):
     """Both roots land at the front, repo root first — closure.py's own order."""
     import sys
 
@@ -496,9 +517,7 @@ def test_load_script_puts_repo_root_and_script_dir_on_sys_path(
     assert sys.path[1] == str(harness_repo / "scripts")
 
 
-def test_load_script_does_not_duplicate_sys_path_entries(
-    harness_repo, isolated_import_state
-):
+def test_load_script_does_not_duplicate_sys_path_entries(harness_repo):
     """Re-entry is idempotent: no unbounded sys.path growth."""
     import sys
 

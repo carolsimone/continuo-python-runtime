@@ -1,6 +1,8 @@
 """Shared test fixtures."""
 
+import os
 import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -8,29 +10,56 @@ import yaml
 from continuo_python_runtime.contract.model import Column, Node
 
 
-@pytest.fixture
+def _module_roots(module):
+    """Every filesystem location *module* was loaded from (`__path__` for packages)."""
+    origin = getattr(module, "__file__", None)
+    if origin:
+        return [origin]
+    # Namespace packages have __file__ is None but a non-empty __path__.
+    return list(getattr(module, "__path__", []) or [])
+
+
+@pytest.fixture(autouse=True)
 def isolated_import_state():
-    """Snapshot/restore ``sys.path`` and ``sys.modules`` around a test.
+    """Undo, after every test, whatever the test added to the import system.
 
     ``load_script`` deliberately prepends the repo root and the script's own
-    directory to ``sys.path`` and leaves them there for the process lifetime
-    (deferred imports inside ``run()`` need them). In a container that is one
-    process per node; under pytest it is one process for the whole suite, so
-    without this fixture every harness test would leak two ``tmp_path``
-    entries into ``sys.path`` and — worse — leave the helper modules it
-    imported (``helpers``, ``scripts.helpers``, …) cached in ``sys.modules``,
-    where a later test importing the same name would silently get the earlier
-    test's file. Any test whose script imports an in-repo helper must use
-    this fixture.
+    directory to ``sys.path`` and leaves them there for the process lifetime,
+    because a deferred import inside ``run()`` needs them and a container runs
+    exactly one node per process. Under pytest that same process runs the
+    whole suite, so the side effect has to be undone here or it accumulates:
+    two ``tmp_path`` entries per harness test, and — the sharp edge — a helper
+    module cached in ``sys.modules`` under a plain name like ``helpers``,
+    which a later test importing the same name would silently get instead of
+    its own file.
+
+    Autouse rather than opt-in: a future test whose script imports a helper
+    would otherwise contaminate the suite by omission, and the observable
+    symptom (a stale helper) looks nothing like the cause. Eviction is
+    deliberately narrow — only modules newly added to ``sys.modules`` *and*
+    loaded from one of the ``sys.path`` entries this test introduced — so a
+    lazily-imported third-party submodule (``pyarrow.compute``, …) is never
+    evicted and re-imported behind a caller still holding the old object.
     """
     original_path = list(sys.path)
     original_modules = set(sys.modules)
     try:
         yield
     finally:
+        added = [entry for entry in sys.path if entry not in original_path]
         sys.path[:] = original_path
+        if not added:
+            return
+        roots = tuple(str(Path(entry).resolve()) + os.sep for entry in added)
         for name in set(sys.modules) - original_modules:
-            del sys.modules[name]
+            module = sys.modules.get(name)
+            if module is None:
+                continue
+            if any(
+                str(Path(location).resolve()).startswith(roots)
+                for location in _module_roots(module)
+            ):
+                del sys.modules[name]
 
 
 @pytest.fixture

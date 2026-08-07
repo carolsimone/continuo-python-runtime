@@ -47,6 +47,59 @@ def test_source_hash_is_bare_hex_no_prefix():
 
 
 # --- shared_code_hash ---
+#
+# The relational tests below (empty, order-insensitive, one-byte-sensitive) all
+# still pass if the fold changed shape — to `"|".join(unit_hashes)`, to sorting
+# raw member bytes instead of hex digests, or to gaining a "sha256:" prefix.
+# shared_code_hash is the one wire-format constant on this surface that
+# Continuo does NOT recompute (it never receives the closure), so a drift here
+# would go unnoticed downstream forever. These two vectors spell the algorithm
+# out explicitly instead: sha256 of the concatenation of the members' sorted
+# hex digests, bare hex, no prefix.
+
+
+def test_shared_code_hash_known_vector_one_member():
+    assert shared_code_hash([MEMBER_A]) == hashlib.sha256(
+        hashlib.sha256(MEMBER_A).hexdigest().encode()
+    ).hexdigest()
+
+
+def test_shared_code_hash_known_vector_two_members():
+    digests = sorted(
+        [hashlib.sha256(MEMBER_A).hexdigest(), hashlib.sha256(MEMBER_B).hexdigest()]
+    )
+    assert shared_code_hash([MEMBER_A, MEMBER_B]) == hashlib.sha256(
+        (digests[0] + digests[1]).encode()
+    ).hexdigest()
+
+
+def test_shared_code_hash_sorts_hex_digests_not_raw_member_bytes():
+    """The sort key is the digest, not the member — pinned independently.
+
+    These two members sort one way as raw bytes and the other way by digest,
+    so a fold that sorted the member bytes would concatenate the digests in
+    the opposite order and produce a different value.
+    """
+    first = b"def helper_a():\n    return 4\n"
+    second = b"def helper_b():\n    return 4\n"
+    assert first < second
+    assert hashlib.sha256(first).hexdigest() > hashlib.sha256(second).hexdigest()
+
+    sorted_by_member = hashlib.sha256(
+        (hashlib.sha256(first).hexdigest() + hashlib.sha256(second).hexdigest()).encode()
+    ).hexdigest()
+    sorted_by_digest = hashlib.sha256(
+        (hashlib.sha256(second).hexdigest() + hashlib.sha256(first).hexdigest()).encode()
+    ).hexdigest()
+    assert shared_code_hash([first, second]) == sorted_by_digest
+    assert shared_code_hash([first, second]) != sorted_by_member
+
+
+def test_shared_code_hash_is_bare_hex_no_prefix():
+    h = shared_code_hash([MEMBER_A])
+    assert not h.startswith("sha256:")
+    assert len(h) == 64
+
 
 def test_shared_code_hash_empty_is_empty_string():
     assert shared_code_hash([]) == ""

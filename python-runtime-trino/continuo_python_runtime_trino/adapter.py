@@ -327,6 +327,40 @@ class TrinoRuntimeAdapter(RuntimeAdapter):
         finally:
             cur.close()
 
+    @classmethod
+    def validate_config(
+        cls, config: dict[str, Any] | None, column_names: list[str]
+    ) -> None:
+        """Validate *config* against this engine's vocabulary, without connecting.
+
+        The harness calls this immediately after selecting the node, so a
+        malformed ``config`` — an unrecognized key, the Hive ``partitioned_by``
+        spelling, a ``format`` outside the allowlist — fails in the first
+        second of the run instead of after the script has already computed its
+        whole result. It is a tripwire, not the enforcement point:
+        ``ensure_table`` runs the very same check again, unchanged, and remains
+        the thing that guarantees no DDL is emitted for a bad config. Both go
+        through :func:`_table_properties`, so the two cannot drift apart.
+
+        ``column_names`` is part of the signature the harness calls uniformly
+        across engines (postgres needs it to reject an index on an undeclared
+        column) and is deliberately unused here: Iceberg's ``partitioning`` and
+        ``sorted_by`` values are partition-transform *expressions*
+        (``day(event_ts)``, ``bucket(customer_id, 16)``), not bare column names.
+
+        Like ``config`` on ``ensure_table``, this method is not declared by the
+        abstract ``RuntimeAdapter`` in the pinned
+        ``continuo-validation-contract``; this repo ships both adapters and the
+        harness as one coordinated release. The harness skips the call for an
+        adapter that does not provide it (see ``docs/boundary-contract.md``
+        §13.4), which costs that adapter only earliness, never enforcement.
+
+        Raises:
+            ValueError: Exactly as :func:`_table_properties` does.
+        """
+        del column_names
+        _table_properties(config)
+
     def ensure_table(
         self,
         schema: str,

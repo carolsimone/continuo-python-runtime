@@ -293,9 +293,7 @@ def test_ensure_table_multiple_indexes_all_run_in_one_cursor_block():
     assert conn.rolled_back == 0
 
 
-@pytest.mark.parametrize(
-    ("config", "match"),
-    [
+_BAD_CONFIGS = [
         pytest.param({"sortkey": ["id"]}, "sortkey", id="unknown_top_level_key"),
         pytest.param(
             {"indexes": {"columns": ["id"]}}, "must be a list", id="indexes_not_a_list"
@@ -325,8 +323,10 @@ def test_ensure_table_multiple_indexes_all_run_in_one_cursor_block():
         pytest.param(
             {"indexes": [{"columns": ["id"], "name": 123}]}, "name", id="name_not_a_string"
         ),
-    ],
-)
+]
+
+
+@pytest.mark.parametrize(("config", "match"), _BAD_CONFIGS)
 def test_ensure_table_rejects_bad_config_and_emits_no_ddl(config, match):
     """Test that every rejection rule raises ValueError naming the key and runs no DDL.
 
@@ -356,3 +356,30 @@ def test_ensure_table_bad_column_type_still_rejects_and_emits_no_ddl():
             "s", "t", [{"name": "id", "type": "NOT_A_TYPE", "nullable": True}], config=None
         )
     assert conn.cursors == []
+
+
+# --- validate_config: the harness's early tripwire ---
+#
+# ensure_table stays the enforcement point; validate_config only lets the
+# harness reject a bad config in the first second of a run instead of after
+# the script has already computed its whole result. It reuses
+# _validated_indexes, so it cannot drift from what ensure_table enforces.
+
+
+@pytest.mark.parametrize(("config", "match"), _BAD_CONFIGS)
+def test_validate_config_rejects_everything_ensure_table_rejects(config, match):
+    with pytest.raises(ValueError, match=match):
+        PostgresRuntimeAdapter.validate_config(config, ["id"])
+
+
+@pytest.mark.parametrize("config", [None, {}, {"indexes": []}, {"indexes": [
+    {"columns": ["id"], "unique": True, "name": "ix_custom"},
+]}])
+def test_validate_config_accepts_what_ensure_table_accepts(config):
+    assert PostgresRuntimeAdapter.validate_config(config, ["id"]) is None
+
+
+def test_validate_config_is_a_classmethod_needing_no_connection():
+    """The harness calls it before any adapter I/O; it must not need a connection."""
+    with pytest.raises(ValueError, match="nope"):
+        PostgresRuntimeAdapter.validate_config({"indexes": [{"columns": ["nope"]}]}, ["id"])

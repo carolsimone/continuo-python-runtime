@@ -164,6 +164,42 @@ def _execute_script(module: ModuleType, ctx: RunContext) -> Any:
             raise ScriptError(f"run() raised {exc.__class__.__name__}: {exc}") from exc
 
 
+def _validate_config_early(adapter: Any, node: Node) -> None:
+    """Check ``node.config`` against the engine's vocabulary before anything runs.
+
+    ``ensure_table`` validates ``config`` too and stays the enforcement point —
+    but it is called *after* the script has executed and its result has been
+    conformed, so a single typo (``config: {index: [...]}``) burned the whole
+    node run before failing. This is the tripwire that fails it in the first
+    second instead. Validation-time checking of the same vocabulary is a future
+    cross-repo dependency (continuo-validation step 3a), and `continuo-runtime
+    validate` runs on a CI runner where no engine adapter is installed at all,
+    so this is the earliest point the engine's own rules can be applied.
+
+    The call is skipped for an adapter that does not provide ``validate_config``:
+    the abstract ``RuntimeAdapter`` in the pinned ``continuo-validation-contract``
+    does not declare it (this repo ships the harness and both adapters as one
+    coordinated release), and an adapter without it loses only earliness —
+    ``ensure_table`` still fails closed on the same config.
+
+    Raises:
+        LoadError: If the adapter rejects the config, matching how a rejection
+            from ``ensure_table`` surfaces.
+    """
+    validate = getattr(adapter, "validate_config", None)
+    if validate is None:
+        return
+    column_names = [c.name for c in node.output_columns]
+    try:
+        validate(node.config, column_names)
+    except HarnessError:
+        raise
+    except Exception as exc:
+        raise LoadError(
+            f"invalid config for {node.relation}: {exc}"
+        ) from exc
+
+
 def run_node(env: Mapping[str, str], adapter: Any = None) -> int:
     """Run a single node end-to-end and print exactly one sentinel result block.
 
@@ -192,9 +228,6 @@ def run_node(env: Mapping[str, str], adapter: Any = None) -> int:
         nodes = load_contract_dir(contract_dir, check_reads=False)
         node = select_node(nodes, node_id)
 
-        with contextlib.redirect_stdout(sys.stderr):
-            module = load_script(node, app_root)
-
         if adapter is not None:
             active_adapter = adapter
         else:
@@ -204,6 +237,11 @@ def run_node(env: Mapping[str, str], adapter: Any = None) -> int:
                 raise
             except Exception as exc:
                 raise LoadError(f"adapter construction failed: {exc}") from exc
+
+        _validate_config_early(active_adapter, node)
+
+        with contextlib.redirect_stdout(sys.stderr):
+            module = load_script(node, app_root)
 
         ctx = RunContext(node, active_adapter)
         raw_result = _execute_script(module, ctx)

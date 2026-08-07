@@ -245,6 +245,38 @@ class PostgresRuntimeAdapter(RuntimeAdapter):
                 cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (schema,))
                 self._conn.commit()
 
+    @classmethod
+    def validate_config(
+        cls, config: dict[str, Any] | None, column_names: list[str]
+    ) -> None:
+        """Validate *config* against this engine's vocabulary, without connecting.
+
+        The harness calls this immediately after selecting the node, so a
+        malformed ``config`` — a singular ``index:`` typo, an index on an
+        undeclared column — fails in the first second of the run instead of
+        after the script has already computed its whole result. It is a
+        tripwire, not the enforcement point: ``ensure_table`` runs the very
+        same check again, unchanged, and remains the thing that guarantees no
+        DDL is emitted for a bad config. Both go through
+        :func:`_validated_indexes`, so the two cannot drift apart.
+
+        The index name derived here is thrown away, so a placeholder table
+        name is passed: nothing about naming is being validated (any string
+        is accepted), and no name reaches an error message.
+
+        Like ``config`` on ``ensure_table``, this method is not declared by
+        the abstract ``RuntimeAdapter`` in the pinned
+        ``continuo-validation-contract``; this repo ships both adapters and
+        the harness as one coordinated release. The harness skips the call
+        for an adapter that does not provide it (see
+        ``docs/boundary-contract.md`` §13.4), which costs that adapter only
+        earliness, never enforcement.
+
+        Raises:
+            ValueError: Exactly as :func:`_validated_indexes` does.
+        """
+        _validated_indexes(config, "_", column_names)
+
     def ensure_table(
         self,
         schema: str,

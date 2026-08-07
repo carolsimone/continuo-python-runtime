@@ -70,6 +70,28 @@ development.
    and merges the contracts, builds and pushes the image, uploads the merged
    contract to S3, and POSTs the release.
 
+### Upgrading an existing domain repo
+
+`validate` / `merge` / `hash` now hand every declared read to a real SQL
+parser (sqlglot, via `continuo_validation_contract.sql.ensure_single_read`)
+instead of scanning it for a leading `SELECT`/`WITH`. Two things follow for a
+repo written before this, on its next release: SQL a driver would accept but
+a parser will not — most commonly a driver-specific bind placeholder like
+psycopg2's `%(name)s`, which `ctx.read(name)` could never have used anyway —
+now fails validation, and engine-specific syntax (postgres `~`, `@>`, …)
+needs `--dialect <engine>`, which a repo should be passing regardless since
+Continuo bind-checks every read in the install's own warehouse dialect. Run
+the pre-flight check once before your next release; it reports every affected
+read at once:
+
+```bash
+continuo-runtime validate contracts/ --dialect postgres   # or trino
+```
+
+The runtime image does not re-run this gate, so a read that passes here is
+not re-judged under a different grammar in production. See
+`docs/boundary-contract.md` §13.1.
+
 ## The script API
 
 A node script is a Python file with exactly one required entry point:
@@ -110,6 +132,15 @@ def run(ctx):
   are the driver-import and data-access-call rules, together with the fact
   that `RunContext` only exposes `ctx.read()` — all warehouse access goes
   through it.
+- Scripts may import shared in-repo helpers. Before executing a script the
+  harness puts the repo root (`APP_ROOT`) and the script's own directory on
+  `sys.path`, so both `import helpers` (a sibling of the script) and
+  `from lib.shared import ...` (anywhere under the repo root) work, including
+  from inside `run()`. Every helper a script reaches transitively is folded
+  into `shared_code_hash`, so editing one re-fingerprints the node — but the
+  hash does not put the file in the image: **`COPY` every directory your
+  scripts import from in your `Dockerfile`**, or the release is valid and the
+  node dies with `ModuleNotFoundError` on its first run.
 - The harness — not the script — performs the write. It calls `conform()`
   on whatever `run()` returned and issues the only INSERT; the script never
   writes directly.

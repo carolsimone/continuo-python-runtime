@@ -281,6 +281,75 @@ def test_ensure_table_value_error_surfaces_as_load_error(harness_repo, capsys):
     assert "sortkey" in out
 
 
+# --- config is validated before the script runs, not after ---
+
+
+def _repo_with_config(tmp_path, config, marker):
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "t.py").write_text(
+        "import pathlib\n\n\n"
+        "def run(ctx):\n"
+        f"    pathlib.Path({str(marker)!r}).write_text('ran')\n"
+        "    return ctx.read('ids')\n"
+    )
+    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
+        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
+        "criticality": "SECONDARY", "script": "scripts/t.py",
+        "reads": {"ids": "select id from analytics.a"},
+        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
+        "config": config,
+    }]}))
+    return tmp_path
+
+
+class _ConfigCheckingAdapter(FakeRuntimeAdapter):
+    """Fake whose validate_config rejects the singular-`index` typo, as postgres does."""
+
+    validated = None
+
+    @classmethod
+    def validate_config(cls, config, column_names):
+        _ConfigCheckingAdapter.validated = (config, column_names)
+        for key in config or {}:
+            if key != "indexes":
+                raise ValueError(f"unrecognized config key: {key!r}")
+
+
+def test_bad_config_fails_before_the_script_runs(tmp_path, capsys):
+    """A `config: {index: [...]}` typo must not burn the whole node run first."""
+    marker = tmp_path / "script-ran"
+    repo = _repo_with_config(tmp_path, {"index": [{"columns": ["id"]}]}, marker)
+    ad = _ConfigCheckingAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    assert run_node(_env(repo), adapter=ad) == 1
+    out = capsys.readouterr().out
+    assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
+    assert '"message":"LoadError:' in out
+    assert "index" in out
+    assert not marker.exists(), "script ran despite an invalid config"
+    assert ad.ensured is None and ad.loaded is None
+
+
+def test_valid_config_is_validated_against_the_declared_columns(tmp_path, capsys):
+    marker = tmp_path / "script-ran"
+    repo = _repo_with_config(tmp_path, {"indexes": [{"columns": ["id"]}]}, marker)
+    ad = _ConfigCheckingAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    assert run_node(_env(repo), adapter=ad) == 0
+    assert _ConfigCheckingAdapter.validated == (
+        {"indexes": [{"columns": ["id"]}]}, ["id"]
+    )
+    assert marker.exists()
+
+
+def test_adapter_without_validate_config_still_runs(tmp_path, capsys):
+    """The early tripwire is optional; ensure_table remains the enforcement point."""
+    marker = tmp_path / "script-ran"
+    repo = _repo_with_config(tmp_path, {"indexes": [{"columns": ["id"]}]}, marker)
+    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    assert not hasattr(ad, "validate_config")
+    assert run_node(_env(repo), adapter=ad) == 0
+
+
 # --- the runtime does not re-run the read-shape gate ---
 
 

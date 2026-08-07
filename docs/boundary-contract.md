@@ -46,6 +46,23 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   without `--dialect` — the flag only chooses which dialect's grammar that
   parse is checked against, defaulting to sqlglot's dialect-neutral parser
   when omitted.
+- **What changed for contracts written before this** (existing repos, on
+  their next release): `validate`/`merge`/`hash` used to accept a read after
+  a hand-rolled scan for a leading `SELECT`/`WITH`; they now hand every read
+  to a real parser (`ensure_single_read`). SQL a driver would have accepted
+  but a parser will not — most commonly a driver-specific bind placeholder
+  such as psycopg2's `%(name)s`, since `ctx.read(name)` never takes params —
+  now fails `validate` where it previously passed. Such a read was already
+  broken at run time; the failure only moved earlier. In the other
+  direction, engine-specific syntax the *dialect-neutral* parser rejects
+  (postgres `~`, `@>`, …) needs `--dialect <engine>`, which is what a repo
+  should be passing anyway, since Continuo parses and bind-checks every read
+  in the install's own warehouse dialect. Run `continuo-runtime validate
+  contracts/ --dialect <engine>` once against an existing repo before its
+  next release: it is exactly the gate CI now applies, and it reports every
+  affected read at once. The runtime image does **not** re-run this gate
+  (see §13.4), so a read that passes here will not be re-judged under a
+  different grammar in production.
 - `output_columns` types come from the supported set: `BIGINT`,
   `INT`/`INTEGER`, `DOUBLE PRECISION`, `NUMERIC(p,s)`/`DECIMAL(p,s)`,
   `VARCHAR(n)`/`CHAR(n)`/`TEXT`, `TIMESTAMP`, `DATE`, `BOOLEAN`.
@@ -230,6 +247,16 @@ executor runs it as a Kubernetes Job:
   target schema env; the harness looks the node up in the contract files
   **shipped inside the image** and dispatches its `script`. One image serves
   all of the service's nodes.
+- **Script import path**: before executing the script the harness prepends
+  `APP_ROOT` and the script's own directory to `sys.path`, in that order —
+  the same two search roots the closure resolver folds into
+  `shared_code_hash` (§13.2) — and leaves them there for the process
+  lifetime, so a deferred `import` inside `run()` resolves too. Both forms a
+  script can use work: sibling (`import helpers`) and package-qualified
+  (`import scripts.helpers`, `from lib.shared import ...`). The image must
+  still `COPY` every directory the scripts import from: a helper is folded
+  into the hash whether or not it is in the image, so one left out yields a
+  valid release artifact and a node that dies with `ModuleNotFoundError`.
 - **Warehouse env**: engine-native connection vars (`POSTGRES_HOST`,
   `POSTGRES_DB`, `POSTGRES_USER`, optional `POSTGRES_PORT`/`_PASSWORD`; ditto
   per engine), injected via the same Secret mechanism dbt Jobs use.
@@ -241,9 +268,33 @@ executor runs it as a Kubernetes Job:
   config=...)` as a keyword unconditionally, so every `RuntimeAdapter`
   implementation must accept it today even though no released
   `continuo-validation-contract` version's abstract `ensure_table`
-  declares the parameter (the `0.3.0` port pinned by this repo still
+  declares the parameter (the `0.4.0` port pinned by this repo still
   reads `ensure_table(self, schema, table, columns)`); a future contract
   release is expected to add `config` to the port itself.
+- **Early `config` tripwire**: `ensure_table` is called only *after* the
+  script has run and its result has been conformed, so a bad `config` would
+  otherwise burn the entire node run before failing. The harness therefore
+  also calls `RuntimeAdapter.validate_config(config, column_names)` — a
+  classmethod, no connection needed — immediately after selecting the node,
+  and surfaces a rejection as `LoadError`. Both adapters shipped here
+  implement it by reusing the exact logic `ensure_table` validates with, so
+  the two cannot disagree. Like `config` on `ensure_table`, the abstract
+  port in the pinned `continuo-validation-contract` does not declare it;
+  unlike `config`, the harness *skips* the call for an adapter that does not
+  provide it, because `ensure_table` remains the enforcement point and such
+  an adapter loses only earliness, never fail-closed behavior. Third-party
+  adapters should implement it.
+- **The read-shape gate is not re-run at run time.** `continuo-runtime run`
+  loads and validates the baked-in contract files with `check_reads=False`:
+  every other rule (required fields, criticality, the `reads` map's shape,
+  output-column types and uniqueness, `config`, duplicate relations) still
+  runs, but the per-read `ensure_single_read` parse does not. The harness has
+  no `--dialect` of its own, so re-parsing would judge the reads against the
+  dialect-neutral grammar — a different, in places stricter grammar than the
+  one CI used (§13.1) — and could only disagree with the gates already
+  passed (CI's `validate`, then Continuo's own parser and bind-check), never
+  catch a new problem: `ctx.read` resolves declared reads by name and never
+  parses them.
 - **Result envelope**: stdout is reserved for exactly one sentinel-framed
   result block as the last line — reuse `continuo_validation_contract.result`
   (already on PyPI) rather than reimplementing the markers. All diagnostics

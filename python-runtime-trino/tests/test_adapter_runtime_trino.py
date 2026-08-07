@@ -444,3 +444,58 @@ def test_ensure_table_bad_column_type_still_rejects_and_emits_no_ddl():
             "s", "t", [{"name": "id", "type": "NOT_A_TYPE", "nullable": True}], config=None
         )
     assert conn.statements == []
+
+
+# --- validate_config: the harness's early tripwire ---
+#
+# ensure_table stays the enforcement point; validate_config only lets the
+# harness reject a bad config in the first second of a run instead of after
+# the script has already computed its whole result. It delegates to
+# _table_properties — the same function ensure_table validates with — so it
+# cannot drift from what ensure_table enforces. One representative rejection
+# per vocabulary key is enough here; the exhaustive per-rule matrix already
+# runs against _table_properties and ensure_table above.
+
+
+@pytest.mark.parametrize(
+    ("config", "match"),
+    [
+        pytest.param({"sortkey": ["id"]}, "sortkey", id="unknown_key"),
+        pytest.param({"partitioning": []}, "partitioning", id="partitioning_empty"),
+        pytest.param({"sorted_by": "id"}, "sorted_by", id="sorted_by_not_a_list"),
+        pytest.param({"format": "AVRO2"}, "format", id="format_not_in_allowlist"),
+        pytest.param(
+            {"partitioned_by": ["event_ts"]}, "partitioned_by", id="hive_spelling"
+        ),
+    ],
+)
+def test_validate_config_rejects_what_ensure_table_rejects(config, match):
+    with pytest.raises(ValueError, match=match):
+        TrinoRuntimeAdapter.validate_config(config, ["id"])
+
+
+@pytest.mark.parametrize("config", [
+    None,
+    {},
+    {"partitioning": ["day(event_ts)"], "sorted_by": ["id"], "format": "parquet"},
+])
+def test_validate_config_accepts_what_ensure_table_accepts(config):
+    assert TrinoRuntimeAdapter.validate_config(config, ["id"]) is None
+
+
+def test_validate_config_does_not_constrain_values_to_declared_columns():
+    """Iceberg partition transforms are expressions, not column names.
+
+    ``column_names`` is part of the signature the harness calls uniformly
+    across engines (postgres needs it for `indexes`), but this engine's
+    vocabulary deliberately does not check values against it.
+    """
+    assert TrinoRuntimeAdapter.validate_config(
+        {"partitioning": ["bucket(customer_id, 16)"]}, []
+    ) is None
+
+
+def test_validate_config_is_a_classmethod_needing_no_connection():
+    """The harness calls it before any adapter I/O; it must not need a connection."""
+    with pytest.raises(ValueError, match="sortkey"):
+        TrinoRuntimeAdapter.validate_config({"sortkey": ["id"]}, ["id"])

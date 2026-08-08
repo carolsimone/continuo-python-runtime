@@ -30,10 +30,37 @@ logger = logging.getLogger("continuo_python_runtime_postgres")
 # engine-blind (see continuo_python_runtime/contract/loader.py).
 _KNOWN_CONFIG_KEYS: tuple[str, ...] = ("indexes",)
 _KNOWN_INDEX_KEYS: tuple[str, ...] = ("columns", "unique", "name")
-# NAMEDATALEN - 1. Postgres silently truncates longer identifiers, so a derived
-# name over this limit must be truncated here too, or the emitted DDL's name
-# would not match the name postgres actually stores.
+# NAMEDATALEN - 1. Postgres silently truncates longer identifiers, so any
+# index name over this limit -- derived default or explicit -- must be
+# truncated here too, or the emitted DDL's name would not match the name
+# postgres actually stores.
 _MAX_IDENTIFIER_BYTES = 63
+
+
+def _truncate_explicit_identifier(name: str) -> str:
+    """Truncate an explicit, author-given identifier to at most 63 bytes.
+
+    Truncates on encoded UTF-8 bytes, not characters: postgres's limit is
+    bytes, and a multibyte identifier would slip past a character-wise
+    slice. This is a *plain* byte-for-byte cut -- no digest suffix -- so it
+    matches postgres's own NAMEDATALEN truncation exactly: the normalized
+    name this function returns is always what postgres will actually store,
+    never something it silently truncates further behind our back.
+
+    Unlike :func:`_index_name`'s derived defaults, an explicit ``name:`` is
+    something the author chose, so this deliberately does NOT inject a
+    disambiguating digest the way ``_index_name`` does. Two different
+    explicit names that happen to truncate to the same 63-byte prefix
+    collide here on purpose: the caller's duplicate-name check (over these
+    already-truncated names) surfaces that as a rejection instead of the two
+    entries silently colliding at the warehouse, where ``CREATE INDEX IF NOT
+    EXISTS`` would skip every index but the first that resolves to the same
+    stored identifier (P2-6, and its explicit-name-bypass follow-up).
+    """
+    encoded = name.encode("utf-8")
+    if len(encoded) <= _MAX_IDENTIFIER_BYTES:
+        return name
+    return encoded[:_MAX_IDENTIFIER_BYTES].decode("utf-8", "ignore")
 
 
 def _index_name(table: str, columns: list[str]) -> str:
@@ -50,7 +77,9 @@ def _index_name(table: str, columns: list[str]) -> str:
     and ``CREATE INDEX IF NOT EXISTS`` would then silently skip every index
     after the first (P2-6). The digest is taken over the full name, so two
     different column lists that truncate to the same prefix still get
-    different suffixes.
+    different suffixes. Unlike :func:`_truncate_explicit_identifier`, nobody
+    chose this literal string, so injecting a digest to keep it collision-free
+    is a service rather than a surprise.
     """
     name = f"ix_{table}_{'_'.join(columns)}"
     encoded = name.encode("utf-8")
@@ -82,7 +111,12 @@ def _validated_indexes(
             the same index name (an explicit ``name`` colliding with another
             explicit ``name`` or with a derived default) -- letting that
             through would silently drop every colliding index but the first
-            under ``CREATE INDEX IF NOT EXISTS`` (P2-6).
+            under ``CREATE INDEX IF NOT EXISTS`` (P2-6). An explicit ``name``
+            over 63 bytes is truncated the same way postgres itself would
+            truncate it (:func:`_truncate_explicit_identifier`) *before* this
+            comparison runs, so two over-long explicit names that share only
+            their first 63 bytes are caught here too, not just exact
+            duplicates.
     """
     if not config:
         return []
@@ -134,7 +168,11 @@ def _validated_indexes(
         normalized.append({
             "columns": list(columns),
             "unique": unique,
-            "name": name if name is not None else _index_name(table, columns),
+            "name": (
+                _truncate_explicit_identifier(name)
+                if name is not None
+                else _index_name(table, columns)
+            ),
         })
 
     # Reject before returning -- this is the fail-closed gate that runs

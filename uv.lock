@@ -86,7 +86,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "continuo-validation-contract", specifier = "==0.4.0" },
+    { name = "continuo-validation-contract", specifier = "==0.6.0" },
     { name = "pyarrow", specifier = "==25.0.0" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "sqlglot", specifier = "==30.15.0" },
@@ -125,7 +125,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "continuo-validation-contract", specifier = "==0.4.0" },
+    { name = "continuo-validation-contract", specifier = "==0.6.0" },
     { name = "psycopg2-binary", specifier = "==2.9.11" },
     { name = "pyarrow", specifier = "==25.0.0" },
 ]
@@ -162,7 +162,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "continuo-validation-contract", specifier = "==0.4.0" },
+    { name = "continuo-validation-contract", specifier = "==0.6.0" },
     { name = "pyarrow", specifier = "==25.0.0" },
     { name = "trino", specifier = "==0.338.0" },
 ]
@@ -179,14 +179,14 @@ test = [
 
 [[package]]
 name = "continuo-validation-contract"
-version = "0.4.0"
+version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "sqlglot" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/96/32/1a17df50603df0ffa48ef7e46e1b01cb93307cb9860d01bc3c57165b8051/continuo_validation_contract-0.4.0.tar.gz", hash = "sha256:641885511882fe8367641b6d953a2216acff662722fd2906d2e84db06131cb18", size = 11014, upload-time = "2026-08-07T09:03:41.05Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/77/a90ab11116c350c9e1d3a795edaefcfffac62f80862acfaa8cba10096d04/continuo_validation_contract-0.6.0.tar.gz", hash = "sha256:e515c5098e8f533d6505515fd9d72c6a4c16d8189402a7de1a1b1dd10fc34e00", size = 13273, upload-time = "2026-08-08T11:29:36.408Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/bd/e281c4b28c0bd93f472da61d1a2fcb1a64a274b4731b29cbb7855fd126db/continuo_validation_contract-0.4.0-py3-none-any.whl", hash = "sha256:917efa9db50ad4cb85d815c903bd5115e64d8606910d9a8a9d02dd3c8e8342e1", size = 8894, upload-time = "2026-08-07T09:03:40.075Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/77/1652064ab3f64493285dda924d7c474187eaa776479f422c205e4680ff6b/continuo_validation_contract-0.6.0-py3-none-any.whl", hash = "sha256:a65bbcc484f1af5796daf5f014e2192945381a9c581e9b5d0ddf4092e800873f", size = 10823, upload-time = "2026-08-08T11:29:35.207Z" },
 ]
 
 [[package]]

@@ -5,7 +5,7 @@ COPY pyproject.toml README.md /src/
 COPY continuo_python_runtime /src/continuo_python_runtime
 COPY python-runtime-trino /src/python-runtime-trino
 RUN pip install --no-cache-dir \
-      "continuo-validation-contract==0.4.0" \
+      "continuo-validation-contract==0.6.0" \
       /src/python-runtime-trino \
       /src
 # PYTHONPATH is belt-and-braces: the harness also inserts APP_ROOT and the

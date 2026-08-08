@@ -354,7 +354,8 @@ class PostgresRuntimeAdapter(RuntimeAdapter):
         schema: str,
         table: str,
         columns: list[dict[str, Any]],
-        config: dict[str, Any] | None = None,
+        *,
+        config: dict[str, Any],
     ) -> None:
         """CREATE TABLE IF NOT EXISTS with typed DDL compiled from *columns*.
 
@@ -362,10 +363,8 @@ class PostgresRuntimeAdapter(RuntimeAdapter):
         contract's SQL type grammar), ``nullable`` (bool). *config* carries
         this engine's physical-layout vocabulary — ``indexes`` — validated by
         :func:`_validated_indexes` before any DDL runs, so a malformed config
-        never leaves a half-built table behind (fail closed). ``config`` is
-        keyword-defaulted because the abstract ``RuntimeAdapter.ensure_table``
-        in the pinned contract version does not declare it; the harness passes
-        it unconditionally regardless.
+        never leaves a half-built table behind (fail closed). Required and
+        keyword-only, matching the contract 0.6.0 port signature.
         """
         indexes = _validated_indexes(config, table, [col["name"] for col in columns])
         for col in columns:

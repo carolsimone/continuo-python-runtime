@@ -255,7 +255,7 @@ def test_arrow_table_from_rows_no_columns_no_rows():
 
 
 def test_table_properties_no_config_renders_no_with_clause():
-    """Test that config=None renders the bare CREATE TABLE, no WITH clause."""
+    """Test that config={} renders the bare CREATE TABLE, no WITH clause."""
     assert _table_properties(None) == ""
 
 
@@ -357,9 +357,9 @@ def _adapter(conn: "_FakeConnection") -> TrinoRuntimeAdapter:
 
 
 def test_ensure_table_no_recognized_config_key_statement_has_no_with():
-    """Test that an ensure_table call with config=None emits a bare CREATE TABLE."""
+    """Test that an ensure_table call with config={} emits a bare CREATE TABLE."""
     conn = _FakeConnection()
-    _adapter(conn).ensure_table("s", "t", _ONE_COL, config=None)
+    _adapter(conn).ensure_table("s", "t", _ONE_COL, config={})
     create_stmt = conn.statements[-1]
     assert create_stmt == 'CREATE TABLE IF NOT EXISTS "iceberg"."s"."t" ("id" INT)'
     assert "WITH" not in create_stmt
@@ -441,7 +441,7 @@ def test_ensure_table_bad_column_type_still_rejects_and_emits_no_ddl():
     conn = _FakeConnection()
     with pytest.raises(ValueError):
         _adapter(conn).ensure_table(
-            "s", "t", [{"name": "id", "type": "NOT_A_TYPE", "nullable": True}], config=None
+            "s", "t", [{"name": "id", "type": "NOT_A_TYPE", "nullable": True}], config={}
         )
     assert conn.statements == []
 

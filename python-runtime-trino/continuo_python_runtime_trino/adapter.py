@@ -366,7 +366,8 @@ class TrinoRuntimeAdapter(RuntimeAdapter):
         schema: str,
         table: str,
         columns: list[dict[str, Any]],
-        config: dict[str, Any] | None = None,
+        *,
+        config: dict[str, Any],
     ) -> None:
         """CREATE TABLE IF NOT EXISTS with typed DDL compiled from *columns*.
 
@@ -379,9 +380,7 @@ class TrinoRuntimeAdapter(RuntimeAdapter):
         ``format``) — validated by :func:`_table_properties` before any DDL
         runs, so a malformed config never leaves a half-built table behind
         (fail closed), then rendered into the CREATE TABLE's ``WITH`` clause.
-        ``config`` is keyword-defaulted because the abstract
-        ``RuntimeAdapter.ensure_table`` in the pinned contract version does
-        not declare it; the harness passes it unconditionally regardless.
+        Required and keyword-only, matching the contract 0.6.0 port signature.
         """
         properties = _table_properties(config)
         for col in columns:

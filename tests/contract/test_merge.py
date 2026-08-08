@@ -339,6 +339,58 @@ def test_script_itself_with_lint_violation_raises(tmp_path):
         build_wire_contract(repo / "contracts", repo, "s")
 
 
+def test_closure_member_with_latin1_coding_cookie_raises_contract_error(tmp_path):
+    """review-fix-d P1 reproduction: a closure member declaring a PEP 263
+    coding cookie (`# -*- coding: latin-1 -*-`) plus a non-ASCII byte parses
+    fine under `ast.parse(bytes)` in `resolve_closure` (which honors the
+    cookie), but the merger's own lint pass unconditionally decodes every
+    file as UTF-8. That decode must raise a UnicodeDecodeError for this file
+    (0xe9 is not valid UTF-8 on its own) - the bug is that this escaped as a
+    bare stdlib exception instead of a ContractError naming the node and
+    file. Must never surface as anything but ContractError."""
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "lib").mkdir()
+    (repo / "lib" / "shared.py").write_bytes(
+        "# -*- coding: latin-1 -*-\n# caf\xe9\nX = 1\n".encode("latin-1")
+    )
+    (repo / "scripts" / "node.py").write_text(
+        "from lib.shared import X\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
+    )
+    _write_single_node_contract(repo, "scripts/node.py")
+
+    with pytest.raises(ContractError) as exc_info:
+        build_wire_contract(repo / "contracts", repo, "s")
+
+    message = str(exc_info.value)
+    assert "analytics.t" in message
+    assert "lib/shared.py" in message
+
+
+def test_closure_member_with_utf8_bom_does_not_raise_bare_syntax_error(tmp_path):
+    """review-fix-d P1 reproduction: a UTF-8 BOM file is imported by CPython
+    without complaint and `ast.parse(bytes)` in `resolve_closure` accepts it
+    too (bytes-mode parsing strips a leading BOM as an implicit encoding
+    declaration). But decoding those same bytes with plain 'utf-8' keeps the
+    BOM as a literal U+FEFF character in the resulting str, and re-parsing
+    *that string* raises 'invalid non-printable character U+FEFF', blocking
+    the merge for a file that runs fine. Decoding as 'utf-8-sig' strips the
+    BOM exactly like bytes-mode parsing does, so the merge must succeed."""
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "lib").mkdir()
+    (repo / "lib" / "shared.py").write_bytes(b"\xef\xbb\xbfX = 1\n")
+    (repo / "scripts" / "node.py").write_text(
+        "from lib.shared import X\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
+    )
+    _write_single_node_contract(repo, "scripts/node.py")
+
+    doc = build_wire_contract(repo / "contracts", repo, "s")
+
+    (entry,) = doc["nodes"]
+    assert entry["shared_code_hash"] != ""
+
+
 def test_clean_closure_merge_hashes_match_hand_computed(tmp_path):
     """Guard against the lint pass (review-fix-b) perturbing the artifact:
     for a closure with zero violations, source_hash and shared_code_hash

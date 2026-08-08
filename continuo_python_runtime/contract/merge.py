@@ -74,6 +74,21 @@ def _lint_node_closure(
     from every offending file — not just the first file's — so an author
     can act on the full report in one pass instead of an iterative guessing
     game.
+
+    Every file is decoded as ``"utf-8-sig"`` (identical to plain ``"utf-8"``
+    except that a leading BOM, if present, is stripped rather than kept as a
+    literal ``U+FEFF`` character) — this matches what ``ast.parse(bytes)``
+    already does for the same file in ``resolve_closure`` (bytes-mode
+    parsing treats a UTF-8 BOM as an implicit encoding declaration and
+    strips it), so a BOM file that parses and runs fine is not rejected here
+    on a mismatch between the two decoders. A file that isn't valid UTF-8 at
+    all (e.g. a PEP 263 ``# -*- coding: latin-1 -*-`` cookie plus a
+    non-ASCII byte — valid input to ``ast.parse(bytes)``, which honors the
+    cookie) raises ``UnicodeDecodeError``; that is caught and re-raised as a
+    ``ContractError`` naming the node and the offending repo-relative path,
+    so it joins the same error taxonomy as every other rejection here
+    instead of escaping as a bare stdlib exception past ``cli.main``, which
+    catches only ``HarnessError``/``OSError``.
     """
     repo_root_resolved = repo_root.resolve()
     files = [(script_path, script_bytes), *zip(closure, member_bytes, strict=True)]
@@ -81,7 +96,11 @@ def _lint_node_closure(
     violations: list[str] = []
     for path, data in files:
         rel = path.relative_to(repo_root_resolved)
-        violations.extend(lint_source(data.decode("utf-8"), str(rel)))
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ContractError(f"{node.relation}: {rel}: not valid UTF-8: {exc}") from exc
+        violations.extend(lint_source(text, str(rel)))
 
     if violations:
         report = "\n".join(violations)

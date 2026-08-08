@@ -8,7 +8,9 @@ from continuo_python_runtime.closure import resolve_closure
 from continuo_python_runtime.contract.loader import load_contract_dir
 from continuo_python_runtime.contract.model import CONTRACT_VERSION, Node
 from continuo_python_runtime.contract.paths import resolve_script_path
+from continuo_python_runtime.errors import ContractError
 from continuo_python_runtime.hashing import hash_parts
+from continuo_python_runtime.lint import lint_source
 
 
 def node_entry(node: Node) -> dict:
@@ -41,6 +43,72 @@ def node_entry(node: Node) -> dict:
     }
 
 
+def _lint_node_closure(
+    node: Node,
+    repo_root: Path,
+    script_path: Path,
+    script_bytes: bytes,
+    closure: list[Path],
+    member_bytes: list[bytes],
+) -> None:
+    """Lint the node's script and every resolved closure member.
+
+    Every file that executes for this node — the script plus its transitive
+    in-repo import closure — is held to the same lint rules
+    (``continuo_python_runtime.lint.lint_source``: L1 forbidden driver
+    imports, L2 SQL string literals, L3 forbidden data-access calls, L4
+    private-attribute access, L5 dynamic-import constructs) that CI's
+    ``continuo-runtime lint`` applies to ``scripts/``. Enforcing it again
+    here, at merge time, means a helper file outside ``scripts/`` — which
+    the CI lint step never looks at — cannot become a side channel around
+    the harness's sole write sink, and the check cannot be defeated by a
+    stale or hand-edited workflow file: whatever produces the release
+    artifact is the thing that checked.
+
+    Paths in violation messages are repo-root-relative (``str(path.relative_to
+    (repo_root))``), so a message reads ``lib/shared.py:1: ...`` identically
+    in CI and on a laptop, never an absolute path that differs between the
+    two.
+
+    Raises ``ContractError`` naming the node and listing every violation
+    from every offending file — not just the first file's — so an author
+    can act on the full report in one pass instead of an iterative guessing
+    game.
+
+    Every file is decoded as ``"utf-8-sig"`` (identical to plain ``"utf-8"``
+    except that a leading BOM, if present, is stripped rather than kept as a
+    literal ``U+FEFF`` character) — this matches what ``ast.parse(bytes)``
+    already does for the same file in ``resolve_closure`` (bytes-mode
+    parsing treats a UTF-8 BOM as an implicit encoding declaration and
+    strips it), so a BOM file that parses and runs fine is not rejected here
+    on a mismatch between the two decoders. A file that isn't valid UTF-8 at
+    all (e.g. a PEP 263 ``# -*- coding: latin-1 -*-`` cookie plus a
+    non-ASCII byte — valid input to ``ast.parse(bytes)``, which honors the
+    cookie) raises ``UnicodeDecodeError``; that is caught and re-raised as a
+    ``ContractError`` naming the node and the offending repo-relative path,
+    so it joins the same error taxonomy as every other rejection here
+    instead of escaping as a bare stdlib exception past ``cli.main``, which
+    catches only ``HarnessError``/``OSError``.
+    """
+    repo_root_resolved = repo_root.resolve()
+    files = [(script_path, script_bytes), *zip(closure, member_bytes, strict=True)]
+
+    violations: list[str] = []
+    for path, data in files:
+        rel = path.relative_to(repo_root_resolved)
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ContractError(f"{node.relation}: {rel}: not valid UTF-8: {exc}") from exc
+        violations.extend(lint_source(text, str(rel)))
+
+    if violations:
+        report = "\n".join(violations)
+        raise ContractError(
+            f"{node.relation}: lint violations in script or import closure:\n{report}"
+        )
+
+
 def build_wire_contract(
     contract_dir: Path, repo_root: Path, service: str, *, dialect: str | None = None
 ) -> dict:
@@ -64,6 +132,7 @@ def build_wire_contract(
         script_bytes = script_path.read_bytes()
         closure = resolve_closure(script_path, repo_root)
         member_bytes = [member.read_bytes() for member in closure]
+        _lint_node_closure(node, repo_root, script_path, script_bytes, closure, member_bytes)
         entry.update(hash_parts(entry, script_bytes, member_bytes))
 
         wire_nodes.append(entry)

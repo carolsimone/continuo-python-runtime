@@ -229,6 +229,197 @@ def test_script_path_pointing_at_directory_rejected(tmp_path):
         build_wire_contract(repo / "contracts", repo, "s")
 
 
+def _write_single_node_contract(repo, script: str):
+    (repo / "contracts").mkdir()
+    (repo / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
+        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
+        "criticality": "SECONDARY", "script": script,
+        "reads": {"ids": "select id from analytics.a"},
+        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
+    }]}))
+
+
+def test_closure_member_forbidden_driver_import_raises(tmp_path):
+    """review-fix-b reproduction: a helper outside scripts/ importing a
+    warehouse driver must fail the merge, not just be silently folded into
+    shared_code_hash. Only L5 (dynamic imports) was enforced on closure
+    members before this fix; L1 was not."""
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "lib").mkdir()
+    (repo / "lib" / "shared.py").write_text("import psycopg2\n")
+    (repo / "scripts" / "node.py").write_text(
+        "from lib.shared import fetch_it\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
+    )
+    _write_single_node_contract(repo, "scripts/node.py")
+
+    with pytest.raises(ContractError) as exc_info:
+        build_wire_contract(repo / "contracts", repo, "s")
+
+    message = str(exc_info.value)
+    assert "analytics.t" in message
+    assert "lib/shared.py:1: forbidden warehouse driver import 'psycopg2'" in message
+
+
+def test_closure_member_sql_string_literal_raises(tmp_path):
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "lib").mkdir()
+    (repo / "lib" / "shared.py").write_text(
+        "def query():\n    return 'select secret from analytics.private'\n"
+    )
+    (repo / "scripts" / "node.py").write_text(
+        "from lib.shared import query\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
+    )
+    _write_single_node_contract(repo, "scripts/node.py")
+
+    with pytest.raises(ContractError, match=r"lib/shared\.py:2: SQL string literal"):
+        build_wire_contract(repo / "contracts", repo, "s")
+
+
+def test_closure_member_forbidden_data_access_call_raises(tmp_path):
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "lib").mkdir()
+    (repo / "lib" / "shared.py").write_text(
+        "def fetch_it(conn):\n    return conn.execute('noop')\n"
+    )
+    (repo / "scripts" / "node.py").write_text(
+        "from lib.shared import fetch_it\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
+    )
+    _write_single_node_contract(repo, "scripts/node.py")
+
+    with pytest.raises(
+        ContractError, match=r"lib/shared\.py:2: forbidden data-access call 'execute'"
+    ):
+        build_wire_contract(repo / "contracts", repo, "s")
+
+
+def test_violations_from_two_closure_members_both_appear_in_one_error(tmp_path):
+    """A lint report that stops at the first offending file makes fixing an
+    iterative guessing game - every file's violations must be reported
+    together, in one raise."""
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "lib").mkdir()
+    (repo / "lib" / "shared.py").write_text("import psycopg2\n")
+    (repo / "lib" / "other.py").write_text(
+        "def query():\n    return 'select secret from analytics.private'\n"
+    )
+    (repo / "scripts" / "node.py").write_text(
+        "from lib.shared import fetch_it\n"
+        "from lib.other import query\n\n\n"
+        "def run(ctx):\n    return ctx.read('ids')\n"
+    )
+    _write_single_node_contract(repo, "scripts/node.py")
+
+    with pytest.raises(ContractError) as exc_info:
+        build_wire_contract(repo / "contracts", repo, "s")
+
+    message = str(exc_info.value)
+    assert "lib/shared.py:1: forbidden warehouse driver import 'psycopg2'" in message
+    assert "lib/other.py:2: SQL string literal" in message
+
+
+def test_script_itself_with_lint_violation_raises(tmp_path):
+    """A node whose script was never covered by the CI lint step (workflow
+    edited, different layout) must still fail at merge time - "everything
+    that executes is linted" applies to the script too, not only to helpers
+    it imports."""
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "node.py").write_text(
+        "import psycopg2\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
+    )
+    _write_single_node_contract(repo, "scripts/node.py")
+
+    with pytest.raises(
+        ContractError, match=r"scripts/node\.py:1: forbidden warehouse driver import 'psycopg2'"
+    ):
+        build_wire_contract(repo / "contracts", repo, "s")
+
+
+def test_closure_member_with_latin1_coding_cookie_raises_contract_error(tmp_path):
+    """review-fix-d P1 reproduction: a closure member declaring a PEP 263
+    coding cookie (`# -*- coding: latin-1 -*-`) plus a non-ASCII byte parses
+    fine under `ast.parse(bytes)` in `resolve_closure` (which honors the
+    cookie), but the merger's own lint pass unconditionally decodes every
+    file as UTF-8. That decode must raise a UnicodeDecodeError for this file
+    (0xe9 is not valid UTF-8 on its own) - the bug is that this escaped as a
+    bare stdlib exception instead of a ContractError naming the node and
+    file. Must never surface as anything but ContractError."""
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "lib").mkdir()
+    (repo / "lib" / "shared.py").write_bytes(
+        "# -*- coding: latin-1 -*-\n# caf\xe9\nX = 1\n".encode("latin-1")
+    )
+    (repo / "scripts" / "node.py").write_text(
+        "from lib.shared import X\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
+    )
+    _write_single_node_contract(repo, "scripts/node.py")
+
+    with pytest.raises(ContractError) as exc_info:
+        build_wire_contract(repo / "contracts", repo, "s")
+
+    message = str(exc_info.value)
+    assert "analytics.t" in message
+    assert "lib/shared.py" in message
+
+
+def test_closure_member_with_utf8_bom_does_not_raise_bare_syntax_error(tmp_path):
+    """review-fix-d P1 reproduction: a UTF-8 BOM file is imported by CPython
+    without complaint and `ast.parse(bytes)` in `resolve_closure` accepts it
+    too (bytes-mode parsing strips a leading BOM as an implicit encoding
+    declaration). But decoding those same bytes with plain 'utf-8' keeps the
+    BOM as a literal U+FEFF character in the resulting str, and re-parsing
+    *that string* raises 'invalid non-printable character U+FEFF', blocking
+    the merge for a file that runs fine. Decoding as 'utf-8-sig' strips the
+    BOM exactly like bytes-mode parsing does, so the merge must succeed."""
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "lib").mkdir()
+    (repo / "lib" / "shared.py").write_bytes(b"\xef\xbb\xbfX = 1\n")
+    (repo / "scripts" / "node.py").write_text(
+        "from lib.shared import X\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
+    )
+    _write_single_node_contract(repo, "scripts/node.py")
+
+    doc = build_wire_contract(repo / "contracts", repo, "s")
+
+    (entry,) = doc["nodes"]
+    assert entry["shared_code_hash"] != ""
+
+
+def test_clean_closure_merge_hashes_match_hand_computed(tmp_path):
+    """Guard against the lint pass (review-fix-b) perturbing the artifact:
+    for a closure with zero violations, source_hash and shared_code_hash
+    must be byte-identical to hashes computed directly from the files on
+    disk, independent of the lint call."""
+    import hashlib
+
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "helpers.py").write_text("def add(a, b):\n    return a + b\n")
+    (repo / "scripts" / "node.py").write_text(
+        "import scripts.helpers\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
+    )
+    _write_single_node_contract(repo, "scripts/node.py")
+
+    (entry,) = build_wire_contract(repo / "contracts", repo, "s")["nodes"]
+
+    script_bytes = (repo / "scripts" / "node.py").read_bytes()
+    helper_bytes = (repo / "scripts" / "helpers.py").read_bytes()
+    expected_source_hash = hashlib.sha256(script_bytes).hexdigest()
+    expected_shared_hash = hashlib.sha256(
+        hashlib.sha256(helper_bytes).hexdigest().encode()
+    ).hexdigest()
+
+    assert entry["source_hash"] == expected_source_hash
+    assert entry["shared_code_hash"] == expected_shared_hash
+    assert set(entry) == WIRE_ENTRY_KEYS
+
+
 def test_write_wire_contract_creates_missing_out_dir(contract_repo, tmp_path):
     """write_wire_contract should create --out's parent directory rather than
     crashing with FileNotFoundError."""

@@ -93,12 +93,19 @@ def ensure_import_paths(repo_root: Path, script_dir: Path) -> None:
     Entries are left in place for the process lifetime rather than removed
     after ``exec_module``: a script may import lazily inside ``run()``, and a
     container runs exactly one node per process. Both paths are resolved
-    first and an already-present entry is not re-inserted, so repeated calls
-    cannot grow ``sys.path`` however the caller spelled the roots.
+    first, and each is unconditionally repositioned to the front rather than
+    left wherever it already was: the shipped images set ``PYTHONPATH=/app``,
+    so ``repo_root`` is *always* already on ``sys.path`` before this runs, and
+    merely skipping an already-present entry would leave it behind
+    ``script_dir`` -- the reverse of the required order. An existing entry is
+    removed before being reinserted at index 0, so repeated calls still
+    cannot grow ``sys.path`` or duplicate an entry, however the caller spelled
+    the roots or whatever order they were already in.
     """
     for entry in (str(script_dir.resolve()), str(repo_root.resolve())):
-        if entry not in sys.path:
-            sys.path.insert(0, entry)
+        if entry in sys.path:
+            sys.path.remove(entry)
+        sys.path.insert(0, entry)
 
 
 def load_script(node: Node, repo_root: Path) -> ModuleType:

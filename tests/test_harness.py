@@ -1,6 +1,7 @@
 """Tests for the harness: script dispatch, sentinel envelope, error taxonomy."""
 
 import json
+import sys
 
 import pyarrow as pa
 import pytest
@@ -8,7 +9,12 @@ import yaml
 
 from continuo_python_runtime.contract.loader import load_contract_dir
 from continuo_python_runtime.errors import ContractError, ScriptError
-from continuo_python_runtime.harness import load_script, run_node, select_node
+from continuo_python_runtime.harness import (
+    ensure_import_paths,
+    load_script,
+    run_node,
+    select_node,
+)
 from tests.conftest import FakeRuntimeAdapter
 
 
@@ -526,6 +532,69 @@ def test_load_script_does_not_duplicate_sys_path_entries(harness_repo):
     after_first = list(sys.path)
     load_script(nodes[0], harness_repo)
     assert sys.path == after_first
+
+
+# --- ensure_import_paths ordering (P1-4) ---
+#
+# The shipped images set PYTHONPATH=/app, so repo_root is *always* already on
+# sys.path when this runs -- "insert only if absent" is not enough. The
+# resulting order must be repo_root-then-script_dir unconditionally, matching
+# closure.py's fixed (repo_root, script_dir) search-root order (see that
+# module's docstring). Otherwise a repo with helpers.py at both the root and
+# next to the script hashes one file and executes the other.
+
+
+def test_ensure_import_paths_repo_root_already_present_still_goes_first(tmp_path):
+    """Simulates PYTHONPATH=/app: repo_root is on sys.path before the call."""
+    repo_root = tmp_path / "repo"
+    script_dir = repo_root / "scripts"
+    script_dir.mkdir(parents=True)
+    sys.path.insert(0, str(repo_root.resolve()))
+
+    ensure_import_paths(repo_root, script_dir)
+
+    assert sys.path.index(str(repo_root.resolve())) < sys.path.index(str(script_dir.resolve()))
+
+
+def test_ensure_import_paths_script_dir_already_present_repo_root_still_first(tmp_path):
+    repo_root = tmp_path / "repo"
+    script_dir = repo_root / "scripts"
+    script_dir.mkdir(parents=True)
+    sys.path.insert(0, str(script_dir.resolve()))
+
+    ensure_import_paths(repo_root, script_dir)
+
+    assert sys.path.index(str(repo_root.resolve())) < sys.path.index(str(script_dir.resolve()))
+
+
+def test_ensure_import_paths_both_already_present_in_wrong_order_is_corrected(tmp_path):
+    """Both roots pre-present, script_dir ahead of repo_root -- the exact shape
+    a prior buggy call (or a container with a stale sys.path) would leave."""
+    repo_root = tmp_path / "repo"
+    script_dir = repo_root / "scripts"
+    script_dir.mkdir(parents=True)
+    sys.path.insert(0, str(repo_root.resolve()))
+    sys.path.insert(0, str(script_dir.resolve()))
+    assert sys.path.index(str(script_dir.resolve())) < sys.path.index(str(repo_root.resolve()))
+
+    ensure_import_paths(repo_root, script_dir)
+
+    assert sys.path.index(str(repo_root.resolve())) < sys.path.index(str(script_dir.resolve()))
+
+
+def test_ensure_import_paths_is_idempotent(tmp_path):
+    """Calling twice must not grow sys.path or duplicate either entry."""
+    repo_root = tmp_path / "repo"
+    script_dir = repo_root / "scripts"
+    script_dir.mkdir(parents=True)
+
+    ensure_import_paths(repo_root, script_dir)
+    after_first = list(sys.path)
+    ensure_import_paths(repo_root, script_dir)
+
+    assert sys.path == after_first
+    assert sys.path.count(str(repo_root.resolve())) == 1
+    assert sys.path.count(str(script_dir.resolve())) == 1
 
 
 def test_adapter_construction_failure_emits_single_load_error_block(monkeypatch, harness_repo, capsys):

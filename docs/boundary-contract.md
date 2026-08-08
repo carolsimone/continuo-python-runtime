@@ -205,7 +205,11 @@ own `import` statements, resolved by static AST analysis
   over-inclusion only costs one extra revalidation — the tradeoff
   `closure.py`'s own module docstring documents as deliberate.
 - **Limit — dynamic imports are rejected, not approximated.**
-  `importlib` (in any form), `__import__`, `exec`, `eval`, and any
+  `importlib` (in any form), `builtins` (the module, in any form —
+  `import builtins`, `from builtins import ...`), `__builtins__` (the name
+  every module's globals are injected with at import time — see §13.4's
+  loader note; `__builtins__['exec'](...)` needs no preceding `import
+  builtins` at all), `__import__`, `exec`, `eval`, and any
   `.import_module(...)` attribute access (on any receiver — the predicate
   doesn't care what object it's called on) are refused wherever
   `continuo-runtime lint` is pointed (typically `scripts/`), and —
@@ -213,7 +217,25 @@ own `import` statements, resolved by static AST analysis
   **and every closure member** by the merger itself (`resolve_closure`
   raises `ContractError` on the first one found), so even a shared helper
   module outside the linted path cannot smuggle one in. What static
-  analysis cannot see must not exist.
+  analysis cannot see must not exist. The one plausible legitimate casualty
+  is `from builtins import str` (the `python-future` compatibility shim):
+  it is rejected exactly like any other `ImportFrom` whose root module is
+  `builtins`, with no exemption.
+- **Every closure member is held to the full lint rule set, not only
+  dynamic-import rejection.** `continuo-runtime lint` (typically pointed at
+  `scripts/` in CI, for fast feedback) checks only the files given to it —
+  a helper imported from outside that path, e.g. `lib/shared.py` via `from
+  lib.shared import ...`, is invisible to that step. `continuo-runtime
+  merge` closes that gap independently: before computing a node's hash
+  parts, it runs the same rules CI's lint applies — L1 no warehouse driver
+  imports, L2 no SQL string literals, L3 no forbidden data-access calls,
+  L4 no private-attribute access, L5 no dynamic-import constructs — over
+  the node's script **and every resolved closure member**, and raises
+  `ContractError` naming every offending file if any produces a violation.
+  Because the merger is the thing that produces the release artifact, this
+  cannot be bypassed by a stale or hand-edited CI workflow file: a helper
+  outside `scripts/` can never become a side channel around the harness's
+  sole write sink.
 - **Limit — data files are not members.** A script reading a non-`.py`
   file from the repo (a CSV, a JSON fixture) does not fingerprint that
   file — such inputs belong in the warehouse or in a declared `reads`

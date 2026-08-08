@@ -190,15 +190,72 @@ def test_index_name_derives_from_table_and_columns():
 def test_index_name_truncates_to_postgres_identifier_limit():
     """Test that a derived name over 63 bytes is truncated to exactly 63 bytes.
 
-    Truncating here keeps the emitted DDL's index name equal to the name
+    Truncating here keeps the emitted DDL's index name within the length
     postgres itself would store (NAMEDATALEN silently truncates longer
     identifiers), so the truncation must happen before the name reaches DDL.
+    A digest suffix is appended for uniqueness (P2-6), so the result is no
+    longer simply a prefix of the untruncated name.
+
+    Asserts ``== 63``, not ``<= 63``: the truncation keeps as much of the
+    original name as fits alongside the 9-byte ``_`` + digest suffix, so for
+    an ASCII input the result always fills the limit exactly. A ``<= 63``
+    assertion would pass against a broken implementation that returned any
+    short constant string, regardless of *table*/*columns* -- it must fail
+    if the truncation logic starts producing shorter-than-necessary names.
     """
     columns = ["a_very_long_column_name"] * 4
-    full = f"ix_a_table_with_quite_a_long_name_{'_'.join(columns)}"
     name = _index_name("a_table_with_quite_a_long_name", columns)
     assert len(name.encode("utf-8")) == 63
-    assert full.startswith(name)
+
+
+def test_index_name_truncated_name_ends_with_hex_digest_suffix():
+    """Test that a truncated name ends with '_' + 8 lowercase hex characters."""
+    columns = ["a_very_long_column_name"] * 4
+    name = _index_name("a_table_with_quite_a_long_name", columns)
+    assert len(name.encode("utf-8")) <= 63
+    prefix, sep, suffix = name.rpartition("_")
+    assert sep == "_"
+    assert len(suffix) == 8
+    assert all(c in "0123456789abcdef" for c in suffix)
+
+
+def test_index_name_different_columns_on_a_60_byte_table_produce_different_names():
+    """Test P2-6's fail-open corner: a table name long enough that ``ix_`` +
+    table alone already consumes all 63 bytes must not collapse every index
+    on it to the same default name (CREATE INDEX IF NOT EXISTS would then
+    silently skip every index after the first)."""
+    table = "t" * 60
+    name_a = _index_name(table, ["col_a"])
+    name_b = _index_name(table, ["col_b"])
+    assert name_a != name_b
+    assert len(name_a.encode("utf-8")) <= 63
+    assert len(name_b.encode("utf-8")) <= 63
+
+
+def test_index_name_digest_suffix_differs_for_different_column_lists():
+    """Test that two different column lists on the same long table yield
+    different suffixes rather than colliding on a shared prefix's digest."""
+    table = "t" * 60
+    suffix_a = _index_name(table, ["col_a"]).rsplit("_", 1)[-1]
+    suffix_b = _index_name(table, ["col_b"]).rsplit("_", 1)[-1]
+    assert suffix_a != suffix_b
+
+
+def test_index_name_digest_suffix_depends_on_the_full_name_not_just_columns():
+    """Test that the digest is derived from the full (untruncated) name --
+    ``ix_<table>_<cols>`` -- not from the column list alone.
+
+    Two calls with an *identical* column list but different (both over-long)
+    table names must still produce different suffixes: a digest computed
+    from only the column list could not distinguish this case and would
+    wrongly produce the same suffix for both, defeating the very disambiguation
+    P2-6 needs (two indexes on two different-but-same-length tables, with the
+    same column list, must not collide on one truncated default name).
+    """
+    columns = ["a_very_long_column_name"] * 4
+    suffix_1 = _index_name("a_table_with_quite_a_long_name", columns).rsplit("_", 1)[-1]
+    suffix_2 = _index_name("a_different_table_with_a_long_name", columns).rsplit("_", 1)[-1]
+    assert suffix_1 != suffix_2
 
 
 _ONE_COL = [{"name": "id", "type": "INT", "nullable": True}]
@@ -295,6 +352,78 @@ def test_ensure_table_multiple_indexes_all_run_in_one_cursor_block():
     assert conn.rolled_back == 0
 
 
+def test_ensure_table_rejects_explicit_name_colliding_with_a_derived_name():
+    """Test that an explicit `name` equal to another entry's derived default
+    is rejected too -- the digest suffix alone cannot prevent this collision,
+    since the colliding name here is never truncated in the first place."""
+    conn = _FakeConnection()
+    adapter = PostgresRuntimeAdapter(conn)
+    with pytest.raises(ValueError, match="ix_t_id"):
+        adapter.ensure_table(
+            "s", "t", _ONE_COL,
+            config={"indexes": [
+                {"columns": ["id"], "name": "ix_t_id"},
+                {"columns": ["id"]},
+            ]},
+        )
+    assert conn.cursors == []
+    assert conn.committed == 0
+    assert conn.rolled_back == 0
+
+
+def test_ensure_table_rejects_two_overlong_explicit_names_sharing_a_63_byte_prefix():
+    """review-fix-d P2-6-followup reproduction: an explicit `name:` never
+    passed through the truncation gate at all, so two different explicit
+    names over 63 bytes that share their first 63 bytes were both accepted
+    -- postgres truncates each to the same 63-byte identifier at CREATE
+    INDEX time, and `CREATE INDEX IF NOT EXISTS` silently skips the second,
+    exactly the failure P2-6 was raised to close. Explicit names must now be
+    truncated (matching postgres's own truncation) before the duplicate-name
+    check, so this collision is rejected here instead of silently lost at
+    the warehouse."""
+    conn = _FakeConnection()
+    adapter = PostgresRuntimeAdapter(conn)
+    prefix = "x" * 63
+    name_a = prefix + "AAAAAA"  # 69 bytes, shares prefix's first 63 bytes
+    name_b = prefix + "BBBBB"  # 68 bytes, shares the same first 63 bytes
+    with pytest.raises(ValueError, match="duplicate index name"):
+        adapter.ensure_table(
+            "s", "t", _ONE_COL,
+            config={"indexes": [
+                {"columns": ["id"], "name": name_a},
+                {"columns": ["id"], "name": name_b},
+            ]},
+        )
+    assert conn.cursors == []
+    assert conn.committed == 0
+    assert conn.rolled_back == 0
+
+
+def test_explicit_index_name_over_limit_is_truncated_to_postgres_identifier_limit():
+    """An explicit name over 63 bytes must itself be truncated to at most 63
+    bytes -- otherwise the emitted DDL's name would not match the name
+    postgres actually stores (the same invariant `_index_name` upholds for
+    derived defaults). Truncation matches postgres's own behavior exactly: a
+    plain byte-for-byte cut to 63 bytes, with no injected digest -- unlike a
+    derived default, an explicit name is something the author chose, so a
+    collision after truncation is surfaced (see the duplicate-name test
+    above) rather than silently altered to avoid it."""
+    conn = _FakeConnection()
+    adapter = PostgresRuntimeAdapter(conn)
+    long_name = "y" * 70
+    adapter.ensure_table(
+        "s", "t", _ONE_COL, config={"indexes": [{"columns": ["id"], "name": long_name}]}
+    )
+    expected = pg_sql.SQL("CREATE {}INDEX IF NOT EXISTS {} ON {}.{} ({})").format(
+        pg_sql.SQL(""),
+        pg_sql.Identifier("y" * 63),
+        pg_sql.Identifier("s"),
+        pg_sql.Identifier("t"),
+        pg_sql.SQL(", ").join([pg_sql.Identifier("id")]),
+    )
+    assert conn.cursors[-1].statements[1] == expected
+
+
 _BAD_CONFIGS = [
         pytest.param({"sortkey": ["id"]}, "sortkey", id="unknown_top_level_key"),
         pytest.param(
@@ -324,6 +453,13 @@ _BAD_CONFIGS = [
         ),
         pytest.param(
             {"indexes": [{"columns": ["id"], "name": 123}]}, "name", id="name_not_a_string"
+        ),
+        pytest.param(
+            {"indexes": [
+                {"columns": ["id"], "name": "dup"},
+                {"columns": ["id"], "name": "dup"},
+            ]},
+            "dup", id="duplicate_explicit_index_name",
         ),
 ]
 

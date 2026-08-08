@@ -262,7 +262,7 @@ _ONE_COL = [{"name": "id", "type": "INT", "nullable": True}]
 
 
 def test_ensure_table_with_none_config_emits_no_index_ddl():
-    """Test that config=None creates the table and nothing else.
+    """Test that config={} creates the table and nothing else.
 
     ``_ensure_schema`` opens its own earlier cursor for the advisory-lock/
     CREATE SCHEMA/unlock sequence; ``conn.cursors[-1]`` is the table+index
@@ -270,7 +270,7 @@ def test_ensure_table_with_none_config_emits_no_index_ddl():
     """
     conn = _FakeConnection()
     adapter = PostgresRuntimeAdapter(conn)
-    adapter.ensure_table("s", "t", _ONE_COL, config=None)
+    adapter.ensure_table("s", "t", _ONE_COL, config={})
     assert len(conn.cursors[-1].statements) == 1  # CREATE TABLE only
     assert conn.rolled_back == 0
 
@@ -491,7 +491,7 @@ def test_ensure_table_bad_column_type_still_rejects_and_emits_no_ddl():
     adapter = PostgresRuntimeAdapter(conn)
     with pytest.raises(ValueError):
         adapter.ensure_table(
-            "s", "t", [{"name": "id", "type": "NOT_A_TYPE", "nullable": True}], config=None
+            "s", "t", [{"name": "id", "type": "NOT_A_TYPE", "nullable": True}], config={}
         )
     assert conn.cursors == []
 

@@ -287,12 +287,11 @@ executor runs it as a Kubernetes Job:
   `RuntimeAdapter.ensure_table` — applying the node's `config` physical
   layout on create, see §13.1 — and performs the only INSERT. Scripts get
   a read-only connection surface. The harness calls `ensure_table(...,
-  config=...)` as a keyword unconditionally, so every `RuntimeAdapter`
-  implementation must accept it today even though no released
-  `continuo-validation-contract` version's abstract `ensure_table`
-  declares the parameter (the `0.4.0` port pinned by this repo still
-  reads `ensure_table(self, schema, table, columns)`); a future contract
-  release is expected to add `config` to the port itself.
+  config=...)` as a keyword unconditionally, and as of
+  `continuo-validation-contract` 0.6.0 (the version this repo pins) the
+  abstract port declares it: `ensure_table(self, schema, table, columns,
+  *, config)` — required and keyword-only. Adapters implement exactly that
+  signature; callers pass `{}` when a node declares no physical layout.
 - **Early `config` tripwire**: `ensure_table` is called only *after* the
   script has run and its result has been conformed, so a bad `config` would
   otherwise burn the entire node run before failing. The harness therefore

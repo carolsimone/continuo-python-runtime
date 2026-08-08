@@ -113,11 +113,11 @@ class FakeRuntimeAdapter:
     def fetch(self, sql):
         return self.tables[sql]
 
-    def ensure_table(self, schema, table, columns, *, config=None):
-        # config is keyword-ONLY on purpose: docs/boundary-contract.md §13.4
-        # makes keyword-passing normative for every third-party
-        # RuntimeAdapter, and a signature that also accepts it positionally
-        # would let the harness regress to a positional call unnoticed.
+    def ensure_table(self, schema, table, columns, *, config):
+        # config is keyword-ONLY and required, matching the contract 0.6.0
+        # port: docs/boundary-contract.md §13.4 makes keyword-passing
+        # normative, and a signature that also accepts it positionally would
+        # let the harness regress to a positional call unnoticed.
         self.ensured = (schema, table, columns)
         self.ensured_config = config
 

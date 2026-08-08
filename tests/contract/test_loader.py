@@ -552,6 +552,66 @@ def test_load_contract_dir_check_reads_false_still_validates_dialect(tmp_path):
         load_contract_dir(tmp_path, dialect="POSTGRESQL-9", check_reads=False)
 
 
+# --- cyclic `config` containers (P2-7) ---
+#
+# PyYAML's safe loader constructs genuinely recursive Python objects from
+# anchors/aliases (`&c` / `*c`), so `_validate_config`'s recursive `_check`
+# can be handed a container that contains itself. Without cycle detection
+# that recurses until RecursionError, an uncaught traceback instead of the
+# ContractError every other malformed `config` produces.
+
+
+def test_load_dir_config_yaml_anchor_cycle_raises_contract_error_not_recursion_error(tmp_path):
+    """A self-referential `config` (an anchored mapping whose own `indexes`
+    list aliases it) must raise ContractError naming the circular reference,
+    not propagate PyYAML's cyclic object as an uncaught RecursionError."""
+    a = tmp_path / "a.yml"
+    a.write_text(
+        "nodes:\n"
+        "  - schema: analytics\n"
+        "    table: t\n"
+        "    owner: marketing\n"
+        "    schedule: daily\n"
+        "    criticality: SECONDARY\n"
+        "    script: scripts/t.py\n"
+        "    reads:\n"
+        "      ids: select id from analytics.a\n"
+        "    output_columns:\n"
+        "      - {name: id, type: INTEGER}\n"
+        "    config: &cfg\n"
+        "      indexes:\n"
+        "        - *cfg\n"
+    )
+    with pytest.raises(ContractError, match="circular"):
+        load_contract_dir(a.parent)
+
+
+def test_load_dir_config_yaml_anchor_dag_not_a_cycle_still_validates(tmp_path):
+    """The same sub-mapping aliased twice at sibling positions is a legal
+    DAG, not a cycle -- it must not be misreported as a circular reference."""
+    a = tmp_path / "a.yml"
+    a.write_text(
+        "nodes:\n"
+        "  - schema: analytics\n"
+        "    table: t\n"
+        "    owner: marketing\n"
+        "    schedule: daily\n"
+        "    criticality: SECONDARY\n"
+        "    script: scripts/t.py\n"
+        "    reads:\n"
+        "      ids: select id from analytics.a\n"
+        "    output_columns:\n"
+        "      - {name: id, type: INTEGER}\n"
+        "    config:\n"
+        "      a:\n"
+        "        - &shared {columns: [id]}\n"
+        "      b:\n"
+        "        - *shared\n"
+    )
+    nodes = load_contract_dir(a.parent)
+    assert nodes[0].config == {"a": [{"columns": ["id"]}], "b": [{"columns": ["id"]}]}
+
+
 def test_load_contract_dir_threads_check_reads_to_parse_node(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(

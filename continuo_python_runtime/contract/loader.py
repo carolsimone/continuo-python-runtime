@@ -86,24 +86,48 @@ def _validate_config(raw: Any, label: str) -> dict[str, Any]:
     JSON-serializable. Non-string keys would make `json.dumps(..., sort_keys=True)`
     raise inside the hasher, and a non-serializable value would break the wire
     artifact — both must surface here, naming the node, not deep in CI.
+
+    YAML aliases (``&anchor`` / ``*anchor``) can make PyYAML construct a
+    genuinely cyclic object graph — a mapping whose own value (however deeply
+    nested) is itself. Recursing into that without tracking what is already
+    on the call stack raises an uncaught ``RecursionError`` instead of this
+    function's promised ``ContractError``. ``active`` holds the ``id()`` of
+    every dict/list container currently being descended into; a container is
+    added just before recursing into its items and discarded right after, so
+    re-entering one still on the stack is a genuine back-edge (a cycle), while
+    the *same* container reached twice at sibling positions — a legal DAG,
+    e.g. one list aliased under two different keys — is not: its first visit
+    finishes (and is discarded) before the second begins.
     """
     if raw is None:
         return {}
     if not isinstance(raw, dict):
         raise ContractError(f"{label}: 'config' must be a mapping")
 
+    active: set[int] = set()
+
     def _check(value: Any, key: Any) -> None:
         """Validate ``value`` (found under ``key`` in its enclosing mapping)."""
-        if isinstance(value, dict):
-            for sub_key, sub_value in value.items():
-                if not isinstance(sub_key, str):
-                    raise ContractError(
-                        f"{label}: 'config' keys must be strings, got {sub_key!r}"
-                    )
-                _check(sub_value, sub_key)
-        elif isinstance(value, list):
-            for item in value:
-                _check(item, key)
+        if isinstance(value, (dict, list)):
+            container_id = id(value)
+            if container_id in active:
+                raise ContractError(
+                    f"{label}: 'config' contains a circular reference at {key!r}"
+                )
+            active.add(container_id)
+            try:
+                if isinstance(value, dict):
+                    for sub_key, sub_value in value.items():
+                        if not isinstance(sub_key, str):
+                            raise ContractError(
+                                f"{label}: 'config' keys must be strings, got {sub_key!r}"
+                            )
+                        _check(sub_value, sub_key)
+                else:
+                    for item in value:
+                        _check(item, key)
+            finally:
+                active.discard(container_id)
         elif not isinstance(value, _JSON_SCALARS):
             raise ContractError(
                 f"{label}: 'config' value for {key!r} is not JSON-serializable: {value!r}"

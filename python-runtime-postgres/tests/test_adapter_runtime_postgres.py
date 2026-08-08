@@ -188,17 +188,51 @@ def test_index_name_derives_from_table_and_columns():
 
 
 def test_index_name_truncates_to_postgres_identifier_limit():
-    """Test that a derived name over 63 bytes is truncated to exactly 63 bytes.
+    """Test that a derived name over 63 bytes is truncated to at most 63 bytes.
 
-    Truncating here keeps the emitted DDL's index name equal to the name
+    Truncating here keeps the emitted DDL's index name within the length
     postgres itself would store (NAMEDATALEN silently truncates longer
     identifiers), so the truncation must happen before the name reaches DDL.
+    A digest suffix is appended for uniqueness (P2-6), so the result is no
+    longer simply a prefix of the untruncated name.
     """
     columns = ["a_very_long_column_name"] * 4
-    full = f"ix_a_table_with_quite_a_long_name_{'_'.join(columns)}"
     name = _index_name("a_table_with_quite_a_long_name", columns)
-    assert len(name.encode("utf-8")) == 63
-    assert full.startswith(name)
+    assert len(name.encode("utf-8")) <= 63
+
+
+def test_index_name_truncated_name_ends_with_hex_digest_suffix():
+    """Test that a truncated name ends with '_' + 8 lowercase hex characters."""
+    columns = ["a_very_long_column_name"] * 4
+    name = _index_name("a_table_with_quite_a_long_name", columns)
+    assert len(name.encode("utf-8")) <= 63
+    prefix, sep, suffix = name.rpartition("_")
+    assert sep == "_"
+    assert len(suffix) == 8
+    assert all(c in "0123456789abcdef" for c in suffix)
+
+
+def test_index_name_different_columns_on_a_60_byte_table_produce_different_names():
+    """Test P2-6's fail-open corner: a table name long enough that ``ix_`` +
+    table alone already consumes all 63 bytes must not collapse every index
+    on it to the same default name (CREATE INDEX IF NOT EXISTS would then
+    silently skip every index after the first)."""
+    table = "t" * 60
+    name_a = _index_name(table, ["col_a"])
+    name_b = _index_name(table, ["col_b"])
+    assert name_a != name_b
+    assert len(name_a.encode("utf-8")) <= 63
+    assert len(name_b.encode("utf-8")) <= 63
+
+
+def test_index_name_digest_suffix_differs_for_different_column_lists():
+    """Test that the digest is derived from the full (untruncated) name, so
+    two different column lists on the same long table yield different
+    suffixes rather than colliding on a shared prefix's digest."""
+    table = "t" * 60
+    suffix_a = _index_name(table, ["col_a"]).rsplit("_", 1)[-1]
+    suffix_b = _index_name(table, ["col_b"]).rsplit("_", 1)[-1]
+    assert suffix_a != suffix_b
 
 
 _ONE_COL = [{"name": "id", "type": "INT", "nullable": True}]
@@ -295,6 +329,25 @@ def test_ensure_table_multiple_indexes_all_run_in_one_cursor_block():
     assert conn.rolled_back == 0
 
 
+def test_ensure_table_rejects_explicit_name_colliding_with_a_derived_name():
+    """Test that an explicit `name` equal to another entry's derived default
+    is rejected too -- the digest suffix alone cannot prevent this collision,
+    since the colliding name here is never truncated in the first place."""
+    conn = _FakeConnection()
+    adapter = PostgresRuntimeAdapter(conn)
+    with pytest.raises(ValueError, match="ix_t_id"):
+        adapter.ensure_table(
+            "s", "t", _ONE_COL,
+            config={"indexes": [
+                {"columns": ["id"], "name": "ix_t_id"},
+                {"columns": ["id"]},
+            ]},
+        )
+    assert conn.cursors == []
+    assert conn.committed == 0
+    assert conn.rolled_back == 0
+
+
 _BAD_CONFIGS = [
         pytest.param({"sortkey": ["id"]}, "sortkey", id="unknown_top_level_key"),
         pytest.param(
@@ -324,6 +377,13 @@ _BAD_CONFIGS = [
         ),
         pytest.param(
             {"indexes": [{"columns": ["id"], "name": 123}]}, "name", id="name_not_a_string"
+        ),
+        pytest.param(
+            {"indexes": [
+                {"columns": ["id"], "name": "dup"},
+                {"columns": ["id"], "name": "dup"},
+            ]},
+            "dup", id="duplicate_explicit_index_name",
         ),
 ]
 

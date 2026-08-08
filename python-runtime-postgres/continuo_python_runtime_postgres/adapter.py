@@ -7,6 +7,7 @@ contents. Unlike the validation adapter (autocommit DDL), this adapter runs with
 roll back together); ``fetch`` and ``ensure_table`` each commit (or roll back on
 error) so no operation leaves a transaction open across calls.
 """
+import hashlib
 import logging
 import os
 
@@ -40,12 +41,24 @@ def _index_name(table: str, columns: list[str]) -> str:
 
     Truncates on encoded UTF-8 bytes, not characters: postgres's limit is
     bytes, and a multibyte identifier would slip past a character-wise slice.
+
+    A name that overflows the limit keeps a uniqueness-preserving suffix --
+    ``"_"`` plus the leading 8 hex characters of
+    ``sha256(<full untruncated name>)`` -- rather than a bare truncation: a
+    long enough table name leaves ``ix_<table>_`` alone at or past 63 bytes,
+    so every index on it would otherwise truncate to the *same* default name,
+    and ``CREATE INDEX IF NOT EXISTS`` would then silently skip every index
+    after the first (P2-6). The digest is taken over the full name, so two
+    different column lists that truncate to the same prefix still get
+    different suffixes.
     """
     name = f"ix_{table}_{'_'.join(columns)}"
     encoded = name.encode("utf-8")
     if len(encoded) <= _MAX_IDENTIFIER_BYTES:
         return name
-    return encoded[:_MAX_IDENTIFIER_BYTES].decode("utf-8", "ignore")
+    digest = hashlib.sha256(encoded).hexdigest()[:8]
+    truncated = encoded[: _MAX_IDENTIFIER_BYTES - 9].decode("utf-8", "ignore")
+    return f"{truncated}_{digest}"
 
 
 def _validated_indexes(
@@ -65,7 +78,11 @@ def _validated_indexes(
             an unrecognized index key; ``columns`` missing, not a list, empty,
             or containing a non-string; an index column not present in
             *column_names*; ``unique`` present and not a bool; ``name``
-            present and not a non-empty string.
+            present and not a non-empty string; or two entries normalizing to
+            the same index name (an explicit ``name`` colliding with another
+            explicit ``name`` or with a derived default) -- letting that
+            through would silently drop every colliding index but the first
+            under ``CREATE INDEX IF NOT EXISTS`` (P2-6).
     """
     if not config:
         return []
@@ -119,6 +136,19 @@ def _validated_indexes(
             "unique": unique,
             "name": name if name is not None else _index_name(table, columns),
         })
+
+    # Reject before returning -- this is the fail-closed gate that runs
+    # before any DDL is emitted, so a collision (explicit `name` vs. another
+    # explicit `name`, or vs. a derived default) must surface here rather
+    # than let CREATE INDEX IF NOT EXISTS silently skip every index but the
+    # first that resolves to the same name.
+    seen_names: set[str] = set()
+    for index in normalized:
+        index_name = index["name"]
+        if index_name in seen_names:
+            raise ValueError(f"duplicate index name: {index_name!r}")
+        seen_names.add(index_name)
+
     return normalized
 
 

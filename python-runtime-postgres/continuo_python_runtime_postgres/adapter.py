@@ -9,7 +9,6 @@ error) so no operation leaves a transaction open across calls.
 """
 import logging
 import os
-import re
 
 from typing import Any
 
@@ -17,29 +16,125 @@ import psycopg2  # type: ignore[import-untyped]
 import pyarrow as pa  # type: ignore[import-untyped]
 
 from continuo_validation_contract.port import RuntimeAdapter  # type: ignore[import-untyped]
+from continuo_validation_contract.types import validate_column_type  # type: ignore[import-untyped]
 from psycopg2 import errors as pg_errors  # type: ignore[import-untyped]
 from psycopg2 import sql as pg_sql  # type: ignore[import-untyped]
 from psycopg2.extras import execute_values  # type: ignore[import-untyped]
 
 logger = logging.getLogger("continuo_python_runtime_postgres")
 
-# Contract SQL-type grammar (case-insensitive). The matched text is interpolated
-# directly into DDL via pg_sql.SQL, so this is an injection guard, not just
-# validation — anything that doesn't match this shape is rejected outright.
-_TYPE_RE = re.compile(
-    r"^("
-    r"BIGINT|INT|INTEGER|DOUBLE PRECISION|TEXT|TIMESTAMP|DATE|BOOLEAN|"
-    r"(NUMERIC|DECIMAL)\(\d+,\s*\d+\)|"
-    r"(VARCHAR|CHAR)\(\d+\)"
-    r")\Z",
-    re.IGNORECASE | re.ASCII,
-)
+# The postgres physical-layout vocabulary: `indexes` is the only recognized
+# top-level config key. This adapter is the sole owner and enforcer of this
+# vocabulary — the contract loader validates `config` as shape only and stays
+# engine-blind (see continuo_python_runtime/contract/loader.py).
+_KNOWN_CONFIG_KEYS: tuple[str, ...] = ("indexes",)
+_KNOWN_INDEX_KEYS: tuple[str, ...] = ("columns", "unique", "name")
+# NAMEDATALEN - 1. Postgres silently truncates longer identifiers, so a derived
+# name over this limit must be truncated here too, or the emitted DDL's name
+# would not match the name postgres actually stores.
+_MAX_IDENTIFIER_BYTES = 63
 
 
-def _validate_column_type(type_str: str) -> None:
-    """Raise ValueError unless *type_str* matches the contract's SQL type grammar."""
-    if not _TYPE_RE.match(type_str):
-        raise ValueError(f"unsupported or invalid SQL type: {type_str!r}")
+def _index_name(table: str, columns: list[str]) -> str:
+    """Return the default index name for *columns* on *table*, within 63 bytes.
+
+    Truncates on encoded UTF-8 bytes, not characters: postgres's limit is
+    bytes, and a multibyte identifier would slip past a character-wise slice.
+    """
+    name = f"ix_{table}_{'_'.join(columns)}"
+    encoded = name.encode("utf-8")
+    if len(encoded) <= _MAX_IDENTIFIER_BYTES:
+        return name
+    return encoded[:_MAX_IDENTIFIER_BYTES].decode("utf-8", "ignore")
+
+
+def _validated_indexes(
+    config: dict[str, Any] | None, table: str, column_names: list[str]
+) -> list[dict[str, Any]]:
+    """Validate *config* against the postgres 'indexes' vocabulary; return normalized entries.
+
+    Every key — top level and per index entry — is checked before the caller
+    emits a single statement, so a malformed config never leaves a half-built
+    table behind (fail closed). An absent or empty *config* returns ``[]``.
+    Each returned entry carries ``columns`` (list[str]), ``unique`` (bool), and
+    ``name`` (str, defaulted via :func:`_index_name` when not given explicitly).
+
+    Raises:
+        ValueError: Naming the offending key, for any of: an unrecognized
+            top-level key; ``indexes`` not a list, or a non-mapping element;
+            an unrecognized index key; ``columns`` missing, not a list, empty,
+            or containing a non-string; an index column not present in
+            *column_names*; ``unique`` present and not a bool; ``name``
+            present and not a non-empty string.
+    """
+    if not config:
+        return []
+    for key in config:
+        if key not in _KNOWN_CONFIG_KEYS:
+            raise ValueError(f"unrecognized config key: {key!r}")
+
+    # .get, not a bare subscript: this function's whole job is failing closed
+    # with a named message, and `indexes` is only guaranteed present while
+    # _KNOWN_CONFIG_KEYS has exactly one member. A second postgres key would
+    # otherwise turn `{"newkey": ...}` into a bare KeyError right here.
+    raw_indexes = config.get("indexes", [])
+    if not isinstance(raw_indexes, list):
+        raise ValueError(f"config 'indexes' must be a list, got {type(raw_indexes).__name__}")
+
+    declared = set(column_names)
+    normalized: list[dict[str, Any]] = []
+    for entry in raw_indexes:
+        if not isinstance(entry, dict):
+            raise ValueError(f"each 'indexes' entry must be a mapping, got {entry!r}")
+        for key in entry:
+            if key not in _KNOWN_INDEX_KEYS:
+                raise ValueError(f"unrecognized index key: {key!r}")
+
+        columns = entry.get("columns")
+        if (
+            not isinstance(columns, list)
+            or not columns
+            or not all(isinstance(c, str) for c in columns)
+        ):
+            raise ValueError(
+                f"index 'columns' must be a non-empty list of column names, got {columns!r}"
+            )
+        missing = [c for c in columns if c not in declared]
+        if missing:
+            raise ValueError(
+                f"index on undeclared column(s) {missing!r}; "
+                f"declared columns: {sorted(declared)!r}"
+            )
+
+        unique = entry.get("unique", False)
+        if not isinstance(unique, bool):
+            raise ValueError(f"index 'unique' must be a boolean, got {unique!r}")
+
+        name = entry.get("name")
+        if name is not None and (not isinstance(name, str) or not name):
+            raise ValueError(f"index 'name' must be a non-empty string, got {name!r}")
+
+        normalized.append({
+            "columns": list(columns),
+            "unique": unique,
+            "name": name if name is not None else _index_name(table, columns),
+        })
+    return normalized
+
+
+def _index_ddl(schema: str, table: str, index: dict[str, Any]) -> "pg_sql.Composed":
+    """Build one ``CREATE [UNIQUE] INDEX IF NOT EXISTS`` statement for a validated *index*.
+
+    Every identifier — index name, schema, table, and each column — goes
+    through ``pg_sql.Identifier``; never raw interpolation.
+    """
+    return pg_sql.SQL("CREATE {}INDEX IF NOT EXISTS {} ON {}.{} ({})").format(
+        pg_sql.SQL("UNIQUE ") if index["unique"] else pg_sql.SQL(""),
+        pg_sql.Identifier(index["name"]),
+        pg_sql.Identifier(schema),
+        pg_sql.Identifier(table),
+        pg_sql.SQL(", ").join(pg_sql.Identifier(c) for c in index["columns"]),
+    )
 
 
 def _arrow_table_from_rows(colnames: list[str], rows: list[tuple[Any, ...]]) -> "pa.Table":
@@ -154,14 +249,59 @@ class PostgresRuntimeAdapter(RuntimeAdapter):
                 cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (schema,))
                 self._conn.commit()
 
-    def ensure_table(self, schema: str, table: str, columns: list[dict[str, Any]]) -> None:
+    @classmethod
+    def validate_config(
+        cls, config: dict[str, Any] | None, column_names: list[str]
+    ) -> None:
+        """Validate *config* against this engine's vocabulary, without connecting.
+
+        The harness calls this immediately after selecting the node, so a
+        malformed ``config`` — a singular ``index:`` typo, an index on an
+        undeclared column — fails in the first second of the run instead of
+        after the script has already computed its whole result. It is a
+        tripwire, not the enforcement point: ``ensure_table`` runs the very
+        same check again, unchanged, and remains the thing that guarantees no
+        DDL is emitted for a bad config. Both go through
+        :func:`_validated_indexes`, so the two cannot drift apart.
+
+        The index name derived here is thrown away, so a placeholder table
+        name is passed: nothing about naming is being validated (any string
+        is accepted), and no name reaches an error message.
+
+        Like ``config`` on ``ensure_table``, this method is not declared by
+        the abstract ``RuntimeAdapter`` in the pinned
+        ``continuo-validation-contract``; this repo ships both adapters and
+        the harness as one coordinated release. The harness skips the call
+        for an adapter that does not provide it (see
+        ``docs/boundary-contract.md`` §13.4), which costs that adapter only
+        earliness, never enforcement.
+
+        Raises:
+            ValueError: Exactly as :func:`_validated_indexes` does.
+        """
+        _validated_indexes(config, "_", column_names)
+
+    def ensure_table(
+        self,
+        schema: str,
+        table: str,
+        columns: list[dict[str, Any]],
+        config: dict[str, Any] | None = None,
+    ) -> None:
         """CREATE TABLE IF NOT EXISTS with typed DDL compiled from *columns*.
 
         Each column dict carries ``name``, ``type`` (validated against the
-        contract's SQL type grammar), ``nullable`` (bool).
+        contract's SQL type grammar), ``nullable`` (bool). *config* carries
+        this engine's physical-layout vocabulary — ``indexes`` — validated by
+        :func:`_validated_indexes` before any DDL runs, so a malformed config
+        never leaves a half-built table behind (fail closed). ``config`` is
+        keyword-defaulted because the abstract ``RuntimeAdapter.ensure_table``
+        in the pinned contract version does not declare it; the harness passes
+        it unconditionally regardless.
         """
+        indexes = _validated_indexes(config, table, [col["name"] for col in columns])
         for col in columns:
-            _validate_column_type(col["type"])
+            validate_column_type(col["type"])
 
         self._ensure_schema(schema)
 
@@ -181,6 +321,11 @@ class PostgresRuntimeAdapter(RuntimeAdapter):
             try:
                 logger.info("ensuring table %s.%s exists", schema, table)
                 cur.execute(stmt)
+                for index in indexes:
+                    logger.info(
+                        "ensuring index %s on %s.%s exists", index["name"], schema, table
+                    )
+                    cur.execute(_index_ddl(schema, table, index))
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()

@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from continuo_validation_contract.sql import ensure_single_read  # type: ignore[import-untyped]
+from sqlglot import Dialect
+from sqlglot.errors import TokenError
 
 from continuo_python_runtime.contract.model import (
     CRITICALITIES,
@@ -32,135 +35,13 @@ _ALLOWED_KEYS = {
     "extra_columns",
     "reads",
     "output_columns",
+    "config",
     "content_hash",
 }
 
 _REQUIRED_STRING_FIELDS = ("schema", "table", "owner", "schedule", "script")
 
 _ALLOWED_OUTPUT_COLUMN_KEYS = {"name", "type", "nullable"}
-
-
-def _mask_string_literals(sql: str) -> str | None:
-    """Return ``sql`` with the contents of single/double-quoted string
-    literals removed, so a ``;`` scan doesn't trip on one embedded in a
-    literal (e.g. ``split_part(tags, ';', 1)``).
-
-    Handles doubled ``''`` escapes inside single-quoted strings. The quote
-    delimiters themselves are kept; only the interior characters are
-    dropped. The result is not valid SQL - it exists solely for the
-    semicolon check below.
-
-    Returns ``None`` if a single- or double-quoted literal is left
-    unterminated (no closing quote before the end of the string): silently
-    truncating in that case would drop everything after the opening quote
-    -- including any ``;`` it was hiding -- and let a multi-statement read
-    through undetected.
-    """
-    result = []
-    i = 0
-    n = len(sql)
-    while i < n:
-        ch = sql[i]
-        if ch == "'":
-            result.append(ch)
-            i += 1
-            closed = False
-            while i < n:
-                if sql[i] == "'":
-                    if i + 1 < n and sql[i + 1] == "'":
-                        # doubled '' escape: part of the literal, drop both
-                        i += 2
-                        continue
-                    result.append(sql[i])
-                    i += 1
-                    closed = True
-                    break
-                i += 1
-            if not closed:
-                return None
-            continue
-        if ch == '"':
-            result.append(ch)
-            i += 1
-            closed = False
-            while i < n:
-                if sql[i] == '"':
-                    result.append(sql[i])
-                    i += 1
-                    closed = True
-                    break
-                i += 1
-            if not closed:
-                return None
-            continue
-        result.append(ch)
-        i += 1
-    return "".join(result)
-
-
-def _strip_leading_sql_comments(sql: str) -> str:
-    """Strip leading whitespace, ``-- ...`` line comments, and ``/* ... */``
-    block comments from the start of ``sql``.
-
-    An unterminated ``/*`` block comment (no closing ``*/``) consumes the
-    rest of the string, so callers see an empty statement rather than a
-    crash. Bounded by ``len(sql) + 1`` iterations (each iteration strictly
-    shrinks ``text``) with an explicit trailing return, so every path
-    returns a definite ``str`` rather than relying on an unbounded
-    ``while True`` loop that a type checker can't prove always exits via
-    ``return``.
-    """
-    text = sql
-    for _ in range(len(sql) + 1):
-        stripped = text.lstrip()
-        if stripped.startswith("--"):
-            newline = stripped.find("\n")
-            text = stripped[newline + 1 :] if newline != -1 else ""
-            continue
-        if stripped.startswith("/*"):
-            end = stripped.find("*/")
-            text = stripped[end + 2 :] if end != -1 else ""
-            continue
-        return stripped
-    return text.lstrip()
-
-
-def _validate_read_shape(label: str, name: str, sql: str) -> None:
-    """Enforce the §13.1 read shape: a single SELECT/WITH statement.
-
-    The read, after stripping whitespace and leading SQL comments, must
-    start with ``select``, ``with``, or a leading ``(`` (a parenthesized
-    SELECT), case-insensitive. It must contain no ``;`` except one optional
-    trailing semicolon; the semicolon scan is literal-aware, ignoring ``;``
-    characters inside single/double-quoted string literals. An unterminated
-    string literal is itself rejected -- it can otherwise hide arbitrary
-    trailing SQL (including a ``;``) from the scan.
-    Schema-qualification is left to the control plane's sqlglot validation.
-
-    Raises:
-        ContractError: If the shape is violated, naming the read.
-    """
-    stripped = sql.strip()
-    body = stripped[:-1] if stripped.endswith(";") else stripped
-    masked = _mask_string_literals(body)
-    if masked is None:
-        raise ContractError(
-            f"{label}: read '{name}' has an unterminated string literal"
-        )
-    if ";" in masked:
-        raise ContractError(
-            f"{label}: 'reads.{name}' must be a single SQL statement "
-            f"(only one optional trailing semicolon allowed)"
-        )
-    lowered = _strip_leading_sql_comments(body).lower()
-    if not (
-        lowered.startswith("select")
-        or lowered.startswith("with")
-        or lowered.startswith("(")
-    ):
-        raise ContractError(
-            f"{label}: 'reads.{name}' must start with SELECT or WITH"
-        )
 
 
 class _StrictLoader(yaml.SafeLoader):
@@ -193,10 +74,66 @@ def _node_label(raw: dict[str, Any], source: str) -> str:
     return source
 
 
-def parse_node(raw: dict[str, Any], source: str) -> Node:
+_JSON_SCALARS = (str, int, float, bool, type(None))
+
+
+def _validate_config(raw: Any, label: str) -> dict[str, Any]:
+    """Validate the node's physical-layout `config` as a JSON-shaped mapping.
+
+    The engine's adapter — not this loader — owns the vocabulary (§3.3), so the
+    only rules here are the ones the hash and the wire format need: it is a
+    mapping, every key at every level is a string, and every value is
+    JSON-serializable. Non-string keys would make `json.dumps(..., sort_keys=True)`
+    raise inside the hasher, and a non-serializable value would break the wire
+    artifact — both must surface here, naming the node, not deep in CI.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ContractError(f"{label}: 'config' must be a mapping")
+
+    def _check(value: Any, key: Any) -> None:
+        """Validate ``value`` (found under ``key`` in its enclosing mapping)."""
+        if isinstance(value, dict):
+            for sub_key, sub_value in value.items():
+                if not isinstance(sub_key, str):
+                    raise ContractError(
+                        f"{label}: 'config' keys must be strings, got {sub_key!r}"
+                    )
+                _check(sub_value, sub_key)
+        elif isinstance(value, list):
+            for item in value:
+                _check(item, key)
+        elif not isinstance(value, _JSON_SCALARS):
+            raise ContractError(
+                f"{label}: 'config' value for {key!r} is not JSON-serializable: {value!r}"
+            )
+
+    _check(raw, None)
+    return raw
+
+
+def parse_node(
+    raw: dict[str, Any],
+    source: str,
+    *,
+    dialect: str | None = None,
+    check_reads: bool = True,
+) -> Node:
     """Validate a single raw mapping and build a :class:`Node`.
 
     ``source`` is the originating filename; it appears in every error message.
+    ``dialect`` is a sqlglot dialect name (e.g. ``"postgres"``, ``"trino"``)
+    each declared read is checked against via
+    :func:`~continuo_validation_contract.sql.ensure_single_read`; ``None``
+    (the default) uses sqlglot's dialect-neutral parser.
+
+    ``check_reads=False`` skips *only* that :func:`ensure_single_read` call —
+    the read-shape gate — leaving every other rule here (required fields,
+    criticality, the ``reads`` map's own shape, output-column types and
+    uniqueness, ``config``, ``content_hash``) in force. It exists for
+    :func:`~continuo_python_runtime.harness.run_node`; see
+    :func:`load_contract_dir` for why the runtime opts out.
     """
     if not isinstance(raw, dict):
         raise ContractError(
@@ -252,7 +189,26 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
             raise ContractError(
                 f"{label}: 'reads.{name}' must be a non-empty SQL string"
             )
-        _validate_read_shape(label, name, sql)
+        if not check_reads:
+            continue
+        try:
+            ensure_single_read(sql, dialect)
+        except (ValueError, TokenError) as exc:
+            # ensure_single_read's own message is phrased for check_binds
+            # (its only other caller today), so it's wrapped rather than
+            # surfaced bare here. TokenError is also caught: an unterminated
+            # string literal or comment fails sqlglot's tokenizer with a
+            # TokenError, a SqlglotError sibling of ParseError and not a
+            # subclass of ValueError -- despite ensure_single_read's
+            # docstring promising every rejection is a ValueError. Only
+            # TokenError, not the broader SqlglotError, is caught here: by
+            # the time control reaches this point `dialect` has already been
+            # validated once in load_contract_dir, so any other SqlglotError
+            # a future sqlglot version might raise from this call should
+            # surface as itself, not get relabeled as a rejected read.
+            raise ContractError(
+                f"{label}: 'reads.{name}' must be a single read query ({exc})"
+            ) from exc
 
     raw_columns = raw.get("output_columns")
     if not isinstance(raw_columns, list) or not raw_columns:
@@ -298,6 +254,8 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
     if not isinstance(description, str):
         raise ContractError(f"{label}: 'description' must be a string")
 
+    config = _validate_config(raw.get("config"), label)
+
     content_hash = raw.get("content_hash")
     if content_hash is not None and not isinstance(content_hash, str):
         raise ContractError(f"{label}: 'content_hash' must be a string")
@@ -313,16 +271,58 @@ def parse_node(raw: dict[str, Any], source: str) -> Node:
         output_columns=tuple(columns),
         description=description,
         extra_columns=extra_columns,
+        config=config,
         content_hash=content_hash,
     )
 
 
-def load_contract_dir(path: Path) -> list[Node]:
+def load_contract_dir(
+    path: Path, *, dialect: str | None = None, check_reads: bool = True
+) -> list[Node]:
     """Load and validate every `*.yml`/`*.yaml` contract file under ``path``.
 
-    Raises `ContractError` if no nodes are found, if any file's document is
-    malformed, or if two nodes across files share the same `(schema, table)`.
+    ``check_reads=False`` skips the per-read
+    :func:`~continuo_validation_contract.sql.ensure_single_read` gate and
+    nothing else; every other rule in :func:`parse_node` and every rule here
+    (dialect validity, document shape, duplicate relations, "no contract
+    files found") still runs. The runtime
+    (:func:`~continuo_python_runtime.harness.run_node`) passes it, because
+    re-running the read-shape gate at container start can only introduce a
+    disagreement, never catch a new problem:
+
+    - CI already gated the reads (``continuo-runtime validate``), under the
+      repo's own ``--dialect``, and Continuo gated them again with its own
+      parser and bind-check before promoting the release.
+    - The runtime has no ``--dialect`` of its own, so it would re-parse with
+      the dialect-neutral grammar — a *different* and in places stricter
+      grammar than CI used. Ordinary postgres (``a ~ 'x'``, ``data @>
+      '{...}'``) parses under ``--dialect postgres`` and not under the
+      neutral parser, so a team following the docs would get a green
+      validate, a green merge, an accepted release, and a node that fails on
+      every single run.
+    - Nothing at run time consumes the parse: ``ctx.read`` resolves declared
+      reads by name and hands the SQL to the adapter verbatim.
+
+    ``dialect`` is validated once, up front, then forwarded to
+    :func:`parse_node` for every node, so every declared read is checked
+    against that sqlglot dialect (``None`` -- the default -- uses sqlglot's
+    dialect-neutral parser). Validating it here rather than leaving it to
+    the per-read ``ensure_single_read`` call matters: an unrecognized
+    dialect name (e.g. a typo'd ``--dialect POSTGRES`` instead of
+    ``postgres``) raises the same bare ``ValueError`` a genuinely
+    unparseable read would, and would otherwise be misreported as a
+    rejected read instead of a bad flag -- blaming an innocent, valid read.
+
+    Raises `ContractError` if ``dialect`` is not a sqlglot dialect name, if
+    no nodes are found, if any file's document is malformed, or if two nodes
+    across files share the same `(schema, table)`.
     """
+    if dialect is not None:
+        try:
+            Dialect.get_or_raise(dialect)
+        except ValueError as exc:
+            raise ContractError(f"unknown --dialect {dialect!r}: {exc}") from exc
+
     files = sorted(path.glob("*.yml")) + sorted(path.glob("*.yaml"))
 
     nodes: list[Node] = []
@@ -348,7 +348,9 @@ def load_contract_dir(path: Path) -> list[Node]:
             raise ContractError(f"{file.name}: 'nodes' must be a list")
 
         for raw_node in raw_nodes:
-            node = parse_node(raw_node, file.name)
+            node = parse_node(
+                raw_node, file.name, dialect=dialect, check_reads=check_reads
+            )
             existing_source = relation_sources.get(node.relation)
             if existing_source is not None:
                 raise ContractError(

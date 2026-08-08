@@ -5,6 +5,7 @@ import json
 import pyarrow as pa
 import yaml
 
+import continuo_python_runtime.cli as cli_module
 from continuo_python_runtime.cli import main
 from tests.conftest import FakeRuntimeAdapter
 
@@ -16,6 +17,44 @@ def test_validate_ok(contract_repo):
 def test_validate_bad_dir_exits_1(tmp_path, caplog):
     assert main(["validate", str(tmp_path)]) == 1
     assert any("no contract files" in r.message for r in caplog.records)
+
+
+def test_validate_dialect_flag_threads_to_loader(contract_repo, monkeypatch):
+    captured = {}
+
+    def fake_load_contract_dir(path, *, dialect=None):
+        captured["dialect"] = dialect
+        return []
+
+    monkeypatch.setattr(cli_module, "load_contract_dir", fake_load_contract_dir)
+    rc = main(["validate", str(contract_repo / "contracts"), "--dialect", "postgres"])
+    assert rc == 0
+    assert captured["dialect"] == "postgres"
+
+
+def test_validate_dialect_defaults_to_none(contract_repo, monkeypatch):
+    captured = {}
+
+    def fake_load_contract_dir(path, *, dialect=None):
+        captured["dialect"] = dialect
+        return []
+
+    monkeypatch.setattr(cli_module, "load_contract_dir", fake_load_contract_dir)
+    rc = main(["validate", str(contract_repo / "contracts")])
+    assert rc == 0
+    assert captured["dialect"] is None
+
+
+def test_validate_invalid_dialect_reports_bad_flag_not_bad_read(contract_repo, caplog):
+    """End-to-end (no mocking of load_contract_dir): a typo'd --dialect value
+    against a contract whose only read is perfectly valid SQL must exit 1
+    with a message naming --dialect, not one that reads as though the SQL
+    itself were rejected."""
+    rc = main(["validate", str(contract_repo / "contracts"), "--dialect", "POSTGRES"])
+    assert rc == 1
+    messages = [r.message for r in caplog.records]
+    assert any("--dialect" in m and "POSTGRES" in m for m in messages)
+    assert not any("must be a single read query" in m for m in messages)
 
 
 def test_merge_writes_artifact(contract_repo, tmp_path):
@@ -36,6 +75,62 @@ def test_merge_writes_artifact(contract_repo, tmp_path):
     assert yaml.safe_load(out.read_text())["service"] == "s"
 
 
+def _fake_build_wire_contract(captured):
+    def fake(contract_dir, repo_root, service, *, dialect=None):
+        captured["dialect"] = dialect
+        return {"contract_version": 1, "service": service, "nodes": []}
+
+    return fake
+
+
+def test_merge_dialect_flag_threads_to_build_wire_contract(
+    contract_repo, tmp_path, monkeypatch
+):
+    captured = {}
+    monkeypatch.setattr(
+        cli_module, "build_wire_contract", _fake_build_wire_contract(captured)
+    )
+    out = tmp_path / "contract.yaml"
+    rc = main(
+        [
+            "merge",
+            str(contract_repo / "contracts"),
+            "--service",
+            "s",
+            "--repo-root",
+            str(contract_repo),
+            "--out",
+            str(out),
+            "--dialect",
+            "trino",
+        ]
+    )
+    assert rc == 0
+    assert captured["dialect"] == "trino"
+
+
+def test_merge_dialect_defaults_to_none(contract_repo, tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        cli_module, "build_wire_contract", _fake_build_wire_contract(captured)
+    )
+    out = tmp_path / "contract.yaml"
+    rc = main(
+        [
+            "merge",
+            str(contract_repo / "contracts"),
+            "--service",
+            "s",
+            "--repo-root",
+            str(contract_repo),
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    assert captured["dialect"] is None
+
+
 def test_hash_prints_relation_and_hash(contract_repo, capsys):
     rc = main(
         ["hash", str(contract_repo / "contracts"), "--repo-root", str(contract_repo)]
@@ -44,6 +139,37 @@ def test_hash_prints_relation_and_hash(contract_repo, capsys):
     line = capsys.readouterr().out.strip()
     rel, h = line.split("\t")
     assert rel == "analytics.t" and h.startswith("sha256:")
+
+
+def test_hash_dialect_flag_threads_to_build_wire_contract(contract_repo, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        cli_module, "build_wire_contract", _fake_build_wire_contract(captured)
+    )
+    rc = main(
+        [
+            "hash",
+            str(contract_repo / "contracts"),
+            "--repo-root",
+            str(contract_repo),
+            "--dialect",
+            "postgres",
+        ]
+    )
+    assert rc == 0
+    assert captured["dialect"] == "postgres"
+
+
+def test_hash_dialect_defaults_to_none(contract_repo, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        cli_module, "build_wire_contract", _fake_build_wire_contract(captured)
+    )
+    rc = main(
+        ["hash", str(contract_repo / "contracts"), "--repo-root", str(contract_repo)]
+    )
+    assert rc == 0
+    assert captured["dialect"] is None
 
 
 def test_hash_missing_script_exits_1(contract_repo, caplog):

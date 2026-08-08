@@ -1,5 +1,5 @@
 [project]
-version = "0.1.0"
+version = "0.2.0"
 name = "continuo-python-runtime-trino"
 description = "Trino runtime adapter for Continuo python nodes."
 authors = [{ name = "Simone Carolini" }]
@@ -7,7 +7,7 @@ maintainers = [{ name = "Simone Carolini" }]
 readme = "README.md"
 requires-python = ">= 3.14"
 dependencies = [
-    "continuo-validation-contract==0.3.0",
+    "continuo-validation-contract==0.4.0",
     "trino==0.338.0",
     "pyarrow==25.0.0",
 ]

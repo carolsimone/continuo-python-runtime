@@ -12,6 +12,15 @@ nodes:
     # Each value must be a single statement starting with SELECT or WITH — so
     # a read may itself be a joined SELECT if you would rather the warehouse
     # do the join than the script.
+    # `continuo-runtime validate|merge|hash` enforce this by actually parsing
+    # each read (sqlglot), not just checking keywords — so SQL a driver would
+    # accept but a real parser won't (e.g. a driver-specific bind placeholder
+    # like psycopg2's `%(name)s`) now fails validate, where it previously did
+    # not. `ctx.read(name)` never takes params, so such a read was already
+    # broken at run time; this only moves the failure earlier, to CI. Add
+    # --dialect <engine> (e.g. postgres, trino) to check against the
+    # warehouse dialect Continuo will actually use, instead of only
+    # sqlglot's dialect-neutral default.
     reads:
       orders: select order_id, customer_id, amount from analytics.upstream_orders
       customers: select customer_id, name from analytics.upstream_customers
@@ -19,3 +28,11 @@ nodes:
       - {name: order_id, type: INTEGER, nullable: false}
       - {name: customer_name, type: "VARCHAR(64)", nullable: true}
       - {name: amount, type: "NUMERIC(10,2)", nullable: false}
+    # Optional physical layout, in your ENGINE'S OWN vocabulary. The active
+    # engine's adapter rejects any key it does not recognize.
+    #   postgres: indexes
+    #   trino (iceberg): partitioning, sorted_by, format
+    # config:
+    #   indexes:
+    #     - columns: [order_id]
+    #       unique: true

@@ -1,15 +1,26 @@
 [project]
 name = "continuo-python-runtime"
-version = "0.1.0"
+version = "0.2.0"
 description = "Runtime harness, contract tooling, and CI lint for Continuo python nodes."
 authors = [{ name = "Simone Carolini" }]
 maintainers = [{ name = "Simone Carolini" }]
 readme = "README.md"
 requires-python = ">= 3.14"
 dependencies = [
-    "continuo-validation-contract==0.3.0",
+    "continuo-validation-contract==0.4.0",
     "pyarrow==25.0.0",
     "PyYAML==6.0.3",
+    # Pinned in lockstep with continuo-validation-contract's OWN sqlglot pin
+    # (currently ==30.15.0) -- bump this whenever that pin moves.
+    # continuo_python_runtime/contract/loader.py imports sqlglot.errors
+    # directly to catch TokenError, which escapes
+    # continuo_validation_contract.sql.ensure_single_read uncaught despite
+    # its docstring's guarantee that only ValueError does (an unterminated
+    # string literal or comment fails sqlglot's tokenizer before the
+    # parser's own ParseError handling ever runs). Once that contract bug is
+    # fixed upstream, this direct import -- and this explicit pin, since
+    # sqlglot would then again be needed only transitively -- can be dropped.
+    "sqlglot==30.15.0",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

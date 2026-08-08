@@ -13,7 +13,7 @@ name: publish-pypi
 # real PyPI. The GitHub environment name is what each PyPI "pending publisher"
 # is registered against.
 #
-# Ordering: continuo-validation-contract==0.3.0 must exist on the target index
+# Ordering: continuo-validation-contract==0.4.0 must exist on the target index
 # before publishing here — consumers of the wheel resolve it from that index
 # ([tool.uv.sources] is dev-only and not embedded in the wheel).
 on:

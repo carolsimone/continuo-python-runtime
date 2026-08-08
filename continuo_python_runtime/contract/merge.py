@@ -4,17 +4,20 @@ from pathlib import Path
 
 import yaml
 
+from continuo_python_runtime.closure import resolve_closure
 from continuo_python_runtime.contract.loader import load_contract_dir
 from continuo_python_runtime.contract.model import CONTRACT_VERSION, Node
 from continuo_python_runtime.contract.paths import resolve_script_path
-from continuo_python_runtime.hashing import content_hash
+from continuo_python_runtime.hashing import hash_parts
 
 
 def node_entry(node: Node) -> dict:
     """Convert a Node to its wire form dict.
 
-    Returns the node as a dict with all fields, output_columns as list of dicts,
-    and NO content_hash. The nullable field is always present in output_columns.
+    Returns the node as a dict with all fields, output_columns as list of
+    dicts. The entry carries no hash fields: build_wire_contract adds all
+    four (source_hash, shared_code_hash, config_hash, content_hash). The
+    nullable field is always present in output_columns.
     """
     return {
         "schema": node.schema,
@@ -34,29 +37,34 @@ def node_entry(node: Node) -> dict:
         ],
         "description": node.description,
         "extra_columns": node.extra_columns,
+        "config": dict(node.config),
     }
 
 
-def build_wire_contract(contract_dir: Path, repo_root: Path, service: str) -> dict:
+def build_wire_contract(
+    contract_dir: Path, repo_root: Path, service: str, *, dialect: str | None = None
+) -> dict:
     """Build and return a wire contract document.
 
     Loads contracts from contract_dir, resolves script paths against repo_root,
     computes content hashes, and returns a contract document sorted by relation.
+    ``dialect`` is forwarded to :func:`~continuo_python_runtime.contract.loader
+    .load_contract_dir` so every declared read is checked against that sqlglot
+    dialect (``None`` -- the default -- uses sqlglot's dialect-neutral parser).
 
     Raises ContractError if any script file is missing.
     """
-    nodes = load_contract_dir(contract_dir)
+    nodes = load_contract_dir(contract_dir, dialect=dialect)
 
     wire_nodes = []
     for node in nodes:
         entry = node_entry(node)
 
         script_path = resolve_script_path(node.script, repo_root, context=node.relation)
-
-        # Read script bytes and compute hash
         script_bytes = script_path.read_bytes()
-        hash_value = content_hash(entry, script_bytes)
-        entry["content_hash"] = hash_value
+        closure = resolve_closure(script_path, repo_root)
+        member_bytes = [member.read_bytes() for member in closure]
+        entry.update(hash_parts(entry, script_bytes, member_bytes))
 
         wire_nodes.append(entry)
 

@@ -61,5 +61,5 @@ def test_readme_uses_published_v_prefixed_image_tags():
     """Engine-selection examples must name tags emitted by the publisher."""
     readme = (TEMPLATE.parent / "README.md").read_text()
 
-    assert "continuo-python-runtime:v0.1.0-postgres" in readme
-    assert "continuo-python-runtime:v0.1.0-trino" in readme
+    assert "continuo-python-runtime:v0.2.0-postgres" in readme
+    assert "continuo-python-runtime:v0.2.0-trino" in readme

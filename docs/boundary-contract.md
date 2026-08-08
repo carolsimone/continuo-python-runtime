@@ -299,9 +299,9 @@ executor runs it as a Kubernetes Job:
   classmethod, no connection needed — immediately after selecting the node,
   and surfaces a rejection as `LoadError`. Both adapters shipped here
   implement it by reusing the exact logic `ensure_table` validates with, so
-  the two cannot disagree. Like `config` on `ensure_table`, the abstract
-  port in the pinned `continuo-validation-contract` does not declare it;
-  unlike `config`, the harness *skips* the call for an adapter that does not
+  the two cannot disagree. Unlike `config` on `ensure_table` (declared by
+  the port since contract 0.6.0), `validate_config` is not part of the
+  abstract port; the harness *skips* the call for an adapter that does not
   provide it, because `ensure_table` remains the enforcement point and such
   an adapter loses only earliness, never fail-closed behavior. Third-party
   adapters should implement it.

@@ -36,8 +36,8 @@ data-plane adapters here.
 | Package (distribution name) | Module | Lives in | Role |
 | --- | --- | --- | --- |
 | `continuo-python-runtime` | `continuo_python_runtime` | this repo (root) | Harness: CLI, `conform()`, `RunContext`, error taxonomy. |
-| `continuo-python-runtime-postgres` | `continuo_python_runtime_postgres` | this repo, `python-runtime-postgres/` | Data-plane `RuntimeAdapter` for Postgres (`fetch`/`ensure_table`/`load`). |
-| `continuo-python-runtime-trino` | `continuo_python_runtime_trino` | this repo, `python-runtime-trino/` | Data-plane `RuntimeAdapter` for Trino/Iceberg. |
+| `continuo-python-runtime-postgres` | `continuo_python_runtime_postgres` | this repo, `python-runtime-postgres/` | Data-plane `RuntimeAdapter` for Postgres (`fetch`/`ensure_table`/`load`). **Not published to PyPI** — built from source into the image. |
+| `continuo-python-runtime-trino` | `continuo_python_runtime_trino` | this repo, `python-runtime-trino/` | Data-plane `RuntimeAdapter` for Trino/Iceberg. **Not published to PyPI** — built from source into the image. |
 | `continuo-validation-contract` | `continuo_validation_contract` | `continuo-validation-runners` | The published contract (schema, `RuntimeAdapter` port, result-block format) both sides depend on. |
 | `continuo-validation-postgres` / `continuo-validation-trino` | `continuo_validation_postgres` / `continuo_validation_trino` | `continuo-validation-runners` | Validation-side (lint/merge, no live warehouse I/O) adapters — not to be confused with the data-plane adapters above. |
 
@@ -46,6 +46,15 @@ from PyPI (`==0.4.0`); the two adapter packages are uv workspace members
 (`[tool.uv.workspace]` in the root `pyproject.toml`), so `uv sync
 --all-packages --all-groups` at the repo root installs everything for local
 development.
+
+**Only `continuo-python-runtime` is published to PyPI.** The two engine
+adapters are built **from source into the runtime images**: `Dockerfile.postgres`
+and `Dockerfile.trino` `pip install` them out of the build context, so each
+image ships exactly one adapter and the harness discovers it through the
+`continuo_runtime.adapters` entry-point group at run time. Nothing installs
+them from an index — the harness package does not depend on them, and domain
+repos get their adapter by building `FROM` a published base image. They are
+still built, type-checked, and tested by CI on every change.
 
 ## Quickstart for domain teams
 

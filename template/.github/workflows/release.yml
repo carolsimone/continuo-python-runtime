@@ -17,6 +17,10 @@ jobs:
       # Until then, install from git: uv tool install git+https://github.com/carolsimone/continuo-python-runtime
       - name: Install runtime tooling
         run: uv tool install continuo-python-runtime
+      # Fast feedback only: this only looks at scripts/. `continuo-runtime
+      # merge` (below) independently lints the script plus its whole
+      # in-repo import closure, so helpers outside scripts/ (e.g. lib/) are
+      # covered even though this step never looks at them.
       - name: Lint scripts (no hand-written SQL)
         run: continuo-runtime lint scripts/
       # To check reads against the SQL dialect Continuo's install will actually

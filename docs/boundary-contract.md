@@ -214,6 +214,21 @@ own `import` statements, resolved by static AST analysis
   raises `ContractError` on the first one found), so even a shared helper
   module outside the linted path cannot smuggle one in. What static
   analysis cannot see must not exist.
+- **Every closure member is held to the full lint rule set, not only
+  dynamic-import rejection.** `continuo-runtime lint` (typically pointed at
+  `scripts/` in CI, for fast feedback) checks only the files given to it —
+  a helper imported from outside that path, e.g. `lib/shared.py` via `from
+  lib.shared import ...`, is invisible to that step. `continuo-runtime
+  merge` closes that gap independently: before computing a node's hash
+  parts, it runs the same rules CI's lint applies — L1 no warehouse driver
+  imports, L2 no SQL string literals, L3 no forbidden data-access calls,
+  L4 no private-attribute access, L5 no dynamic-import constructs — over
+  the node's script **and every resolved closure member**, and raises
+  `ContractError` naming every offending file if any produces a violation.
+  Because the merger is the thing that produces the release artifact, this
+  cannot be bypassed by a stale or hand-edited CI workflow file: a helper
+  outside `scripts/` can never become a side channel around the harness's
+  sole write sink.
 - **Limit — data files are not members.** A script reading a non-`.py`
   file from the repo (a CSV, a JSON fixture) does not fingerprint that
   file — such inputs belong in the warehouse or in a declared `reads`

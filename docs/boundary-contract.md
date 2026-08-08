@@ -205,7 +205,11 @@ own `import` statements, resolved by static AST analysis
   over-inclusion only costs one extra revalidation — the tradeoff
   `closure.py`'s own module docstring documents as deliberate.
 - **Limit — dynamic imports are rejected, not approximated.**
-  `importlib` (in any form), `__import__`, `exec`, `eval`, and any
+  `importlib` (in any form), `builtins` (the module, in any form —
+  `import builtins`, `from builtins import ...`), `__builtins__` (the name
+  every module's globals are injected with at import time — see §13.4's
+  loader note; `__builtins__['exec'](...)` needs no preceding `import
+  builtins` at all), `__import__`, `exec`, `eval`, and any
   `.import_module(...)` attribute access (on any receiver — the predicate
   doesn't care what object it's called on) are refused wherever
   `continuo-runtime lint` is pointed (typically `scripts/`), and —
@@ -213,7 +217,10 @@ own `import` statements, resolved by static AST analysis
   **and every closure member** by the merger itself (`resolve_closure`
   raises `ContractError` on the first one found), so even a shared helper
   module outside the linted path cannot smuggle one in. What static
-  analysis cannot see must not exist.
+  analysis cannot see must not exist. The one plausible legitimate casualty
+  is `from builtins import str` (the `python-future` compatibility shim):
+  it is rejected exactly like any other `ImportFrom` whose root module is
+  `builtins`, with no exemption.
 - **Every closure member is held to the full lint rule set, not only
   dynamic-import rejection.** `continuo-runtime lint` (typically pointed at
   `scripts/` in CI, for fast feedback) checks only the files given to it —

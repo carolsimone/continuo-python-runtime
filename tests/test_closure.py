@@ -328,6 +328,32 @@ def test_dataframe_eval_and_query_methods_not_flagged(tmp_path):
     assert dynamic_import_violations(ast.parse(repo.joinpath("node.py").read_text())) == []
 
 
+def test_builtins_dunder_subscript_exec_call_rejected(tmp_path):
+    """review-fix-d P2-5-followup reproduction: `__builtins__['exec'](...)`
+    needs no preceding `import builtins` - `__builtins__` is injected into
+    every module's globals by the harness's own loader
+    (`spec_from_file_location` + `exec_module`, verified to bind it as the
+    builtins dict there), so this executes arbitrary code while matching
+    neither the `ast.Name` set (the subscript's base is a bare Name,
+    `__builtins__`, not `exec`) nor the `ast.Attribute` set (there is no
+    attribute access at all)."""
+    repo = tmp_path
+    (repo / "node.py").write_text('__builtins__["exec"]("x")\n')
+
+    with pytest.raises(ContractError):
+        resolve_closure(repo / "node.py", repo)
+
+
+def test_builtins_dunder_subscript_import_rejected(tmp_path):
+    """Same gap, via `__import__` instead of `exec`: `__builtins__["__import__"]
+    ("helper")` imports arbitrarily and is invisible to every existing rule."""
+    repo = tmp_path
+    (repo / "node.py").write_text('__builtins__["__import__"]("helper")\n')
+
+    with pytest.raises(ContractError):
+        resolve_closure(repo / "node.py", repo)
+
+
 def test_dynamic_import_construct_rejected_in_closure_member(tmp_path):
     """The construct doesn't have to be in the script itself - a file the
     script imports is scanned too."""
@@ -411,3 +437,12 @@ def test_violations_sorted_by_lineno_then_construct():
 def test_importlib_submodule_import_flagged():
     tree = ast.parse("import importlib.util\n")
     assert dynamic_import_violations(tree) == [(1, "importlib")]
+
+
+def test_bare_dunder_builtins_name_flagged():
+    """`__builtins__` is injected into every module's globals - a bare
+    reference (the base of any subscript form, e.g. `__builtins__['exec']`)
+    must itself be a violation, or a dynamic-import construct routed through
+    it is invisible to every other rule here."""
+    tree = ast.parse("x = __builtins__\n")
+    assert dynamic_import_violations(tree) == [(1, "__builtins__")]

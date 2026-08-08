@@ -43,11 +43,11 @@ production), while over-inclusion is merely a spurious revalidation.
   ``name`` may turn out to be a plain attribute rather than a submodule, in
   which case the extra candidate simply fails to resolve.
 
-Dynamic-import constructs (``importlib``, ``builtins``, ``__import__``,
-``exec``, ``eval``, ``.import_module``) are rejected outright rather than
-degrading to "resolve what we can": whatever a script imports through one of
-those, this static analysis cannot see, so the hash could never be trusted
-to reflect it.
+Dynamic-import constructs (``importlib``, ``builtins``, ``__builtins__``,
+``__import__``, ``exec``, ``eval``, ``.import_module``) are rejected outright
+rather than degrading to "resolve what we can": whatever a script imports
+through one of those, this static analysis cannot see, so the hash could
+never be trusted to reflect it.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ from pathlib import Path
 from continuo_python_runtime.errors import ContractError
 
 _DYNAMIC_IMPORT_MODULES = frozenset({"importlib", "builtins"})
-_DYNAMIC_IMPORT_NAMES = frozenset({"__import__", "exec", "eval"})
+_DYNAMIC_IMPORT_NAMES = frozenset({"__import__", "exec", "eval", "__builtins__"})
 _DYNAMIC_IMPORT_ATTRS = frozenset({"import_module", "__import__"})
 
 
@@ -79,20 +79,28 @@ def dynamic_import_violations(tree: ast.AST) -> list[tuple[int, str]]:
       re-exports of those names from a module that is neither `importlib`
       nor `builtins` (e.g. `from somewhere import exec as e`), which no
       other rule here would see.
-    - `ast.Name`: `id` in `{"__import__", "exec", "eval"}` (a bare
-      reference or call).
+    - `ast.Name`: `id` in `{"__import__", "exec", "eval", "__builtins__"}` (a
+      bare reference or call). `__builtins__` is included because it is
+      injected into every module's globals by the harness's own loader
+      (`spec_from_file_location` + `exec_module`, see `harness.py`) as the
+      builtins *dict* — so `__builtins__['exec'](...)` and
+      `__builtins__['__import__'](...)` need no preceding `import builtins`
+      at all, and flagging the bare name catches every subscript form in one
+      rule.
     - `ast.Attribute`: `attr` in `{"import_module", "__import__"}`.
       Deliberately NOT `exec`/`eval`: those are legitimate method names on
       arbitrary objects (pandas `DataFrame.eval`/`DataFrame.query`, used in
       ordinary node scripts that return a dataframe), and flagging them here
       would reject that legitimate user code. `builtins.exec` /
-      `builtins.eval` are still caught — not by this rule, but because the
-      `import builtins` that must precede them is itself an `ast.Import`
-      violation above. Do not "fix" this by adding them here.
+      `builtins.eval` (attribute access on the `builtins` module after an
+      explicit `import builtins`) are still caught, because that `import` is
+      itself an `ast.Import` violation above — but `__builtins__['exec']`
+      needs no such import, which is exactly what the `ast.Name` rule above
+      exists to close.
 
     `construct` is the offending name as written: "importlib", "builtins",
-    "__import__", "exec", "eval", or "import_module". Sorted by lineno, then
-    construct.
+    "__import__", "exec", "eval", "__builtins__", or "import_module". Sorted
+    by lineno, then construct.
     """
     violations: list[tuple[int, str]] = []
     for node in ast.walk(tree):

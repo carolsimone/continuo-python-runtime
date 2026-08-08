@@ -55,6 +55,59 @@ def test_script_directory_is_a_search_root(tmp_path):
     assert result == [(repo / "scripts" / "helpers.py").resolve()]
 
 
+def test_package_preferred_over_same_named_module_file(tmp_path):
+    """When both <root>/helpers.py and <root>/helpers/__init__.py exist,
+    Python's import machinery selects the package - _resolve_name must match
+    that lookup order (package before module file), or the package code that
+    actually executes goes missing from the closure."""
+    repo = tmp_path
+    (repo / "node.py").write_text("import helpers\n")
+    (repo / "helpers.py").write_text("X = 'module-file'\n")
+    (repo / "helpers").mkdir()
+    (repo / "helpers" / "__init__.py").write_text("X = 'package'\n")
+
+    result = resolve_closure(repo / "node.py", repo)
+
+    assert result == [(repo / "helpers" / "__init__.py").resolve()]
+
+
+def test_search_roots_fixed_at_script_dir_not_importing_file_dir(tmp_path):
+    """scripts/node.py does `from lib.shared import helper`; lib/shared.py
+    does `import util`; only scripts/util.py exists (not lib/util.py). The
+    harness puts (repo_root, script_dir) on sys.path for the whole process -
+    not (repo_root, importing_file's own dir) - so `import util` inside
+    lib/shared.py resolves against scripts/, the seed script's directory,
+    not lib/. A resolver that used the current file's own parent as the
+    second root would miss scripts/util.py entirely, hashing a different
+    file than the one that actually runs."""
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "lib").mkdir()
+    (repo / "scripts" / "node.py").write_text("from lib.shared import helper\n")
+    (repo / "lib" / "shared.py").write_text("import util\n")
+    (repo / "scripts" / "util.py").write_text("X = 1\n")
+
+    result = resolve_closure(repo / "scripts" / "node.py", repo)
+
+    assert (repo / "scripts" / "util.py").resolve() in result
+    assert (repo / "lib" / "shared.py").resolve() in result
+
+
+def test_script_at_repo_root_dedupes_search_roots(tmp_path):
+    """When the script lives at repo_root, script_dir == repo_root, so the
+    fixed (repo_root, script_dir) pair collapses to one root. Resolution
+    must still work, and no candidate may be probed (or the result list
+    duplicated) twice."""
+    repo = tmp_path
+    (repo / "node.py").write_text("import helpers\n")
+    (repo / "helpers.py").write_text("X = 1\n")
+
+    result = resolve_closure(repo / "node.py", repo)
+
+    assert result == [(repo / "helpers.py").resolve()]
+    assert len(result) == len(set(result))
+
+
 def test_transitive_closure(tmp_path):
     repo = tmp_path
     (repo / "node.py").write_text("import a\n")
@@ -217,6 +270,62 @@ def test_dynamic_import_construct_rejected_in_script(tmp_path, source):
 
     with pytest.raises(ContractError):
         resolve_closure(repo / "node.py", repo)
+
+
+def test_aliased_builtins_import_dunder_import_rejected(tmp_path):
+    """`from builtins import __import__ as load` then `load("helpers")`
+    creates no `ast.Name` named `__import__` (the alias is `load`), and the
+    old ImportFrom branch checked only `importlib` - this passed lint and
+    merge while the dynamically loaded helper was omitted from the closure."""
+    repo = tmp_path
+    (repo / "node.py").write_text("from builtins import __import__ as load\nload('x')\n")
+
+    with pytest.raises(ContractError):
+        resolve_closure(repo / "node.py", repo)
+
+
+def test_import_builtins_rejected(tmp_path):
+    repo = tmp_path
+    (repo / "node.py").write_text("import builtins\n")
+
+    with pytest.raises(ContractError):
+        resolve_closure(repo / "node.py", repo)
+
+
+def test_builtins_dunder_import_attribute_call_rejected(tmp_path):
+    repo = tmp_path
+    (repo / "node.py").write_text('import builtins\nbuiltins.__import__("x")\n')
+
+    with pytest.raises(ContractError):
+        resolve_closure(repo / "node.py", repo)
+
+
+def test_aliased_exec_reexport_from_arbitrary_module_rejected(tmp_path):
+    """`from somewhere import exec as e` re-exports a dynamic-import-capable
+    name from a module that is neither `importlib` nor `builtins` - the
+    alias.name check must catch this regardless of the source module."""
+    repo = tmp_path
+    (repo / "somewhere").mkdir()
+    (repo / "somewhere" / "__init__.py").write_text("def exec(*args, **kwargs):\n    return None\n")
+    (repo / "node.py").write_text("from somewhere import exec as e\n")
+
+    with pytest.raises(ContractError):
+        resolve_closure(repo / "node.py", repo)
+
+
+def test_dataframe_eval_and_query_methods_not_flagged(tmp_path):
+    """pandas DataFrame.eval / DataFrame.query are legitimate in a node
+    script that returns a dataframe - flagging df.eval(...) would reject
+    ordinary user code. Only builtins.exec/eval (caught by the module rule)
+    and bare Name usage are dynamic-import constructs; an arbitrary object's
+    .eval/.query attribute is not."""
+    repo = tmp_path
+    (repo / "node.py").write_text(
+        "def run(df):\n    a = df.eval('a + b')\n    b = df.query('a > 1')\n    return a, b\n"
+    )
+
+    assert resolve_closure(repo / "node.py", repo) == []
+    assert dynamic_import_violations(ast.parse(repo.joinpath("node.py").read_text())) == []
 
 
 def test_dynamic_import_construct_rejected_in_closure_member(tmp_path):

@@ -166,7 +166,7 @@ jobs:
   # build context (see Dockerfile.postgres / Dockerfile.trino) — nothing pending
   # here.
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-test')
     needs: [smoke-postgres, smoke-trino]
     strategy:
       matrix:

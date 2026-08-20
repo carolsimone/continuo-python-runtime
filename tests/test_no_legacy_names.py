@@ -17,6 +17,8 @@ LEGACY = [
     "continuo_validation.adapters",
     "continuo_runtime.adapters",
     "discover_runtime_adapter",
+    "ValidationAdapter",
+    "RuntimeAdapter",
 ]
 
 # docs/superpowers/ holds dated design records (the 2026-07-31 python-runtime

@@ -81,7 +81,7 @@ contract is already engine-bound, since reads are authored in that same
 engine's SQL dialect (see above), so there is no ambiguity to resolve at
 parse time.
 
-- The active engine's `RuntimeAdapter` **fails closed on any key it does
+- The active engine's `WarehouseAdapter` **fails closed on any key it does
   not recognize**, at any nesting level — there is no other namespace to
   excuse an unknown key into.
 - Recognized keys as shipped:
@@ -101,7 +101,7 @@ parse time.
       - columns: [order_id]
         unique: true
   ```
-- Applied at runtime by `RuntimeAdapter.ensure_table`, per SQL object, on
+- Applied at runtime by `WarehouseAdapter.ensure_table`, per SQL object, on
   **create-if-absent** — this is not gated on whether the table itself was
   newly created. Postgres evaluates each `indexes` entry's `CREATE INDEX
   IF NOT EXISTS` independently, on every `ensure_table` call, so adding a
@@ -284,7 +284,7 @@ executor runs it as a Kubernetes Job:
   per engine), injected via the same Secret mechanism dbt Jobs use.
 - **Sole write sink**: user scripts return a dataframe; the harness runs
   `conform()` (strict Arrow cast per §7.1), then calls
-  `RuntimeAdapter.ensure_table` — applying the node's `config` physical
+  `WarehouseAdapter.ensure_table` — applying the node's `config` physical
   layout on create, see §13.1 — and performs the only INSERT. Scripts get
   a read-only connection surface. The harness calls `ensure_table(...,
   config=...)` as a keyword unconditionally, and the abstract
@@ -295,7 +295,7 @@ executor runs it as a Kubernetes Job:
 - **Early `config` tripwire**: `ensure_table` is called only *after* the
   script has run and its result has been conformed, so a bad `config` would
   otherwise burn the entire node run before failing. The harness therefore
-  also calls `RuntimeAdapter.validate_config(config, column_names)` — a
+  also calls `WarehouseAdapter.validate_config(config, column_names)` — a
   classmethod, no connection needed — immediately after selecting the node,
   and surfaces a rejection as `LoadError`. Both adapters shipped here
   implement it by reusing the exact logic `ensure_table` validates with, so
@@ -343,7 +343,7 @@ inject the names below instead:
 | `TARGET_SCHEMA` | **required** | The target schema name; must match the `schema` of the node selected via `NODE_ID`. There is no fallback — `SCHEMA` and `DBT_TARGET_SCHEMA` are **not** recognized. |
 | `CONTRACT_DIR` | optional | Path to the directory of merged contract YAML files baked into the image. Defaults to `/app/contracts`. |
 | `APP_ROOT` | optional | Repository root the node's `script:` path is resolved against. Defaults to `CONTRACT_DIR`'s parent directory. |
-| engine-native vars | **required**, per adapter | Whatever the installed `RuntimeAdapter.required_env()` declares (e.g. `POSTGRES_HOST`/`POSTGRES_DB`/`POSTGRES_USER`, optionally `POSTGRES_PORT`/`POSTGRES_PASSWORD`) — missing any of these is a `LoadError`. |
+| engine-native vars | **required**, per adapter | Whatever the installed `WarehouseAdapter.required_env()` declares (e.g. `POSTGRES_HOST`/`POSTGRES_DB`/`POSTGRES_USER`, optionally `POSTGRES_PORT`/`POSTGRES_PASSWORD`) — missing any of these is a `LoadError`. |
 
 The executor's python-kind dispatch (continuo PR 8) **must** inject
 `NODE_ID`/`TABLE_NAME`/`TARGET_SCHEMA` under exactly these names; they

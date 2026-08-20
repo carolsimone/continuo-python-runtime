@@ -271,7 +271,7 @@ def test_ensure_table_with_none_config_emits_no_index_ddl():
     conn = _FakeConnection()
     adapter = PostgresAdapter(conn)
     adapter.ensure_table("s", "t", _ONE_COL, config={})
-    assert len(conn.cursors[-1].statements) == 1  # CREATE TABLE only
+    assert len(conn.cursors[-1].statements) == 3  # BEGIN, CREATE TABLE, COMMIT
     assert conn.rolled_back == 0
 
 
@@ -280,7 +280,7 @@ def test_ensure_table_with_empty_config_emits_no_index_ddl():
     conn = _FakeConnection()
     adapter = PostgresAdapter(conn)
     adapter.ensure_table("s", "t", _ONE_COL, config={})
-    assert len(conn.cursors[-1].statements) == 1  # CREATE TABLE only
+    assert len(conn.cursors[-1].statements) == 3  # BEGIN, CREATE TABLE, COMMIT
     assert conn.rolled_back == 0
 
 
@@ -290,7 +290,7 @@ def test_ensure_table_single_column_index_emits_expected_create_index():
     adapter = PostgresAdapter(conn)
     adapter.ensure_table("s", "t", _ONE_COL, config={"indexes": [{"columns": ["id"]}]})
     statements = conn.cursors[-1].statements
-    assert len(statements) == 2
+    assert len(statements) == 4  # BEGIN, CREATE TABLE, CREATE INDEX, COMMIT
     expected = pg_sql.SQL("CREATE {}INDEX {}{} ON {}.{} USING {} ({})").format(
         pg_sql.SQL(""),
         pg_sql.SQL("IF NOT EXISTS "),
@@ -300,7 +300,7 @@ def test_ensure_table_single_column_index_emits_expected_create_index():
         pg_sql.Identifier("btree"),
         pg_sql.SQL(", ").join([pg_sql.Identifier("id")]),
     )
-    assert statements[1] == expected
+    assert statements[2] == expected
     assert conn.rolled_back == 0
 
 
@@ -320,7 +320,7 @@ def test_ensure_table_unique_index_emits_create_unique_index():
         pg_sql.Identifier("btree"),
         pg_sql.SQL(", ").join([pg_sql.Identifier("id")]),
     )
-    assert conn.cursors[-1].statements[1] == expected
+    assert conn.cursors[-1].statements[2] == expected
 
 
 def test_ensure_table_custom_index_name_is_used():
@@ -339,7 +339,7 @@ def test_ensure_table_custom_index_name_is_used():
         pg_sql.Identifier("btree"),
         pg_sql.SQL(", ").join([pg_sql.Identifier("id")]),
     )
-    assert conn.cursors[-1].statements[1] == expected
+    assert conn.cursors[-1].statements[2] == expected
 
 
 def test_ensure_table_multiple_indexes_all_run_in_one_cursor_block():
@@ -354,7 +354,7 @@ def test_ensure_table_multiple_indexes_all_run_in_one_cursor_block():
         "s", "t", cols,
         config={"indexes": [{"columns": ["id"]}, {"columns": ["email"], "unique": True}]},
     )
-    assert len(conn.cursors[-1].statements) == 3  # CREATE TABLE + 2 indexes
+    assert len(conn.cursors[-1].statements) == 5  # BEGIN, CREATE TABLE + 2 indexes, COMMIT
     assert conn.rolled_back == 0
 
 
@@ -429,7 +429,7 @@ def test_explicit_index_name_over_limit_is_truncated_to_postgres_identifier_limi
         pg_sql.Identifier("btree"),
         pg_sql.SQL(", ").join([pg_sql.Identifier("id")]),
     )
-    assert conn.cursors[-1].statements[1] == expected
+    assert conn.cursors[-1].statements[2] == expected
 
 
 _BAD_CONFIGS = [

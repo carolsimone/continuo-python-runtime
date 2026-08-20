@@ -11,10 +11,16 @@ One class covers both roles Continuo asks of an engine:
   returns an Arrow table; ``ensure_table``/``load`` build and atomically
   replace a table's contents.
 
-The connection runs with ``autocommit = False`` so ``load`` is transactional
-(TRUNCATE + inserts commit or roll back together); ``fetch``, ``ensure_schema``
-and ``ensure_table`` each commit (or roll back on error) so no operation leaves
-a transaction open across calls.
+The connection runs with ``autocommit = True``: every method owns its
+transaction explicitly rather than relying on psycopg2's implicit
+per-connection transaction. A single-statement method (``drop_schema``,
+``build_empty_from_sql``, ``clone_empty_from_prod``) needs nothing further —
+under autocommit each statement commits as it runs. A method that must apply
+several statements atomically (``build_empty_from_columns``, ``check_binds``,
+``ensure_table``, ``load``) wraps them in its own explicit
+``BEGIN``/``COMMIT``, with a ``ROLLBACK`` on the error path so a mid-sequence
+failure leaves no partial change and no aborted transaction behind for the
+next call on the same connection.
 """
 import hashlib
 import logging
@@ -336,7 +342,7 @@ class PostgresAdapter(WarehouseAdapter):
 
     def __init__(self, conn: "psycopg2.extensions.connection") -> None:
         self._conn = conn
-        self._conn.autocommit = False
+        self._conn.autocommit = True
 
     @classmethod
     def required_env(cls) -> list[str]:
@@ -363,18 +369,19 @@ class PostgresAdapter(WarehouseAdapter):
         Race-safe: root validation nodes dispatch in parallel and can collide
         on CREATE SCHEMA. Serialize on a session advisory lock keyed by schema
         name; tolerate DuplicateSchema/UniqueViolation as a second line of
-        defense. Each step commits (or rolls back an aborted transaction)
-        before the next, since the session advisory lock is held independently
-        of transaction boundaries — a ROLLBACK clears an aborted transaction's
-        state without releasing it.
+        defense. The session advisory lock is held independently of any
+        transaction, and under ``autocommit = True`` each statement here runs
+        (and commits, or aborts on failure) as its own single-statement
+        transaction, so no statement ever finds the connection sitting in a
+        transaction left open by a previous call.
 
-        Any CREATE SCHEMA failure — not just DuplicateSchema/UniqueViolation —
-        must roll back before the ``finally`` block's unlock runs: under
-        ``autocommit = False`` an unhandled error leaves the transaction
-        aborted, and issuing the unlock inside an aborted transaction raises
-        ``InFailedSqlTransaction``, which would mask the real error *and* skip
-        the unlock, leaking the session advisory lock and hanging every other
-        caller waiting on it.
+        The explicit ``self._conn.commit()``/``self._conn.rollback()`` calls
+        below are therefore no-ops against the server — there is never an
+        open multi-statement transaction for them to act on under autocommit
+        — but they are kept as a defensive no-op rather than removed: they
+        cost nothing, and they keep this method's shape identical whether or
+        not a future caller ever constructs this adapter over a
+        non-autocommit connection.
         """
         with self._conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_lock(hashtext(%s))", (schema,))
@@ -610,7 +617,9 @@ class PostgresAdapter(WarehouseAdapter):
         this engine's physical-layout vocabulary — ``indexes`` — validated by
         :func:`_validated_indexes` before any DDL runs, so a malformed config
         never leaves a half-built table behind (fail closed). Required and
-        keyword-only, matching the contract 0.6.0 port signature.
+        keyword-only, matching the contract 0.6.0 port signature. The create
+        and every index either all land or none do, in the same explicit
+        BEGIN/COMMIT/ROLLBACK shape build_empty_from_columns uses.
         """
         indexes = _validated_indexes(config, table, [col["name"] for col in columns])
         for col in columns:
@@ -624,6 +633,7 @@ class PostgresAdapter(WarehouseAdapter):
             _column_ddl(columns),
         )
         with self._conn.cursor() as cur:
+            cur.execute("BEGIN")
             try:
                 logger.info("ensuring table %s.%s exists", schema, table)
                 cur.execute(stmt)
@@ -632,20 +642,27 @@ class PostgresAdapter(WarehouseAdapter):
                         "ensuring index %s on %s.%s exists", index["name"], schema, table
                     )
                     cur.execute(_index_ddl(schema, table, index, if_not_exists=True))
-                self._conn.commit()
+                cur.execute("COMMIT")
             except Exception:
-                self._conn.rollback()
+                try:
+                    cur.execute("ROLLBACK")
+                except psycopg2.Error as rollback_exc:
+                    logger.error("ensure_table rollback failed: %s", rollback_exc)
                 raise
 
     def load(self, schema: str, table: str, data: "pa.Table") -> None:
         """Atomically replace ``schema.table``'s contents with *data*.
 
-        One transaction: TRUNCATE then batched inserts (``execute_values``,
-        page_size 1000) in the Arrow table's column order; commits on success,
-        rolls back and re-raises on any error. A 0-row *data* is just a TRUNCATE.
+        One explicit transaction: TRUNCATE then batched inserts
+        (``execute_values``, page_size 1000) in the Arrow table's column
+        order; commits on success, rolls back and re-raises on any error. A
+        0-row *data* is just a TRUNCATE. The transaction is opened explicitly
+        (``BEGIN``) rather than relying on an implicit one, matching every
+        other multi-statement method on this class under ``autocommit = True``.
         """
         columns = data.schema.names
         with self._conn.cursor() as cur:
+            cur.execute("BEGIN")
             try:
                 cur.execute(
                     pg_sql.SQL("TRUNCATE {}.{}").format(
@@ -670,9 +687,12 @@ class PostgresAdapter(WarehouseAdapter):
                         "loading %d row(s) into %s.%s", data.num_rows, schema, table
                     )
                     execute_values(cur, insert_stmt, values, page_size=1000)
-                self._conn.commit()
+                cur.execute("COMMIT")
             except Exception:
-                self._conn.rollback()
+                try:
+                    cur.execute("ROLLBACK")
+                except psycopg2.Error as rollback_exc:
+                    logger.error("load rollback failed: %s", rollback_exc)
                 raise
 
     def close(self) -> None:

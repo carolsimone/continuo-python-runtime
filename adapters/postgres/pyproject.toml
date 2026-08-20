@@ -7,7 +7,12 @@ maintainers = [{ name = "Simone Carolini" }]
 readme = "README.md"
 requires-python = ">= 3.14"
 dependencies = [
-    "continuo-engine-contract",
+    # Pinned for the same reason as the root package: [tool.uv.sources] below is
+    # a uv-only redirect that never reaches built metadata, so any distribution
+    # of this adapter would otherwise accept whatever contract release is
+    # newest. This adapter subclasses the contract's WarehouseAdapter port
+    # directly, so the pair must stay the tested one.
+    "continuo-engine-contract==0.7.0",
     "psycopg2-binary==2.9.11",
     "pyarrow==25.0.0",
 ]

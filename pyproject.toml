@@ -7,7 +7,17 @@ maintainers = [{ name = "Simone Carolini" }]
 readme = "README.md"
 requires-python = ">= 3.14"
 dependencies = [
-    "continuo-engine-contract",
+    # Exact-pinned like every other dependency here, and for a stronger reason:
+    # [tool.uv.sources] below redirects this to the in-tree workspace member for
+    # development, but that redirect is a uv-only mechanism that never reaches
+    # the built wheel's metadata. A wheel installed from PyPI carries only this
+    # requirement, so an unbounded one would resolve whatever contract release
+    # is newest rather than the one this runtime was tested against -- and the
+    # harness imports the contract's port, result format, SQL guard and types
+    # directly. Both packages ship from this repo on one v* tag, so a new
+    # contract version never exists without a new runtime version to match it;
+    # an exact pin therefore costs nothing and keeps the tested pair together.
+    "continuo-engine-contract==0.7.0",
     "boto3==1.43.59",
     "pyarrow==25.0.0",
     "PyYAML==6.0.3",

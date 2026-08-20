@@ -140,7 +140,11 @@ def run(ctx):
   the base image — the package's own runtime dependencies are `pyarrow`,
   `PyYAML`, and `continuo-engine-contract`. Add whatever you script
   against (pandas, polars, …) as a `RUN pip install` line in your own
-  `Dockerfile`, on top of the base image.
+  `Dockerfile`, on top of the base image. The base image runs as non-root
+  (uid 65532), which pip cannot install under, so switch to root for the
+  install and back afterward — `USER root`, then the `RUN pip install`
+  line, then `USER 65532:65532` — since the executor's pod spec expects
+  the image to end at uid 65532. See `template/Dockerfile` for the pattern.
 - Scripts do not import warehouse drivers, write raw SQL literals, or call
   data-access methods directly — `continuo-runtime lint` rejects those:
   - forbidden driver imports (`psycopg2`/`sqlalchemy`/`trino`/etc.),

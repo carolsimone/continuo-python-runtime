@@ -178,10 +178,9 @@ def _validate_config_early(adapter: Any, node: Node) -> None:
     but it is called *after* the script has executed and its result has been
     conformed, so a single typo (``config: {index: [...]}``) burned the whole
     node run before failing. This is the tripwire that fails it in the first
-    second instead. Validation-time checking of the same vocabulary is a future
-    cross-repo dependency (continuo-validation step 3a), and `continuo-runtime
-    validate` runs on a CI runner where no engine adapter is installed at all,
-    so this is the earliest point the engine's own rules can be applied.
+    second instead. `continuo-runtime validate` cannot do it earlier still: it
+    runs on a domain repo's CI runner, where no engine adapter is installed at
+    all, so this is the earliest point the engine's own rules can be applied.
 
     The call is skipped for an adapter that does not provide ``validate_config``:
     the abstract ``WarehouseAdapter`` in ``continuo-engine-contract``

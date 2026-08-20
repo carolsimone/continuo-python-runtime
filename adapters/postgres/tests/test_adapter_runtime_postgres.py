@@ -38,7 +38,7 @@ from psycopg2 import sql as pg_sql
 class _FakeCursor:
     """Minimal cursor double: records every statement passed to execute() on itself.
 
-    ``ensure_table`` opens ``_ensure_schema``'s advisory-lock/CREATE SCHEMA/unlock
+    ``ensure_table`` opens ``ensure_schema``'s advisory-lock/CREATE SCHEMA/unlock
     sequence in its own ``with self._conn.cursor()`` block, then a second,
     separate cursor block for the table + index DDL under test — so each call
     to ``cursor()`` gets its own statement list, keeping the two sequences
@@ -264,7 +264,7 @@ _ONE_COL = [{"name": "id", "type": "INT", "nullable": True}]
 def test_ensure_table_with_none_config_emits_no_index_ddl():
     """Test that config={} creates the table and nothing else.
 
-    ``_ensure_schema`` opens its own earlier cursor for the advisory-lock/
+    ``ensure_schema`` opens its own earlier cursor for the advisory-lock/
     CREATE SCHEMA/unlock sequence; ``conn.cursors[-1]`` is the table+index
     cursor under test here.
     """

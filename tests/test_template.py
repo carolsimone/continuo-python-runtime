@@ -57,9 +57,22 @@ def test_release_workflow_cancels_superseded_main_runs():
     }
 
 
-def test_readme_uses_published_v_prefixed_image_tags():
-    """Engine-selection examples must name tags emitted by the publisher."""
-    readme = (TEMPLATE.parent / "README.md").read_text()
+def test_readme_and_template_name_images_the_publisher_emits():
+    """Engine-selection examples must name images the publisher actually pushes.
 
-    assert "continuo-python-runtime:v0.2.0-postgres" in readme
-    assert "continuo-python-runtime:v0.2.0-trino" in readme
+    images.yml pushes ``continuo-python-runtime-<engine>:<tag>``: the engine is
+    part of the image NAME and the tag is the bare version, which is what lets
+    Continuo's chart pin ``<name>:vX.Y.Z@sha256:<digest>``. The version is read
+    from the root pyproject so neither the README nor the template Dockerfile
+    can drift past a version bump unnoticed.
+    """
+    import tomllib
+
+    root = TEMPLATE.parent
+    version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+    readme = (root / "README.md").read_text()
+    dockerfile = (TEMPLATE / "Dockerfile").read_text()
+
+    for engine in ("postgres", "trino"):
+        assert f"continuo-python-runtime-{engine}:v{version}" in readme
+    assert f"continuo-python-runtime-postgres:v{version}" in dockerfile

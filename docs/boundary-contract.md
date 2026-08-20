@@ -6,7 +6,8 @@ reproduced here unchanged. It previously lived at the top of this repo's
 repeating it.
 
 The runtime lives in its **own repository** (`continuo-python-runtime`),
-mirroring the continuo-validation-runners split. Domain teams (marketing,
+which also owns the engine contract, both engine adapters, and the validation
+runner. Domain teams (marketing,
 finance, …) template from it: they add their scripts + contract yaml files
 and inherit a CI/CD that produces everything Continuo needs. Continuo's side
 of the boundary is exactly five surfaces — nothing else crosses it.
@@ -42,7 +43,7 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   `--dialect <name>` flag (e.g. `postgres`, `trino`) so a domain repo can
   check its reads against that dialect locally, catching the failure in its
   own CI instead of at Continuo's parser. Reads are always parsed (via
-  `continuo_validation_contract.sql.ensure_single_read`, sqlglot-backed) even
+  `continuo_engine_contract.sql.ensure_single_read`, sqlglot-backed) even
   without `--dialect` — the flag only chooses which dialect's grammar that
   parse is checked against, defaulting to sqlglot's dialect-neutral parser
   when omitted.
@@ -115,10 +116,9 @@ parse time.
   **silent no-op** on postgres (the name already resolves, so `IF NOT
   EXISTS` skips it), and changing `partitioning` on a trino table that
   already exists is a silent no-op for the reason above — not an applied
-  change and not an error in either case. Once continuo-validation step 3a
-  lands, the same vocabulary is checked ahead of runtime by
-  `build_empty_from_columns`, so a malformed config fails the release gate
-  rather than surfacing in production.
+  change and not an error in either case. The same vocabulary is checked
+  ahead of runtime by `build_empty_from_columns`, so a malformed config fails
+  the release gate rather than surfacing in production.
 - Trino's `format` is case-normalized to uppercase in the emitted DDL, so
   `format: parquet` and `format: PARQUET` produce identical `WITH (...)`
   text — but they are different bytes in the contract entry, so they
@@ -287,9 +287,9 @@ executor runs it as a Kubernetes Job:
   `RuntimeAdapter.ensure_table` — applying the node's `config` physical
   layout on create, see §13.1 — and performs the only INSERT. Scripts get
   a read-only connection surface. The harness calls `ensure_table(...,
-  config=...)` as a keyword unconditionally, and as of
-  `continuo-validation-contract` 0.6.0 (the version this repo pins) the
-  abstract port declares it: `ensure_table(self, schema, table, columns,
+  config=...)` as a keyword unconditionally, and the abstract
+  `WarehouseAdapter` port in `continuo-engine-contract` declares it:
+  `ensure_table(self, schema, table, columns,
   *, config)` — required and keyword-only. Adapters implement exactly that
   signature; callers pass `{}` when a node declares no physical layout.
 - **Early `config` tripwire**: `ensure_table` is called only *after* the
@@ -317,8 +317,10 @@ executor runs it as a Kubernetes Job:
   catch a new problem: `ctx.read` resolves declared reads by name and never
   parses them.
 - **Result envelope**: stdout is reserved for exactly one sentinel-framed
-  result block as the last line — reuse `continuo_validation_contract.result`
-  (already on PyPI) rather than reimplementing the markers. All diagnostics
+  result block as the last line — reuse `continuo_engine_contract.result`
+  (built in this repo, published to PyPI) rather than reimplementing the
+  markers. That wire format is frozen against Continuo's Go parser
+  (`pkg/validationresult`). All diagnostics
   go to stderr via stdlib `logging`. Non-zero exit on failure.
 - The image embeds the same contract files CI merged — `content_hash` is
   what ties the promoted topology to the image actually running.

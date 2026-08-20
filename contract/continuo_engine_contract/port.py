@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 ENTRY_POINT_GROUP = "continuo_engine.adapters"
 
 if TYPE_CHECKING:  # pragma: no cover
-    import pyarrow
+    import pyarrow  # type: ignore[import-untyped]
 
 
 class AdapterDiscoveryError(Exception):

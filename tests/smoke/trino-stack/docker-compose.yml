@@ -1,7 +1,7 @@
-# Self-contained trino + iceberg-rest + minio stack for the Dockerfile.trino
-# smoke test. Copied (and trimmed to the trino profile) from
-# continuo-validation-runners/docker-compose.integration.yml. Non-default host
-# ports (18080/18181/19000) to avoid colliding with other local stacks.
+# Self-contained trino + iceberg-rest + minio stack, used by the
+# Dockerfile.trino smoke test and by the adapters/trino integration suite
+# (`pytest adapters/trino/tests -m integration`). Non-default host ports
+# (18080/18181/19000) to avoid colliding with other local stacks.
 services:
   minio:
     image: minio/minio:latest

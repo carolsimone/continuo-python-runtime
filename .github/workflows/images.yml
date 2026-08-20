@@ -6,8 +6,7 @@ on:
       - "tests/smoke/**"
       - "continuo_python_runtime/**"
       - "contract/**"
-      - "adapters/postgres/**"
-      - "adapters/trino/**"
+      - "adapters/**"
       - "pyproject.toml"
       - ".github/workflows/images.yml"
   push:
@@ -57,6 +56,16 @@ jobs:
           path: /tmp
       - name: Load image
         run: docker load -i /tmp/cpr-smoke-postgres.tar
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync
+        run: uv sync --all-packages --all-groups
+      - name: Image smoke tests (postgres)
+        env:
+          VALIDATION_IMAGE_UNDER_TEST: cpr-smoke-postgres
+          VALIDATION_IMAGE_ENGINE: postgres
+          # PostgresAdapter.required_env()[0]
+          VALIDATION_IMAGE_REQUIRED_ENV: POSTGRES_HOST
+        run: uv run pytest tests/test_image_smoke_validation.py -m image -v
       - name: Install psql client
         run: |
           sudo apt-get update
@@ -102,6 +111,16 @@ jobs:
           path: /tmp
       - name: Load image
         run: docker load -i /tmp/cpr-smoke-trino.tar
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync
+        run: uv sync --all-packages --all-groups
+      - name: Image smoke tests (trino)
+        env:
+          VALIDATION_IMAGE_UNDER_TEST: cpr-smoke-trino
+          VALIDATION_IMAGE_ENGINE: trino
+          # TrinoAdapter.required_env()[0]
+          VALIDATION_IMAGE_REQUIRED_ENV: TRINO_HOST
+        run: uv run pytest tests/test_image_smoke_validation.py -m image -v
       - name: Start trino stack
         run: docker compose -f tests/smoke/trino-stack/docker-compose.yml up -d --wait
       - name: Seed source table
@@ -134,17 +153,18 @@ jobs:
         if: always()
         run: docker compose -f tests/smoke/trino-stack/docker-compose.yml down -v
 
-  # On tag push: build both engine images for linux/amd64 and linux/arm64 and push
-  # them to ghcr.io/${{ github.repository }}:<tag>-<engine>. Both platforms are
-  # required: domain repos build their own images FROM these, and Continuo's e2e
-  # runs them in a kind cluster on aarch64 developer machines as well as on amd64
-  # CI runners, so a single-arch publish is unusable off amd64. The smoke jobs
-  # above stay single-arch — they load a `docker save` tarball, which has no
-  # multi-platform equivalent.
-  # continuo-validation-contract, continuo-python-runtime-postgres, and
-  # continuo-python-runtime-trino are all installed from the build context / PyPI
-  # already (see Dockerfile.postgres / Dockerfile.trino and publish-pypi.yml) —
-  # nothing pending here.
+  # On tag push: build both engine images for linux/amd64 and linux/arm64 and
+  # push them to ghcr.io/<owner>/continuo-python-runtime-<engine>:<tag>. The
+  # engine belongs in the image NAME, not the tag: Continuo's Helm chart pins an
+  # image as `<name>:vX.Y.Z@sha256:<digest>`, so the tag must be the bare
+  # version. Both platforms are required: domain repos build their own images
+  # FROM these, and Continuo's e2e runs them in a kind cluster on aarch64
+  # developer machines as well as on amd64 CI runners, so a single-arch publish
+  # is unusable off amd64. The smoke jobs above stay single-arch — they load a
+  # `docker save` tarball, which has no multi-platform equivalent.
+  # continuo-engine-contract and the two engine adapters are installed from the
+  # build context (see Dockerfile.postgres / Dockerfile.trino) — nothing pending
+  # here.
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [smoke-postgres, smoke-trino]
@@ -172,4 +192,4 @@ jobs:
           file: Dockerfile.${{ matrix.engine }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}-${{ matrix.engine }}
+          tags: ghcr.io/${{ github.repository_owner }}/continuo-python-runtime-${{ matrix.engine }}:${{ github.ref_name }}

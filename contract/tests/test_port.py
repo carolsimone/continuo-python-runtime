@@ -158,10 +158,14 @@ def test_single_entry_point_group_and_single_discovery():
     from continuo_engine_contract import port
 
     assert port.ENTRY_POINT_GROUP == "continuo_engine.adapters"
-    assert not hasattr(port, "RUNTIME_ENTRY_POINT_GROUP")
-    assert not hasattr(port, "discover_runtime_adapter")
-    assert not hasattr(port, "ValidationAdapter")
-    assert not hasattr(port, "RuntimeAdapter")
+    public = {name for name in dir(port) if not name.startswith("_")}
+    # Asserted as exhaustive sets rather than as absent legacy spellings: the
+    # merge left exactly one entry-point group, one discovery function, and
+    # one port class, so a second of any of them fails here whatever it is
+    # called. (tests/test_no_legacy_names.py owns the old spellings.)
+    assert {n for n in public if n.endswith("ENTRY_POINT_GROUP")} == {"ENTRY_POINT_GROUP"}
+    assert {n for n in public if n.startswith("discover")} == {"discover_adapter"}
+    assert {n for n in public if n.endswith("Adapter")} == {"WarehouseAdapter"}
 
 
 def test_ensure_table_signature_declares_config_keyword_only():

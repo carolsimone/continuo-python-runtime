@@ -8,18 +8,54 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      # continuo-validation-contract resolves from PyPI (==0.4.0).
       - name: Sync
         run: uv sync --all-packages --all-groups
       - name: Lint
         run: uv run ruff check .
+      - name: Lint (contract)
+        run: uv run ruff check contract
       - name: Types (runtime)
         run: uv run mypy continuo_python_runtime
+      - name: Types (contract)
+        run: uv run mypy contract/continuo_engine_contract
       - name: Types (postgres adapter)
         run: uv run --package continuo-python-runtime-postgres mypy adapters/postgres/continuo_python_runtime_postgres
       - name: Types (trino adapter)
         run: uv run --package continuo-python-runtime-trino mypy adapters/trino/continuo_python_runtime_trino
+      # `-m "not image"` deselects tests/test_image_smoke_validation.py, which
+      # needs a built engine image and the env naming it. Those tests run in
+      # images.yml's smoke jobs, where an image actually exists.
       - name: Tests (runtime)
-        run: uv run pytest --cov=continuo_python_runtime -v
+        run: uv run pytest --cov=continuo_python_runtime -m "not image" -v
+      - name: Tests (contract)
+        run: uv run pytest contract/tests -v
       - name: Tests (adapter units)
         run: uv run pytest adapters/postgres/tests adapters/trino/tests -m "not integration" -v
+
+  integration-postgres:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-packages --all-groups
+      - name: Start postgres stack
+        run: docker compose -f tests/smoke/postgres-stack/docker-compose.yml up -d --wait
+      - name: Tests (postgres integration)
+        run: uv run pytest adapters/postgres/tests -m integration -v
+      - name: Tear down postgres stack
+        if: always()
+        run: docker compose -f tests/smoke/postgres-stack/docker-compose.yml down -v
+
+  integration-trino:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-packages --all-groups
+      - name: Start trino stack
+        run: docker compose -f tests/smoke/trino-stack/docker-compose.yml up -d --wait
+      - name: Tests (trino integration)
+        run: uv run pytest adapters/trino/tests -m integration -v
+      - name: Tear down trino stack
+        if: always()
+        run: docker compose -f tests/smoke/trino-stack/docker-compose.yml down -v

@@ -52,7 +52,7 @@ class _FakeConnection:
     """Minimal connection double: every ``_execute`` call opens a fresh cursor.
 
     Unlike the postgres adapter, trino's ``ensure_table`` never opens more
-    than one statement per cursor, and ``_ensure_schema`` + the final
+    than one statement per cursor, and ``ensure_schema`` + the final
     ``CREATE TABLE`` both flow through ``TrinoAdapter._execute``, so a
     single shared ``statements`` list is enough: a successful call appends
     exactly ``[CREATE SCHEMA ..., CREATE TABLE ...]``, in that order.

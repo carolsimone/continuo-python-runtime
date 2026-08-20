@@ -311,3 +311,15 @@ def test_run_success_emits_sentinel_block(harness_repo, monkeypatch, capsys):
     assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
     body = json.loads(out.split("BEGIN===\n")[1].split("\n===CONTINUO")[0])
     assert body["status"] == "success"
+
+
+def test_validation_op_subcommand_dispatches_runner(monkeypatch):
+    """`continuo-runtime validation-op` executes one blue/green validation op —
+    the container command continuo's executor sets on validation and schema-op
+    pods. (`validate` was taken: it lints contract dirs in domain-repo CI.)"""
+    calls = []
+    import continuo_python_runtime.validation.runner as vrunner
+    monkeypatch.setattr(vrunner, "main", lambda: calls.append("ran"))
+    from continuo_python_runtime.cli import main
+    assert main(["validation-op"]) == 0
+    assert calls == ["ran"]

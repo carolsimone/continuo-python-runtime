@@ -73,6 +73,13 @@ def main(argv: list[str] | None = None) -> int:
         "run", help="Execute a node script (container entrypoint)"
     )
 
+    # validation-op subcommand
+    subparsers.add_parser(
+        "validation-op",
+        help="Execute one blue/green validation operation (container command; "
+             "driven by VALIDATION_OP and the engine Secret env)",
+    )
+
     args = parser.parse_args(argv)
 
     try:
@@ -88,6 +95,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_lint(args.path)
         elif args.command == "run":
             return cmd_run()
+        elif args.command == "validation-op":
+            from continuo_python_runtime.validation.runner import main as validation_op_main
+            validation_op_main()
+            return 0
     except HarnessError as exc:
         logger.error("%s", exc)
         return 1

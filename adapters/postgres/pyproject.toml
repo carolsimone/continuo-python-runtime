@@ -1,13 +1,18 @@
 [project]
 version = "0.2.0"
 name = "continuo-python-runtime-postgres"
-description = "Postgres runtime adapter for Continuo python nodes."
+description = "Postgres warehouse adapter for Continuo: validation and python-node runtime."
 authors = [{ name = "Simone Carolini" }]
 maintainers = [{ name = "Simone Carolini" }]
 readme = "README.md"
 requires-python = ">= 3.14"
 dependencies = [
-    "continuo-validation-contract==0.6.0",
+    # Pinned for the same reason as the root package: [tool.uv.sources] below is
+    # a uv-only redirect that never reaches built metadata, so any distribution
+    # of this adapter would otherwise accept whatever contract release is
+    # newest. This adapter subclasses the contract's WarehouseAdapter port
+    # directly, so the pair must stay the tested one.
+    "continuo-engine-contract==0.7.0",
     "psycopg2-binary==2.9.11",
     "pyarrow==25.0.0",
 ]
@@ -17,8 +22,8 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 
-[project.entry-points."continuo_runtime.adapters"]
-postgres = "continuo_python_runtime_postgres.adapter:PostgresRuntimeAdapter"
+[project.entry-points."continuo_engine.adapters"]
+postgres = "continuo_python_runtime_postgres.adapter:PostgresAdapter"
 
 [dependency-groups]
 dev = [
@@ -43,3 +48,6 @@ target-version = "py312"
 [tool.mypy]
 python_version = "3.14"
 strict = false
+
+[tool.uv.sources]
+continuo-engine-contract = { workspace = true }

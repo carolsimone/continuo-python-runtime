@@ -1,37 +1,42 @@
 name: publish-pypi
 
-# Publishes the continuo-python-runtime package via PyPI Trusted Publishing
-# (OIDC, no stored token).
+# Publishes both PyPI distributions this repo owns — continuo-python-runtime
+# (the harness) and continuo-engine-contract (the port, result-block format,
+# and shared guards) — via PyPI Trusted Publishing (OIDC, no stored token).
 #
 # The two engine adapters (continuo-python-runtime-postgres /
 # continuo-python-runtime-trino) are deliberately NOT published here. Nothing
-# installs them from an index: the runtime images build them from the build
+# installs them from an index: the engine images build them from the build
 # context (see Dockerfile.postgres / Dockerfile.trino and images.yml), and the
 # harness package does not depend on them — adapters are found at run time
-# through the `continuo_runtime.adapters` entry-point group, inside the image
+# through the `continuo_engine.adapters` entry-point group, inside the image
 # that installed exactly one. Publishing them would only add releases with no
 # consumer. They remain uv workspace members and are still built, typed, and
 # tested by ci.yml.
 #
-# Tag glob note: "python-runtime-v*" requires a literal "v" immediately after
-# the dash, so it matches only the harness tag (python-runtime-v1.2.3[-testN]).
-# Tag `<pkg>-v<ver>-test<n>` publishes to TestPyPI; `<pkg>-v<ver>` publishes to
-# real PyPI. The GitHub environment name is what the PyPI "pending publisher"
-# is registered against.
+# Tag glob note: `v*` is the repository's single release pattern — the same tag
+# that images.yml builds and pushes both engine images from, so one tag ships
+# the whole release. GitHub Actions tag globs anchor at character 1, so `v*`
+# claims every tag beginning with "v"; no other pattern may be introduced.
+# Tag `v<ver>-test<n>` publishes to TestPyPI; `v<ver>` publishes to real PyPI.
+# The GitHub environment name is what the PyPI "pending publisher" is
+# registered against — both project names need one on each index.
 #
-# Ordering: continuo-validation-contract==0.4.0 must exist on the target index
-# before publishing here — consumers of the wheel resolve it from that index
-# ([tool.uv.sources] is dev-only and not embedded in the wheel).
+# Both distributions are built into a single `dist/` and uploaded in one
+# publish call, so there is no ordering constraint between them. The runtime
+# wheel declares continuo-engine-contract as a dependency and resolves it from
+# the index at install time ([tool.uv.sources] is dev-only and is not embedded
+# in the wheel).
 on:
   push:
     tags:
-      - "python-runtime-v*"
+      - "v*"
 
 permissions: {}
 
 jobs:
-  publish-runtime:
-    if: startsWith(github.ref_name, 'python-runtime-v')
+  publish-packages:
+    if: startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
     environment: ${{ contains(github.ref_name, '-test') && 'testpypi' || 'pypi' }}
     permissions:
@@ -41,10 +46,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - name: Test before publishing
+        # `-m "not image"` deselects the image smoke tests; images.yml runs
+        # those against a built engine image.
         run: |
-          uv sync --all-groups
-          uv run pytest -q
-      - name: Build the sdist + wheel
+          uv sync --all-packages --all-groups
+          uv run pytest tests contract/tests -m "not image" -q
+      - name: Build the contract sdist + wheel
+        run: uv build --package continuo-engine-contract -o dist
+      - name: Build the runtime sdist + wheel
         run: uv build -o dist
       - name: Publish to TestPyPI
         if: contains(github.ref_name, '-test')

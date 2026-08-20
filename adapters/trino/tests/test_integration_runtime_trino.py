@@ -4,9 +4,9 @@ Run the stack first:
     docker compose -f docker-compose.integration.yml --profile trino up -d --wait
 
 Note on entry-point discovery: this suite does NOT call
-``discover_runtime_adapter()`` and assert it returns trino. In a dev venv where
+``discover_adapter()`` and assert it returns trino. In a dev venv where
 both runtime packages are installed (as they are in this workspace), the
-``continuo_runtime.adapters`` group has two entries and global discovery
+``continuo_engine.adapters`` group has two entries and global discovery
 deliberately raises. The in-repo test therefore selects the named ``trino`` entry
 point; runner images separately enforce the exactly-one-plugin invariant.
 """
@@ -21,7 +21,7 @@ import pytest
 
 import trino
 
-from continuo_python_runtime_trino.adapter import TrinoRuntimeAdapter
+from continuo_python_runtime_trino.adapter import TrinoAdapter
 
 TRINO_ENV = {
     "TRINO_HOST": "localhost",
@@ -32,12 +32,12 @@ TRINO_ENV = {
 }
 
 
-def _adapter() -> TrinoRuntimeAdapter:
+def _adapter() -> TrinoAdapter:
     """Build an adapter from the live stack's connection env."""
     for key, value in TRINO_ENV.items():
         os.environ[key] = value
     os.environ.pop("TRINO_PASSWORD", None)
-    return TrinoRuntimeAdapter.from_env()
+    return TrinoAdapter.from_env()
 
 
 @pytest.fixture()
@@ -98,6 +98,7 @@ def test_ensure_table_creates_typed_table_with_not_null(clean_schema):
             {"name": "label", "type": "VARCHAR(10)", "nullable": True},
             {"name": "amount", "type": "NUMERIC(10,2)", "nullable": False},
         ],
+        config={},
     )
     a.close()
     cols = _columns(clean_schema, "typed")
@@ -113,8 +114,8 @@ def test_ensure_table_is_idempotent(clean_schema):
     """Calling ensure_table twice for the same table does not fail."""
     a = _adapter()
     cols = [{"name": "id", "type": "INT", "nullable": True}]
-    a.ensure_table(clean_schema, "again", cols)
-    a.ensure_table(clean_schema, "again", cols)
+    a.ensure_table(clean_schema, "again", cols, config={})
+    a.ensure_table(clean_schema, "again", cols, config={})
     a.close()
     assert _columns(clean_schema, "again") == [("id", "integer", "YES")]
 
@@ -127,6 +128,7 @@ def test_ensure_and_load_support_quoted_identifiers(clean_schema):
         clean_schema,
         "order table",
         [{"name": 'order"id', "type": "BIGINT", "nullable": False}],
+        config={},
     )
     a.load(
         clean_schema,
@@ -234,7 +236,7 @@ def test_load_preserves_unrelated_suffix_tables(clean_schema):
 def test_load_preserves_iceberg_table_properties(clean_schema):
     """A content replacement retains connector properties but gets a fresh location."""
     a = _adapter()
-    a._ensure_schema(clean_schema)
+    a.ensure_schema(clean_schema)
     target_ref = f'iceberg."{clean_schema}"."partitioned"'
     properties_ref = f'iceberg."{clean_schema}"."partitioned$properties"'
     a._execute(
@@ -277,6 +279,7 @@ def test_load_preserves_not_null_constraint_across_swap(clean_schema):
         clean_schema, "notnull_t",
         [{"name": "id", "type": "BIGINT", "nullable": False},
          {"name": "name", "type": "TEXT", "nullable": True}],
+        config={},
     )
     data = pa.table({"id": pa.array([1], type=pa.int64()), "name": pa.array(["a"])})
     a.load(clean_schema, "notnull_t", data)
@@ -305,6 +308,7 @@ def test_load_failure_leaves_prior_target_intact_and_cleans_up_staging(clean_sch
         clean_schema, "tgt2",
         [{"name": "id", "type": "BIGINT", "nullable": False},
          {"name": "label", "type": "VARCHAR(10)", "nullable": True}],
+        config={},
     )
     a.load(clean_schema, "tgt2", pa.table({
         "id": pa.array([1], type=pa.int64()), "label": pa.array(["a"]),
@@ -332,7 +336,7 @@ def test_load_failure_leaves_prior_target_intact_and_cleans_up_staging(clean_sch
 def test_load_zero_rows_swaps_in_an_empty_table(clean_schema):
     """load() with a 0-row Arrow table swaps in an empty target."""
     a = _adapter()
-    a.ensure_table(clean_schema, "tgt3", [{"name": "id", "type": "INT", "nullable": True}])
+    a.ensure_table(clean_schema, "tgt3", [{"name": "id", "type": "INT", "nullable": True}], config={})
     a.load(clean_schema, "tgt3", pa.table({
         "id": pa.array([1, 2], type=pa.int32()),
     }))
@@ -352,15 +356,15 @@ def test_fetch_rejects_duplicate_select_columns(clean_schema):
 
 
 def test_entry_point_resolves_to_this_adapter():
-    """The `trino` runtime entry point is registered and loads TrinoRuntimeAdapter.
+    """The `trino` engine entry point is registered and loads TrinoAdapter.
 
-    Does NOT call discover_runtime_adapter(): see the module docstring — with
+    Does NOT call discover_adapter(): see the module docstring — with
     continuo-python-runtime-postgres also installed in this dev venv, two entry points
-    are registered under continuo_runtime.adapters, and discover_runtime_adapter()
+    are registered under continuo_engine.adapters, and discover_adapter()
     deliberately raises when more than one is installed. Only a runner image
     (which installs exactly one engine package) can rely on discovery choosing
     trino; here we assert the entry point itself is correctly wired.
     """
-    eps = [ep for ep in entry_points(group="continuo_runtime.adapters") if ep.name == "trino"]
+    eps = [ep for ep in entry_points(group="continuo_engine.adapters") if ep.name == "trino"]
     assert len(eps) == 1
-    assert eps[0].load() is TrinoRuntimeAdapter
+    assert eps[0].load() is TrinoAdapter

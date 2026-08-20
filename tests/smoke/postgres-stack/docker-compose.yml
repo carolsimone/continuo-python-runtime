@@ -1,4 +1,4 @@
-# Tier-2 integration stack for python-runtime-postgres. Non-default host port
+# Tier-2 integration stack for adapters/postgres. Non-default host port
 # (15499) to avoid colliding with other local postgres stacks.
 services:
   postgres:

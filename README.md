@@ -8,53 +8,69 @@ and register the release with Continuo.
 
 ## What this repo is
 
-Three artifacts come out of this repository:
+Four artifacts come out of this repository:
 
 - **The `continuo-python-runtime` PyPI package** — the `continuo-runtime` CLI
-  (`validate` / `merge` / `hash` / `lint` / `run`) and the harness library
-  (`conform()`, `RunContext`, the error taxonomy) that domain repos install.
-- **Per-engine base images**, one per warehouse engine (`...-postgres`,
-  `...-trino`), that domain repos build `FROM`. Each image bakes in the
-  runtime, a single `RuntimeAdapter` for that engine, and the
-  `continuo-runtime run` entrypoint.
+  (`validate` / `merge` / `hash` / `lint` / `run` / `validation-op`) and the
+  harness library (`conform()`, `RunContext`, the error taxonomy) that domain
+  repos install.
+- **The `continuo-engine-contract` PyPI package** — the `WarehouseAdapter`
+  port, the contract schema, the shared SQL/type/config guards, and the
+  sentinel result-block format. Adapter authors outside this repo pin it.
+- **Per-engine base images**, one per warehouse engine
+  (`continuo-python-runtime-postgres`, `continuo-python-runtime-trino`), that
+  domain repos build `FROM`. Each image bakes in the runtime and a single
+  `WarehouseAdapter` for that engine, and serves both roles that adapter has:
+  the node harness (`ENTRYPOINT ["continuo-runtime"]`, `CMD ["run"]`) and the
+  validation runner (`continuo-runtime validation-op`).
 - **`template/`** — a copy-ready domain repo: `Dockerfile`, `contracts/`,
   `scripts/`, and the `release.yml` CI/CD workflow.
 
-Base images and the PyPI publication of this package land with this repo's
-PR 9 (the image pipeline); until then, install the runtime from git as noted
-in `template/.github/workflows/release.yml`.
+One `vX.Y.Z` git tag releases all of it: `publish-pypi.yml` builds both
+distributions into a single `dist/` and publishes them together, and
+`images.yml` builds and pushes both engine images multi-arch under the same
+tag.
 
-### Package map
+### What this repo owns
 
-Each per-engine base image bakes together three PyPI packages: the harness,
-the engine adapter, and the published contract. The harness and both engine
-adapters live in *this* repo (`continuo-python-runtime`) as a uv workspace;
-`continuo-validation-runners` owns the *validation-side* (offline lint/merge)
-counterparts of the same engines, which is a separate concern from the
-data-plane adapters here.
+This repository owns the entire python-node surface: the engine contract, both
+engine adapters, the validation runner, and the node harness. The former
+`continuo-validation` repository was merged in — there is no longer a separate
+validation-side port, adapter class, entry-point group, or image. One
+`WarehouseAdapter` per engine serves both the data plane (`fetch` /
+`ensure_table` / `load`) and validation (`ensure_schema` / `drop_schema` /
+`build_empty_from_sql` / `build_empty_from_columns` / `clone_empty_from_prod` /
+`check_binds`), and one image per engine runs both roles.
 
 | Package (distribution name) | Module | Lives in | Role |
 | --- | --- | --- | --- |
-| `continuo-python-runtime` | `continuo_python_runtime` | this repo (root) | Harness: CLI, `conform()`, `RunContext`, error taxonomy. |
-| `continuo-python-runtime-postgres` | `continuo_python_runtime_postgres` | this repo, `python-runtime-postgres/` | Data-plane `RuntimeAdapter` for Postgres (`fetch`/`ensure_table`/`load`). **Not published to PyPI** — built from source into the image. |
-| `continuo-python-runtime-trino` | `continuo_python_runtime_trino` | this repo, `python-runtime-trino/` | Data-plane `RuntimeAdapter` for Trino/Iceberg. **Not published to PyPI** — built from source into the image. |
-| `continuo-validation-contract` | `continuo_validation_contract` | `continuo-validation-runners` | The published contract (schema, `RuntimeAdapter` port, result-block format) both sides depend on. |
-| `continuo-validation-postgres` / `continuo-validation-trino` | `continuo_validation_postgres` / `continuo_validation_trino` | `continuo-validation-runners` | Validation-side (lint/merge, no live warehouse I/O) adapters — not to be confused with the data-plane adapters above. |
+| `continuo-python-runtime` | `continuo_python_runtime` | this repo (root) | Harness (CLI, `conform()`, `RunContext`, error taxonomy) **and** the validation runner (`continuo-runtime validation-op`). Published to PyPI. |
+| `continuo-engine-contract` | `continuo_engine_contract` | this repo, `contract/` | The `WarehouseAdapter` port, contract schema, the SQL/type/config guards adapters must run, and the result-block format. Published to PyPI. |
+| `continuo-python-runtime-postgres` | `continuo_python_runtime_postgres` | this repo, `adapters/postgres/` | `PostgresAdapter` — one class, both roles. **Not published to PyPI** — built from source into the image. |
+| `continuo-python-runtime-trino` | `continuo_python_runtime_trino` | this repo, `adapters/trino/` | `TrinoAdapter` — one class, both roles, for Trino/Iceberg. **Not published to PyPI** — built from source into the image. |
 
-All three packages built in this repo resolve `continuo-validation-contract`
-from PyPI (`==0.6.0`); the two adapter packages are uv workspace members
-(`[tool.uv.workspace]` in the root `pyproject.toml`), so `uv sync
---all-packages --all-groups` at the repo root installs everything for local
-development.
+All four are uv workspace members (`[tool.uv.workspace]` in the root
+`pyproject.toml`), so `uv sync --all-packages --all-groups` at the repo root
+installs everything for local development.
 
-**Only `continuo-python-runtime` is published to PyPI.** The two engine
-adapters are built **from source into the runtime images**: `Dockerfile.postgres`
-and `Dockerfile.trino` `pip install` them out of the build context, so each
-image ships exactly one adapter and the harness discovers it through the
-`continuo_runtime.adapters` entry-point group at run time. Nothing installs
-them from an index — the harness package does not depend on them, and domain
-repos get their adapter by building `FROM` a published base image. They are
-still built, type-checked, and tested by CI on every change.
+**Only `continuo-python-runtime` and `continuo-engine-contract` are published
+to PyPI.** The two engine adapters are built **from source into the engine
+images**: `Dockerfile.postgres` and `Dockerfile.trino` install them out of the
+build context, so each image ships exactly one adapter and the runtime
+discovers it through the `continuo_engine.adapters` entry-point group at run
+time. Nothing installs them from an index — the harness package does not
+depend on them, and domain repos get their adapter by building `FROM` a
+published base image. They are still built, type-checked, and tested by CI on
+every change.
+
+### The result block is a frozen wire contract
+
+`continuo_engine_contract.result` writes a sentinel-framed JSON block as the
+last line of stdout, and Continuo's Go side parses it byte-for-byte
+(`pkg/validationresult` in the `continuo` repository). That wire format — the
+sentinel markers, the framing, and the field names inside the block — is
+**frozen**. Reuse it; never change it from this side alone. A change here that
+the Go parser has not been taught is a production outage, not a refactor.
 
 ## Quickstart for domain teams
 
@@ -82,7 +98,7 @@ still built, type-checked, and tested by CI on every change.
 ### Upgrading an existing domain repo
 
 `validate` / `merge` / `hash` now hand every declared read to a real SQL
-parser (sqlglot, via `continuo_validation_contract.sql.ensure_single_read`)
+parser (sqlglot, via `continuo_engine_contract.sql.ensure_single_read`)
 instead of scanning it for a leading `SELECT`/`WITH`. Two things follow for a
 repo written before this, on its next release: SQL a driver would accept but
 a parser will not — most commonly a driver-specific bind placeholder like
@@ -122,9 +138,13 @@ def run(ctx):
   example a polars DataFrame. Returning anything else raises `ScriptError`.
 - The dataframe library is your choice. No dataframe library is baked into
   the base image — the package's own runtime dependencies are `pyarrow`,
-  `PyYAML`, and `continuo-validation-contract`. Add whatever you script
+  `PyYAML`, and `continuo-engine-contract`. Add whatever you script
   against (pandas, polars, …) as a `RUN pip install` line in your own
-  `Dockerfile`, on top of the base image.
+  `Dockerfile`, on top of the base image. The base image runs as non-root
+  (uid 65532), which pip cannot install under, so switch to root for the
+  install and back afterward — `USER root`, then the `RUN pip install`
+  line, then `USER 65532:65532` — since the executor's pod spec expects
+  the image to end at uid 65532. See `template/Dockerfile` for the pattern.
 - Scripts do not import warehouse drivers, write raw SQL literals, or call
   data-access methods directly — `continuo-runtime lint` rejects those:
   - forbidden driver imports (`psycopg2`/`sqlalchemy`/`trino`/etc.),
@@ -192,19 +212,20 @@ A domain repo picks its warehouse engine by which base image it builds
 `FROM`:
 
 ```dockerfile
-FROM ghcr.io/carolsimone/continuo-python-runtime:v0.2.0-postgres
+FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.3.0
 # or
-FROM ghcr.io/carolsimone/continuo-python-runtime:v0.2.0-trino
+FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.3.0
 ```
 
-Each image bakes in exactly one `RuntimeAdapter` for that engine — installed
-from this repo's `python-runtime-postgres/` or `python-runtime-trino/`
-package (see the package map above; both adapters live in this repo, not
-`continuo-validation-runners`) — registered under the
-`continuo_runtime.adapters` entry-point group (entry names `postgres` /
-`trino`). The harness discovers it via `discover_runtime_adapter()` at run
-time, so a single image serves every node in the service. The executor
-injects the
+The engine is part of the image **name**; the tag is the bare version, so
+Continuo's Helm chart can pin an image as `<name>:vX.Y.Z@sha256:<digest>`.
+
+Each image bakes in exactly one `WarehouseAdapter` for that engine — installed
+from this repo's `adapters/postgres/` or `adapters/trino/` package (see the
+table above) — registered under the `continuo_engine.adapters` entry-point
+group (entry names `postgres` / `trino`). The runtime discovers it via
+`discover_adapter()` at run time, so a single image serves every node in the
+service and the release-time validation Job for it. The executor injects the
 warehouse connection as environment variables (engine-native, e.g.
 `POSTGRES_HOST`/`POSTGRES_DB`/`POSTGRES_USER`) plus the node-selection
 environment (`NODE_ID`, `TABLE_NAME`, `TARGET_SCHEMA`, and optionally

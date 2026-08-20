@@ -7,7 +7,7 @@ import yaml
 
 import continuo_python_runtime.cli as cli_module
 from continuo_python_runtime.cli import main
-from tests.conftest import FakeRuntimeAdapter
+from tests.conftest import FakeWarehouseAdapter
 
 
 def test_validate_ok(contract_repo):
@@ -295,9 +295,9 @@ def test_run_success_emits_sentinel_block(harness_repo, monkeypatch, capsys):
     monkeypatch.setenv("CONTRACT_DIR", str(harness_repo / "contracts"))
     monkeypatch.setenv("APP_ROOT", str(harness_repo))
 
-    # Monkeypatch build_adapter to return FakeRuntimeAdapter
+    # Monkeypatch build_adapter to return FakeWarehouseAdapter
     def fake_build_adapter():
-        return FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+        return FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1]})})
 
     import continuo_python_runtime.harness
     monkeypatch.setattr(continuo_python_runtime.harness, "build_adapter", fake_build_adapter)
@@ -311,3 +311,15 @@ def test_run_success_emits_sentinel_block(harness_repo, monkeypatch, capsys):
     assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
     body = json.loads(out.split("BEGIN===\n")[1].split("\n===CONTINUO")[0])
     assert body["status"] == "success"
+
+
+def test_validation_op_subcommand_dispatches_runner(monkeypatch):
+    """`continuo-runtime validation-op` executes one blue/green validation op —
+    the container command continuo's executor sets on validation and schema-op
+    pods. (`validate` was taken: it lints contract dirs in domain-repo CI.)"""
+    calls = []
+    import continuo_python_runtime.validation.runner as vrunner
+    monkeypatch.setattr(vrunner, "main", lambda: calls.append("ran"))
+    from continuo_python_runtime.cli import main
+    assert main(["validation-op"]) == 0
+    assert calls == ["ran"]

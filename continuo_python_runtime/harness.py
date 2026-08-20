@@ -21,10 +21,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from continuo_validation_contract.port import (  # type: ignore[import-untyped]
-    discover_runtime_adapter,
+from continuo_engine_contract.port import (  # type: ignore[import-untyped]
+    discover_adapter,
 )
-from continuo_validation_contract.result import result_block  # type: ignore[import-untyped]
+from continuo_engine_contract.result import result_block  # type: ignore[import-untyped]
 
 from continuo_python_runtime.conform import conform, to_arrow
 from continuo_python_runtime.context import RunContext
@@ -141,13 +141,13 @@ def load_script(node: Node, repo_root: Path) -> ModuleType:
 
 
 def build_adapter() -> Any:
-    """Discover and construct the single installed runtime adapter.
+    """Discover and construct the single installed warehouse adapter.
 
     Raises:
         LoadError: If any of the adapter's ``required_env()`` vars are unset
             or empty in ``os.environ``.
     """
-    _, cls = discover_runtime_adapter()
+    _, cls = discover_adapter()
     required = cls.required_env()
     missing = [key for key in required if not os.environ.get(key)]
     if missing:
@@ -178,13 +178,12 @@ def _validate_config_early(adapter: Any, node: Node) -> None:
     but it is called *after* the script has executed and its result has been
     conformed, so a single typo (``config: {index: [...]}``) burned the whole
     node run before failing. This is the tripwire that fails it in the first
-    second instead. Validation-time checking of the same vocabulary is a future
-    cross-repo dependency (continuo-validation step 3a), and `continuo-runtime
-    validate` runs on a CI runner where no engine adapter is installed at all,
-    so this is the earliest point the engine's own rules can be applied.
+    second instead. `continuo-runtime validate` cannot do it earlier still: it
+    runs on a domain repo's CI runner, where no engine adapter is installed at
+    all, so this is the earliest point the engine's own rules can be applied.
 
     The call is skipped for an adapter that does not provide ``validate_config``:
-    the abstract ``RuntimeAdapter`` in the pinned ``continuo-validation-contract``
+    the abstract ``WarehouseAdapter`` in ``continuo-engine-contract``
     does not declare it (this repo ships the harness and both adapters as one
     coordinated release), and an adapter without it loses only earliness —
     ``ensure_table`` still fails closed on the same config.

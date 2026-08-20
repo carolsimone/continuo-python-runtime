@@ -1,14 +1,23 @@
 # continuo-python-runtime-trino
 
-Trino (Iceberg connector) runtime-adapter library for Continuo python nodes.
-Implements `continuo_validation_contract.port.RuntimeAdapter` (from the
-published `continuo-validation-contract` package) and registers itself under
-entry-point group `continuo_runtime.adapters` as `trino`.
+Trino (Iceberg connector) engine-adapter library for Continuo python nodes.
+`TrinoAdapter` implements `continuo_engine_contract.port.WarehouseAdapter`
+(from the `continuo-engine-contract` package) — one class covering both the
+data plane (`fetch` / `ensure_table` / `load`) and release-time validation
+(`ensure_schema` / `drop_schema` / `build_empty_from_sql` /
+`build_empty_from_columns` / `clone_empty_from_prod` / `check_binds`) — and
+registers itself under entry-point group `continuo_engine.adapters` as
+`trino`.
 
 Connection env: `TRINO_HOST`, `TRINO_CATALOG` (required); `TRINO_PORT` (default
 8080), `TRINO_USER` (default `continuo`), `TRINO_HTTP_SCHEME` (default `http`),
-`TRINO_PASSWORD` (optional; requires `TRINO_HTTP_SCHEME=https`). Mirrors
-`continuo_validation_trino.adapter.TrinoAdapter.from_env` exactly.
+`TRINO_PASSWORD` (optional; requires `TRINO_HTTP_SCHEME=https`).
+
+The `config:` vocabulary is the union of the two vocabularies this adapter
+inherited from the merge: `partitioning`, `sorted_by`, `format`, and
+`format_version`. `format` takes the `PARQUET` / `ORC` / `AVRO` allowlist on
+every path. `location` and `extra_properties` are deliberately absent — see
+the adapter module docstring.
 
 ## No multi-statement transactions
 

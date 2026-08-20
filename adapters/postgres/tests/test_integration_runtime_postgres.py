@@ -11,7 +11,7 @@ import psycopg2
 import pyarrow as pa
 import pytest
 
-from continuo_python_runtime_postgres.adapter import PostgresRuntimeAdapter
+from continuo_python_runtime_postgres.adapter import PostgresAdapter
 
 PG = dict(
     host="localhost",
@@ -27,7 +27,7 @@ def _conn():
 
 
 def _adapter():
-    return PostgresRuntimeAdapter(_conn())
+    return PostgresAdapter(_conn())
 
 
 @pytest.fixture()
@@ -93,6 +93,7 @@ def test_ensure_table_creates_typed_table_with_not_null(clean_schema):
             {"name": "label", "type": "VARCHAR(10)", "nullable": True},
             {"name": "amount", "type": "NUMERIC(10,2)", "nullable": False},
         ],
+        config={},
     )
     a.close()
     cols = _columns(clean_schema, "typed")
@@ -108,8 +109,8 @@ def test_ensure_table_is_idempotent(clean_schema):
     """Calling ensure_table twice for the same table does not fail."""
     a = _adapter()
     cols = [{"name": "id", "type": "INT", "nullable": True}]
-    a.ensure_table(clean_schema, "again", cols)
-    a.ensure_table(clean_schema, "again", cols)
+    a.ensure_table(clean_schema, "again", cols, config={})
+    a.ensure_table(clean_schema, "again", cols, config={})
     a.close()
     assert _columns(clean_schema, "again") == [("id", "integer", "YES")]
 
@@ -207,6 +208,33 @@ def test_load_rollback_on_failure_leaves_prior_contents_intact(clean_schema):
 
 
 @pytest.mark.integration
+def test_failed_load_leaves_prior_contents_intact(clean_schema):
+    """load is TRUNCATE + inserts in ONE explicit transaction: a mid-load
+    failure must roll the TRUNCATE back, not leave an empty table.
+
+    Distinct from test_load_rollback_on_failure_leaves_prior_contents_intact
+    above (which fails on a VARCHAR overflow): this drives the failure
+    through a NOT NULL violation, per the plan's atomicity test.
+    """
+    _seed(
+        clean_schema,
+        "tgt4",
+        "id int not null, amount int",
+        f'INSERT INTO "{clean_schema}"."tgt4" VALUES (1, 100), (2, 200)',
+    )
+    a = _adapter()
+    bad = pa.table({
+        "id": pa.array([None], type=pa.int64()),
+        "amount": pa.array([None], type=pa.int64()),
+    })
+    with pytest.raises(Exception):
+        a.load(clean_schema, "tgt4", bad)
+    a.close()
+
+    assert _count(clean_schema, "tgt4") == 2
+
+
+@pytest.mark.integration
 def test_load_zero_rows_just_truncates(clean_schema):
     """load() with a 0-row Arrow table truncates without attempting an insert."""
     _seed(
@@ -259,10 +287,10 @@ def test_ensure_schema_generic_failure_rolls_back_and_releases_advisory_lock():
     """
     schema = f"lock_leak_it_{uuid.uuid4().hex[:8]}"
     bad_conn = psycopg2.connect(cursor_factory=_RewritingCreateSchemaCursor, **PG)
-    a = PostgresRuntimeAdapter(bad_conn)
+    a = PostgresAdapter(bad_conn)
 
     with pytest.raises(psycopg2.Error):
-        a.ensure_table(schema, "t", [{"name": "id", "type": "INT", "nullable": True}])
+        a.ensure_table(schema, "t", [{"name": "id", "type": "INT", "nullable": True}], config={})
     a.close()
 
     # Proof the session advisory lock was released: a second connection can

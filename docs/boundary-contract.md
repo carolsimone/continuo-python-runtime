@@ -6,7 +6,8 @@ reproduced here unchanged. It previously lived at the top of this repo's
 repeating it.
 
 The runtime lives in its **own repository** (`continuo-python-runtime`),
-mirroring the continuo-validation-runners split. Domain teams (marketing,
+which also owns the engine contract, both engine adapters, and the validation
+runner. Domain teams (marketing,
 finance, …) template from it: they add their scripts + contract yaml files
 and inherit a CI/CD that produces everything Continuo needs. Continuo's side
 of the boundary is exactly five surfaces — nothing else crosses it.
@@ -42,7 +43,7 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   `--dialect <name>` flag (e.g. `postgres`, `trino`) so a domain repo can
   check its reads against that dialect locally, catching the failure in its
   own CI instead of at Continuo's parser. Reads are always parsed (via
-  `continuo_validation_contract.sql.ensure_single_read`, sqlglot-backed) even
+  `continuo_engine_contract.sql.ensure_single_read`, sqlglot-backed) even
   without `--dialect` — the flag only chooses which dialect's grammar that
   parse is checked against, defaulting to sqlglot's dialect-neutral parser
   when omitted.
@@ -80,7 +81,7 @@ contract is already engine-bound, since reads are authored in that same
 engine's SQL dialect (see above), so there is no ambiguity to resolve at
 parse time.
 
-- The active engine's `RuntimeAdapter` **fails closed on any key it does
+- The active engine's `WarehouseAdapter` **fails closed on any key it does
   not recognize**, at any nesting level — there is no other namespace to
   excuse an unknown key into.
 - Recognized keys as shipped:
@@ -100,7 +101,7 @@ parse time.
       - columns: [order_id]
         unique: true
   ```
-- Applied at runtime by `RuntimeAdapter.ensure_table`, per SQL object, on
+- Applied at runtime by `WarehouseAdapter.ensure_table`, per SQL object, on
   **create-if-absent** — this is not gated on whether the table itself was
   newly created. Postgres evaluates each `indexes` entry's `CREATE INDEX
   IF NOT EXISTS` independently, on every `ensure_table` call, so adding a
@@ -115,10 +116,9 @@ parse time.
   **silent no-op** on postgres (the name already resolves, so `IF NOT
   EXISTS` skips it), and changing `partitioning` on a trino table that
   already exists is a silent no-op for the reason above — not an applied
-  change and not an error in either case. Once continuo-validation step 3a
-  lands, the same vocabulary is checked ahead of runtime by
-  `build_empty_from_columns`, so a malformed config fails the release gate
-  rather than surfacing in production.
+  change and not an error in either case. The same vocabulary is checked
+  ahead of runtime by `build_empty_from_columns`, so a malformed config fails
+  the release gate rather than surfacing in production.
 - Trino's `format` is case-normalized to uppercase in the emitted DDL, so
   `format: parquet` and `format: PARQUET` produce identical `WITH (...)`
   text — but they are different bytes in the contract entry, so they
@@ -284,18 +284,18 @@ executor runs it as a Kubernetes Job:
   per engine), injected via the same Secret mechanism dbt Jobs use.
 - **Sole write sink**: user scripts return a dataframe; the harness runs
   `conform()` (strict Arrow cast per §7.1), then calls
-  `RuntimeAdapter.ensure_table` — applying the node's `config` physical
+  `WarehouseAdapter.ensure_table` — applying the node's `config` physical
   layout on create, see §13.1 — and performs the only INSERT. Scripts get
   a read-only connection surface. The harness calls `ensure_table(...,
-  config=...)` as a keyword unconditionally, and as of
-  `continuo-validation-contract` 0.6.0 (the version this repo pins) the
-  abstract port declares it: `ensure_table(self, schema, table, columns,
+  config=...)` as a keyword unconditionally, and the abstract
+  `WarehouseAdapter` port in `continuo-engine-contract` declares it:
+  `ensure_table(self, schema, table, columns,
   *, config)` — required and keyword-only. Adapters implement exactly that
   signature; callers pass `{}` when a node declares no physical layout.
 - **Early `config` tripwire**: `ensure_table` is called only *after* the
   script has run and its result has been conformed, so a bad `config` would
   otherwise burn the entire node run before failing. The harness therefore
-  also calls `RuntimeAdapter.validate_config(config, column_names)` — a
+  also calls `WarehouseAdapter.validate_config(config, column_names)` — a
   classmethod, no connection needed — immediately after selecting the node,
   and surfaces a rejection as `LoadError`. Both adapters shipped here
   implement it by reusing the exact logic `ensure_table` validates with, so
@@ -317,8 +317,10 @@ executor runs it as a Kubernetes Job:
   catch a new problem: `ctx.read` resolves declared reads by name and never
   parses them.
 - **Result envelope**: stdout is reserved for exactly one sentinel-framed
-  result block as the last line — reuse `continuo_validation_contract.result`
-  (already on PyPI) rather than reimplementing the markers. All diagnostics
+  result block as the last line — reuse `continuo_engine_contract.result`
+  (built in this repo, published to PyPI) rather than reimplementing the
+  markers. That wire format is frozen against Continuo's Go parser
+  (`pkg/validationresult`). All diagnostics
   go to stderr via stdlib `logging`. Non-zero exit on failure.
 - The image embeds the same contract files CI merged — `content_hash` is
   what ties the promoted topology to the image actually running.
@@ -341,7 +343,7 @@ inject the names below instead:
 | `TARGET_SCHEMA` | **required** | The target schema name; must match the `schema` of the node selected via `NODE_ID`. There is no fallback — `SCHEMA` and `DBT_TARGET_SCHEMA` are **not** recognized. |
 | `CONTRACT_DIR` | optional | Path to the directory of merged contract YAML files baked into the image. Defaults to `/app/contracts`. |
 | `APP_ROOT` | optional | Repository root the node's `script:` path is resolved against. Defaults to `CONTRACT_DIR`'s parent directory. |
-| engine-native vars | **required**, per adapter | Whatever the installed `RuntimeAdapter.required_env()` declares (e.g. `POSTGRES_HOST`/`POSTGRES_DB`/`POSTGRES_USER`, optionally `POSTGRES_PORT`/`POSTGRES_PASSWORD`) — missing any of these is a `LoadError`. |
+| engine-native vars | **required**, per adapter | Whatever the installed `WarehouseAdapter.required_env()` declares (e.g. `POSTGRES_HOST`/`POSTGRES_DB`/`POSTGRES_USER`, optionally `POSTGRES_PORT`/`POSTGRES_PASSWORD`) — missing any of these is a `LoadError`. |
 
 The executor's python-kind dispatch (continuo PR 8) **must** inject
 `NODE_ID`/`TABLE_NAME`/`TARGET_SCHEMA` under exactly these names; they

@@ -422,7 +422,7 @@ def test_load_dir_dialect_rejects_what_neutral_default_accepts(tmp_path):
     ensure_single_read, not just that the parameter exists: QUALIFY parses
     under sqlglot's dialect-neutral default but not under its trino dialect
     (verified against sqlglot 30.15.0, pinned transitively via
-    continuo-validation-contract 0.6.0's own dependency)."""
+    continuo-engine-contract 0.7.0's own dependency)."""
     sql = "select a from analytics.a qualify row_number() over (order by a) = 1"
     node = {**VALID, "reads": {"ids": sql}}
     a = tmp_path / "a.yml"

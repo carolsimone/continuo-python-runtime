@@ -92,8 +92,8 @@ def node_fixture():
     )
 
 
-class FakeRuntimeAdapter:
-    """In-memory stand-in for a RuntimeAdapter, for harness tests."""
+class FakeWarehouseAdapter:
+    """In-memory stand-in for a WarehouseAdapter, for harness tests."""
 
     def __init__(self, tables=None):
         self.tables = tables or {}  # sql -> pa.Table

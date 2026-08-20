@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from continuo_validation_contract.sql import ensure_single_read  # type: ignore[import-untyped]
+from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
 from sqlglot import Dialect
 from sqlglot.errors import TokenError
 
@@ -149,7 +149,7 @@ def parse_node(
     ``source`` is the originating filename; it appears in every error message.
     ``dialect`` is a sqlglot dialect name (e.g. ``"postgres"``, ``"trino"``)
     each declared read is checked against via
-    :func:`~continuo_validation_contract.sql.ensure_single_read`; ``None``
+    :func:`~continuo_engine_contract.sql.ensure_single_read`; ``None``
     (the default) uses sqlglot's dialect-neutral parser.
 
     ``check_reads=False`` skips *only* that :func:`ensure_single_read` call —
@@ -306,7 +306,7 @@ def load_contract_dir(
     """Load and validate every `*.yml`/`*.yaml` contract file under ``path``.
 
     ``check_reads=False`` skips the per-read
-    :func:`~continuo_validation_contract.sql.ensure_single_read` gate and
+    :func:`~continuo_engine_contract.sql.ensure_single_read` gate and
     nothing else; every other rule in :func:`parse_node` and every rule here
     (dialect validity, document shape, duplicate relations, "no contract
     files found") still runs. The runtime

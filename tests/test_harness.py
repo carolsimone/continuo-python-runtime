@@ -15,7 +15,7 @@ from continuo_python_runtime.harness import (
     run_node,
     select_node,
 )
-from tests.conftest import FakeRuntimeAdapter
+from tests.conftest import FakeWarehouseAdapter
 
 
 def _env(repo):
@@ -29,7 +29,7 @@ def _env(repo):
 
 
 def test_success_emits_single_sentinel_block(harness_repo, capsys):
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
     assert run_node(_env(harness_repo), adapter=ad) == 0
     out = capsys.readouterr().out
     assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
@@ -43,7 +43,7 @@ def test_script_print_cannot_corrupt_stdout(harness_repo, capsys):
     (harness_repo / "scripts" / "t.py").write_text(
         "def run(ctx):\n    print('noise')\n    return ctx.read('ids')\n"
     )
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1]})})
     run_node(_env(harness_repo), adapter=ad)
     out = capsys.readouterr().out
     assert "noise" not in out
@@ -51,12 +51,12 @@ def test_script_print_cannot_corrupt_stdout(harness_repo, capsys):
 
 def test_unknown_node_id_is_contract_error(harness_repo, capsys):
     env = _env(harness_repo) | {"NODE_ID": "python-model.svc.analytics.nope"}
-    assert run_node(env, adapter=FakeRuntimeAdapter()) == 1
+    assert run_node(env, adapter=FakeWarehouseAdapter()) == 1
     assert '"message":"ContractError:' in capsys.readouterr().out
 
 
 def test_conform_violation_is_conform_error(harness_repo, capsys):
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"wrong": [1]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"wrong": [1]})})
     assert run_node(_env(harness_repo), adapter=ad) == 1
     assert '"message":"ConformError:' in capsys.readouterr().out
     assert ad.loaded is None
@@ -64,12 +64,12 @@ def test_conform_violation_is_conform_error(harness_repo, capsys):
 
 def test_script_exception_is_script_error(harness_repo, capsys):
     (harness_repo / "scripts" / "t.py").write_text("def run(ctx):\n    raise ValueError('x')\n")
-    assert run_node(_env(harness_repo), adapter=FakeRuntimeAdapter()) == 1
+    assert run_node(_env(harness_repo), adapter=FakeWarehouseAdapter()) == 1
     assert '"message":"ScriptError:' in capsys.readouterr().out
 
 
 def test_load_failure_is_load_error(harness_repo, capsys):
-    class BadLoad(FakeRuntimeAdapter):
+    class BadLoad(FakeWarehouseAdapter):
         def load(self, schema, table, data):
             raise RuntimeError("disk full")
 
@@ -84,7 +84,7 @@ def test_load_failure_is_load_error(harness_repo, capsys):
 def test_missing_required_env_key_is_contract_error(harness_repo, capsys):
     env = _env(harness_repo)
     del env["TABLE_NAME"]
-    assert run_node(env, adapter=FakeRuntimeAdapter()) == 1
+    assert run_node(env, adapter=FakeWarehouseAdapter()) == 1
     out = capsys.readouterr().out
     assert '"message":"ContractError:' in out
     assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
@@ -94,7 +94,7 @@ def test_undeclared_read_is_read_error_not_script_error(harness_repo, capsys):
     (harness_repo / "scripts" / "t.py").write_text(
         "def run(ctx):\n    return ctx.read('nope')\n"
     )
-    assert run_node(_env(harness_repo), adapter=FakeRuntimeAdapter()) == 1
+    assert run_node(_env(harness_repo), adapter=FakeWarehouseAdapter()) == 1
     out = capsys.readouterr().out
     assert '"message":"ReadError:' in out
 
@@ -145,21 +145,21 @@ def test_load_script_rejects_absolute_path(harness_repo, node_fixture):
 def test_app_root_defaults_to_contract_dir_parent(harness_repo, capsys):
     env = _env(harness_repo)
     del env["APP_ROOT"]
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1]})})
     assert run_node(env, adapter=ad) == 0
 
 
 def test_build_adapter_uses_discovery_seam(monkeypatch, harness_repo):
     import continuo_python_runtime.harness as harness_mod
 
-    class DummyAdapter(FakeRuntimeAdapter):
+    class DummyAdapter(FakeWarehouseAdapter):
         @classmethod
         def from_env(cls):
             return cls({"select id from analytics.a": pa.table({"id": [1]})})
 
     monkeypatch.setattr(
         harness_mod,
-        "discover_runtime_adapter",
+        "discover_adapter",
         lambda: ("dummy", DummyAdapter),
     )
     assert run_node(_env(harness_repo)) == 0
@@ -167,7 +167,7 @@ def test_build_adapter_uses_discovery_seam(monkeypatch, harness_repo):
 
 def test_script_import_syntax_error_emits_single_sentinel_block(harness_repo, capsys):
     (harness_repo / "scripts" / "t.py").write_text("def run(ctx:\n    return 1\n")
-    assert run_node(_env(harness_repo), adapter=FakeRuntimeAdapter()) == 1
+    assert run_node(_env(harness_repo), adapter=FakeWarehouseAdapter()) == 1
     out = capsys.readouterr().out
     assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
     body = json.loads(out.split("BEGIN===\n")[1].split("\n===CONTINUO")[0])
@@ -178,7 +178,7 @@ def test_script_import_time_exception_emits_single_sentinel_block(harness_repo, 
     (harness_repo / "scripts" / "t.py").write_text(
         "raise RuntimeError('boom at import')\n"
     )
-    assert run_node(_env(harness_repo), adapter=FakeRuntimeAdapter()) == 1
+    assert run_node(_env(harness_repo), adapter=FakeWarehouseAdapter()) == 1
     out = capsys.readouterr().out
     assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
     body = json.loads(out.split("BEGIN===\n")[1].split("\n===CONTINUO")[0])
@@ -194,7 +194,7 @@ def test_unexpected_exception_still_emits_single_sentinel_block(
         raise RuntimeError("totally unexpected")
 
     monkeypatch.setattr(harness_mod, "conform", _boom)
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1]})})
     assert run_node(_env(harness_repo), adapter=ad) == 1
     out = capsys.readouterr().out
     assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
@@ -206,7 +206,7 @@ def test_module_level_print_does_not_reach_stdout(harness_repo, capsys):
     (harness_repo / "scripts" / "t.py").write_text(
         "print('module-level noise')\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
     )
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1]})})
     run_node(_env(harness_repo), adapter=ad)
     out = capsys.readouterr().out
     assert "module-level noise" not in out
@@ -215,7 +215,7 @@ def test_module_level_print_does_not_reach_stdout(harness_repo, capsys):
 def test_missing_required_warehouse_env_is_load_error(monkeypatch, harness_repo, capsys):
     import continuo_python_runtime.harness as harness_mod
 
-    class DummyAdapter(FakeRuntimeAdapter):
+    class DummyAdapter(FakeWarehouseAdapter):
         @classmethod
         def required_env(cls):
             return ["WAREHOUSE_HOST", "WAREHOUSE_PASSWORD"]
@@ -225,7 +225,7 @@ def test_missing_required_warehouse_env_is_load_error(monkeypatch, harness_repo,
             return cls()
 
     monkeypatch.setattr(
-        harness_mod, "discover_runtime_adapter", lambda: ("dummy", DummyAdapter)
+        harness_mod, "discover_adapter", lambda: ("dummy", DummyAdapter)
     )
     monkeypatch.delenv("WAREHOUSE_HOST", raising=False)
     monkeypatch.delenv("WAREHOUSE_PASSWORD", raising=False)
@@ -240,13 +240,13 @@ def test_missing_required_warehouse_env_is_load_error(monkeypatch, harness_repo,
 
 
 def test_adapter_close_called_on_success(harness_repo, capsys):
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1]})})
     assert run_node(_env(harness_repo), adapter=ad) == 0
     assert ad.closed is True
 
 
 def test_adapter_close_called_on_failure(harness_repo, capsys):
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"wrong": [1]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"wrong": [1]})})
     assert run_node(_env(harness_repo), adapter=ad) == 1
     assert ad.closed is True
 
@@ -263,7 +263,7 @@ def test_harness_passes_node_config_through_to_ensure_table(tmp_path, capsys):
         "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
         "config": {"indexes": [{"columns": ["id"]}]},
     }]}))
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1]})})
     assert run_node(_env(tmp_path), adapter=ad) == 0
     assert ad.ensured_config == {"indexes": [{"columns": ["id"]}]}
 
@@ -275,7 +275,7 @@ def test_ensure_table_value_error_surfaces_as_load_error(harness_repo, capsys):
     is a plain ValueError, and run_node's try/except around ensure_table/load
     converts any non-HarnessError into LoadError for the sentinel block.
     """
-    class BadConfigAdapter(FakeRuntimeAdapter):
+    class BadConfigAdapter(FakeWarehouseAdapter):
         def ensure_table(self, schema, table, columns, *, config):
             raise ValueError("unrecognized config key: 'sortkey'")
 
@@ -309,7 +309,7 @@ def _repo_with_config(tmp_path, config, marker):
     return tmp_path
 
 
-class _ConfigCheckingAdapter(FakeRuntimeAdapter):
+class _ConfigCheckingAdapter(FakeWarehouseAdapter):
     """Fake whose validate_config rejects the singular-`index` typo, as postgres does."""
 
     validated = None
@@ -351,7 +351,7 @@ def test_adapter_without_validate_config_still_runs(tmp_path, capsys):
     """The early tripwire is optional; ensure_table remains the enforcement point."""
     marker = tmp_path / "script-ran"
     repo = _repo_with_config(tmp_path, {"indexes": [{"columns": ["id"]}]}, marker)
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1]})})
     assert not hasattr(ad, "validate_config")
     assert run_node(_env(repo), adapter=ad) == 0
 
@@ -387,7 +387,7 @@ def test_dialect_specific_read_does_not_fail_at_container_start(tmp_path, sql, c
     fails on every run after a green release.
     """
     repo = _repo_with_read(tmp_path, sql)
-    ad = FakeRuntimeAdapter({sql: pa.table({"id": [1]})})
+    ad = FakeWarehouseAdapter({sql: pa.table({"id": [1]})})
     assert run_node(_env(repo), adapter=ad) == 0
 
 
@@ -397,7 +397,7 @@ def test_runtime_still_rejects_a_structurally_invalid_contract(tmp_path, capsys)
     doc = yaml.safe_load((repo / "contracts" / "t.yml").read_text())
     doc["nodes"][0]["criticality"] = "WHENEVER"
     (repo / "contracts" / "t.yml").write_text(yaml.safe_dump(doc))
-    assert run_node(_env(repo), adapter=FakeRuntimeAdapter()) == 1
+    assert run_node(_env(repo), adapter=FakeWarehouseAdapter()) == 1
     assert '"message":"ContractError:' in capsys.readouterr().out
 
 
@@ -407,7 +407,7 @@ def test_runtime_still_rejects_an_empty_reads_map(tmp_path, capsys):
     doc = yaml.safe_load((repo / "contracts" / "t.yml").read_text())
     doc["nodes"][0]["reads"] = {}
     (repo / "contracts" / "t.yml").write_text(yaml.safe_dump(doc))
-    assert run_node(_env(repo), adapter=FakeRuntimeAdapter()) == 1
+    assert run_node(_env(repo), adapter=FakeWarehouseAdapter()) == 1
     out = capsys.readouterr().out
     assert '"message":"ContractError:' in out
     assert "reads" in out
@@ -437,7 +437,7 @@ def test_script_can_import_sibling_helper(harness_repo, capsys):
     (harness_repo / "scripts" / "t.py").write_text(
         "import helpers\n\n\ndef run(ctx):\n    return helpers.only_ids(ctx.read('ids'))\n"
     )
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
     assert run_node(_env(harness_repo), adapter=ad) == 0
     assert ad.loaded[2].num_rows == 2
 
@@ -452,7 +452,7 @@ def test_script_can_import_package_qualified_helper(harness_repo, capsys):
         "import scripts.helpers\n\n\n"
         "def run(ctx):\n    return scripts.helpers.only_ids(ctx.read('ids'))\n"
     )
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
     assert run_node(_env(harness_repo), adapter=ad) == 0
     assert ad.loaded[2].num_rows == 2
 
@@ -468,7 +468,7 @@ def test_script_can_import_helper_from_a_sibling_directory(harness_repo, capsys)
         "from lib.shared import only_ids\n\n\n"
         "def run(ctx):\n    return only_ids(ctx.read('ids'))\n"
     )
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
     assert run_node(_env(harness_repo), adapter=ad) == 0
     assert ad.loaded[2].num_rows == 2
 
@@ -483,7 +483,7 @@ def test_deferred_import_inside_run_still_resolves(harness_repo, capsys):
         "    import helpers\n"
         "    return helpers.only_ids(ctx.read('ids'))\n"
     )
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1, 2]})})
     assert run_node(_env(harness_repo), adapter=ad) == 0
     assert ad.loaded[2].num_rows == 2
 
@@ -509,7 +509,7 @@ def test_a_helper_module_is_never_shared_between_two_repos(harness_repo, marker,
     pytest but not in a container.
     """
     _helper_identity_repo(harness_repo, marker)
-    ad = FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1]})})
     assert run_node(_env(harness_repo), adapter=ad) == 0, capsys.readouterr().out
 
 

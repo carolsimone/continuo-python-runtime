@@ -4,6 +4,7 @@ requires-python = ">=3.14"
 
 [manifest]
 members = [
+    "continuo-engine-contract",
     "continuo-python-runtime",
     "continuo-python-runtime-postgres",
     "continuo-python-runtime-trino",
@@ -63,11 +64,22 @@ wheels = [
 ]
 
 [[package]]
+name = "continuo-engine-contract"
+version = "0.7.0"
+source = { editable = "contract" }
+dependencies = [
+    { name = "sqlglot" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "sqlglot", specifier = "==30.15.0" }]
+
+[[package]]
 name = "continuo-python-runtime"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [
-    { name = "continuo-validation-contract" },
+    { name = "continuo-engine-contract" },
     { name = "pyarrow" },
     { name = "pyyaml" },
     { name = "sqlglot" },
@@ -86,7 +98,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "continuo-validation-contract", specifier = "==0.6.0" },
+    { name = "continuo-engine-contract", editable = "contract" },
     { name = "pyarrow", specifier = "==25.0.0" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "sqlglot", specifier = "==30.15.0" },
@@ -108,7 +120,7 @@ name = "continuo-python-runtime-postgres"
 version = "0.2.0"
 source = { editable = "python-runtime-postgres" }
 dependencies = [
-    { name = "continuo-validation-contract" },
+    { name = "continuo-engine-contract" },
     { name = "psycopg2-binary" },
     { name = "pyarrow" },
 ]
@@ -125,7 +137,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "continuo-validation-contract", specifier = "==0.6.0" },
+    { name = "continuo-engine-contract", editable = "contract" },
     { name = "psycopg2-binary", specifier = "==2.9.11" },
     { name = "pyarrow", specifier = "==25.0.0" },
 ]
@@ -145,7 +157,7 @@ name = "continuo-python-runtime-trino"
 version = "0.2.0"
 source = { editable = "python-runtime-trino" }
 dependencies = [
-    { name = "continuo-validation-contract" },
+    { name = "continuo-engine-contract" },
     { name = "pyarrow" },
     { name = "trino" },
 ]
@@ -162,7 +174,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "continuo-validation-contract", specifier = "==0.6.0" },
+    { name = "continuo-engine-contract", editable = "contract" },
     { name = "pyarrow", specifier = "==25.0.0" },
     { name = "trino", specifier = "==0.338.0" },
 ]
@@ -175,18 +187,6 @@ dev = [
 test = [
     { name = "pytest", specifier = "==9.0.3" },
     { name = "pytest-cov", specifier = "==4.1.0" },
-]
-
-[[package]]
-name = "continuo-validation-contract"
-version = "0.6.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "sqlglot" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/38/77/a90ab11116c350c9e1d3a795edaefcfffac62f80862acfaa8cba10096d04/continuo_validation_contract-0.6.0.tar.gz", hash = "sha256:e515c5098e8f533d6505515fd9d72c6a4c16d8189402a7de1a1b1dd10fc34e00", size = 13273, upload-time = "2026-08-08T11:29:36.408Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d5/77/1652064ab3f64493285dda924d7c474187eaa776479f422c205e4680ff6b/continuo_validation_contract-0.6.0-py3-none-any.whl", hash = "sha256:a65bbcc484f1af5796daf5f014e2192945381a9c581e9b5d0ddf4092e800873f", size = 10823, upload-time = "2026-08-08T11:29:35.207Z" },
 ]
 
 [[package]]

@@ -21,10 +21,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from continuo_validation_contract.port import (  # type: ignore[import-untyped]
+from continuo_engine_contract.port import (  # type: ignore[import-untyped]
     discover_runtime_adapter,
 )
-from continuo_validation_contract.result import result_block  # type: ignore[import-untyped]
+from continuo_engine_contract.result import result_block  # type: ignore[import-untyped]
 
 from continuo_python_runtime.conform import conform, to_arrow
 from continuo_python_runtime.context import RunContext
@@ -184,7 +184,7 @@ def _validate_config_early(adapter: Any, node: Node) -> None:
     so this is the earliest point the engine's own rules can be applied.
 
     The call is skipped for an adapter that does not provide ``validate_config``:
-    the abstract ``RuntimeAdapter`` in the pinned ``continuo-validation-contract``
+    the abstract ``RuntimeAdapter`` in ``continuo-engine-contract``
     does not declare it (this repo ships the harness and both adapters as one
     coordinated release), and an adapter without it loses only earliness —
     ``ensure_table`` still fails closed on the same config.

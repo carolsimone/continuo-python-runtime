@@ -1,6 +1,6 @@
 import pyarrow as pa
 import pytest
-from continuo_validation_contract.types import validate_column_type  # type: ignore[import-untyped]
+from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 
 from continuo_python_runtime.errors import ContractError
 from continuo_python_runtime.types import SqlType, arrow_type, parse_sql_type
@@ -85,7 +85,7 @@ def test_arrow_mapping():
 
 
 # continuo_python_runtime.types.parse_sql_type calls
-# continuo_validation_contract.types.validate_column_type as its single
+# continuo_engine_contract.types.validate_column_type as its single
 # acceptance authority (§ task 8), so the two must never disagree on whether a
 # type string is grammar-shaped at all. This vector covers every grammar
 # member plus several classic rejects, asserting both accept and both reject

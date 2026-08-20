@@ -1,8 +1,8 @@
 # continuo-python-runtime-trino
 
 Trino (Iceberg connector) runtime-adapter library for Continuo python nodes.
-Implements `continuo_validation_contract.port.RuntimeAdapter` (from the
-published `continuo-validation-contract` package) and registers itself under
+Implements `continuo_engine_contract.port.RuntimeAdapter` (from the
+`continuo-engine-contract` package) and registers itself under
 entry-point group `continuo_runtime.adapters` as `trino`.
 
 Connection env: `TRINO_HOST`, `TRINO_CATALOG` (required); `TRINO_PORT` (default

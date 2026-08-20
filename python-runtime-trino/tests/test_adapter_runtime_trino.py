@@ -19,7 +19,7 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
-from continuo_validation_contract.types import validate_column_type  # type: ignore[import-untyped]
+from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 
 import continuo_python_runtime_trino.adapter as adapter_module
 

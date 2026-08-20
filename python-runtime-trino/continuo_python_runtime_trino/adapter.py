@@ -45,7 +45,7 @@ are unsupported because their target renames would race. Swap relations use a
 per-load UUID, so distinct targets cannot collide with each other's temporary
 names or with legitimate user tables.
 
-The contract's SQL-type grammar (``continuo_validation_contract.types``, shared
+The contract's SQL-type grammar (``continuo_engine_contract.types``, shared
 with the postgres adapter) admits type spellings Trino does not recognize as
 type names (``TEXT``, ``DOUBLE PRECISION``, ``NUMERIC(p,s)``); ``_trino_type``
 maps those three to Trino's own spellings (``VARCHAR``, ``DOUBLE``,
@@ -63,8 +63,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import pyarrow as pa  # type: ignore[import-untyped]
 
-from continuo_validation_contract.port import RuntimeAdapter  # type: ignore[import-untyped]
-from continuo_validation_contract.types import validate_column_type  # type: ignore[import-untyped]
+from continuo_engine_contract.port import RuntimeAdapter  # type: ignore[import-untyped]
+from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 
 import trino
 
@@ -84,7 +84,7 @@ _TRINO_TYPE_ALIASES = {
 def _trino_type(type_str: str) -> str:
     """Map a validated contract type string to its Trino DDL spelling.
 
-    Must only be called after :func:`~continuo_validation_contract.types.
+    Must only be called after :func:`~continuo_engine_contract.types.
     validate_column_type` has accepted *type_str*. ``NUMERIC(p,s)`` maps to
     ``DECIMAL(p,s)``; ``TEXT`` and ``DOUBLE PRECISION`` map via
     ``_TRINO_TYPE_ALIASES``; everything else in the grammar is already valid
@@ -349,8 +349,8 @@ class TrinoRuntimeAdapter(RuntimeAdapter):
         (``day(event_ts)``, ``bucket(customer_id, 16)``), not bare column names.
 
         Like ``config`` on ``ensure_table``, this method is not declared by the
-        abstract ``RuntimeAdapter`` in the pinned
-        ``continuo-validation-contract``; this repo ships both adapters and the
+        abstract ``RuntimeAdapter`` in
+        ``continuo-engine-contract``; this repo ships both adapters and the
         harness as one coordinated release. The harness skips the call for an
         adapter that does not provide it (see ``docs/boundary-contract.md``
         §13.4), which costs that adapter only earliness, never enforcement.

@@ -16,8 +16,8 @@ from typing import Any
 import psycopg2  # type: ignore[import-untyped]
 import pyarrow as pa  # type: ignore[import-untyped]
 
-from continuo_validation_contract.port import RuntimeAdapter  # type: ignore[import-untyped]
-from continuo_validation_contract.types import validate_column_type  # type: ignore[import-untyped]
+from continuo_engine_contract.port import RuntimeAdapter  # type: ignore[import-untyped]
+from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 from psycopg2 import errors as pg_errors  # type: ignore[import-untyped]
 from psycopg2 import sql as pg_sql  # type: ignore[import-untyped]
 from psycopg2.extras import execute_values  # type: ignore[import-untyped]
@@ -337,8 +337,8 @@ class PostgresRuntimeAdapter(RuntimeAdapter):
         is accepted), and no name reaches an error message.
 
         Like ``config`` on ``ensure_table``, this method is not declared by
-        the abstract ``RuntimeAdapter`` in the pinned
-        ``continuo-validation-contract``; this repo ships both adapters and
+        the abstract ``RuntimeAdapter`` in
+        ``continuo-engine-contract``; this repo ships both adapters and
         the harness as one coordinated release. The harness skips the call
         for an adapter that does not provide it (see
         ``docs/boundary-contract.md`` §13.4), which costs that adapter only

@@ -7,14 +7,14 @@ maintainers = [{ name = "Simone Carolini" }]
 readme = "README.md"
 requires-python = ">= 3.14"
 dependencies = [
-    "continuo-validation-contract==0.6.0",
+    "continuo-engine-contract",
     "pyarrow==25.0.0",
     "PyYAML==6.0.3",
-    # Pinned in lockstep with continuo-validation-contract's OWN sqlglot pin
+    # Pinned in lockstep with continuo-engine-contract's OWN sqlglot pin
     # (currently ==30.15.0) -- bump this whenever that pin moves.
     # continuo_python_runtime/contract/loader.py imports sqlglot.errors
     # directly to catch TokenError, which escapes
-    # continuo_validation_contract.sql.ensure_single_read uncaught despite
+    # continuo_engine_contract.sql.ensure_single_read uncaught despite
     # its docstring's guarantee that only ValueError does (an unterminated
     # string literal or comment fails sqlglot's tokenizer before the
     # parser's own ParseError handling ever runs). Once that contract bug is
@@ -50,7 +50,10 @@ python_version = "3.14"
 strict = false
 
 [tool.uv.workspace]
-members = ["python-runtime-postgres", "python-runtime-trino"]
+members = ["contract", "python-runtime-postgres", "python-runtime-trino"]
+
+[tool.uv.sources]
+continuo-engine-contract = { workspace = true }
 
 [tool.pytest.ini_options]
 # importlib import-mode: each workspace member's tests/ is its own `tests`

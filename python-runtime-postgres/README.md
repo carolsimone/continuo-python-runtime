@@ -1,8 +1,8 @@
 # continuo-python-runtime-postgres
 
 Postgres runtime-adapter library for Continuo python nodes. Implements
-`continuo_validation_contract.port.RuntimeAdapter` (from the published
-`continuo-validation-contract` package) and registers itself under entry-point
+`continuo_engine_contract.port.RuntimeAdapter` (from the
+`continuo-engine-contract` package) and registers itself under entry-point
 group `continuo_runtime.adapters` as `postgres`.
 
 Connection env: `POSTGRES_HOST`, `POSTGRES_DB`, `POSTGRES_USER` (required);

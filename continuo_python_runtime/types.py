@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 
 import pyarrow as pa  # type: ignore[import-untyped]
-from continuo_validation_contract.types import validate_column_type  # type: ignore[import-untyped]
+from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 
 from continuo_python_runtime.errors import ContractError
 
@@ -37,7 +37,7 @@ class SqlType:
 def parse_sql_type(raw: str) -> SqlType:
     """Parse a SQL type string into a canonical SqlType.
 
-    ``continuo_validation_contract.types.validate_column_type`` is the single
+    ``continuo_engine_contract.types.validate_column_type`` is the single
     acceptance authority for the grammar shape (case-insensitive, injection-
     guarded): it runs first, and anything it rejects is rejected here too. The
     logic below only extracts precision/scale/length and enforces the NUMERIC

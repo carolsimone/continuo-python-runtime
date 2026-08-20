@@ -7,7 +7,7 @@ maintainers = [{ name = "Simone Carolini" }]
 readme = "README.md"
 requires-python = ">= 3.14"
 dependencies = [
-    "continuo-validation-contract==0.6.0",
+    "continuo-engine-contract",
     "trino==0.338.0",
     "pyarrow==25.0.0",
 ]
@@ -43,3 +43,6 @@ target-version = "py312"
 [tool.mypy]
 python_version = "3.14"
 strict = false
+
+[tool.uv.sources]
+continuo-engine-contract = { workspace = true }

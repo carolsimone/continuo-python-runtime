@@ -1,18 +1,22 @@
 FROM python:3.14-slim
-# Until the runtime, adapter, and contract packages publish to (Test)PyPI,
-# install all three from the build context.
+# One dual-role image per engine: the python-node runtime harness (default
+# command `run`, domain repos build FROM this) and the blue/green validation
+# runner (`validation-op`, continuo's executor sets it as the container
+# command). Everything installs from this repo's own workspace paths in one
+# pip transaction — no PyPI propagation lag; images always build from repo head.
+#   docker build -f Dockerfile.postgres .
 COPY pyproject.toml README.md /src/
-COPY continuo_python_runtime /src/continuo_python_runtime
 COPY contract /src/contract
+COPY continuo_python_runtime /src/continuo_python_runtime
 COPY adapters/postgres /src/adapters/postgres
-RUN pip install --no-cache-dir \
-      /src/contract \
-      /src/adapters/postgres \
-      /src
+RUN pip install --no-cache-dir /src/contract /src/adapters/postgres /src \
+    && rm -rf /src
 # PYTHONPATH is belt-and-braces: the harness also inserts APP_ROOT and the
-# node script's own directory at the front of sys.path before executing it,
-# so a script's in-repo helper imports resolve. Neither WORKDIR nor the
-# console-script entrypoint puts /app on sys.path by itself.
+# node script's own directory at the front of sys.path before executing it.
 ENV CONTRACT_DIR=/app/contracts APP_ROOT=/app PYTHONPATH=/app
 WORKDIR /app
-ENTRYPOINT ["continuo-runtime", "run"]
+# uid 65532 matches continuo's executor securityContext expectation.
+RUN useradd --uid 65532 --no-create-home --shell /usr/sbin/nologin nonroot
+USER 65532:65532
+ENTRYPOINT ["continuo-runtime"]
+CMD ["run"]

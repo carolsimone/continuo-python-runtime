@@ -71,4 +71,5 @@ addopts = "--tb=short --import-mode=importlib"
 testpaths = ["tests"]
 markers = [
     "integration: needs a live docker-compose stack running (see tests/smoke/*-stack)",
+    "image: needs a built continuo-python-runtime-<engine> image (see tests/test_image_smoke_validation.py)",
 ]

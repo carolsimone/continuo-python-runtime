@@ -12,3 +12,4 @@ docs/
 template/
 tests/
 adapters/*/tests/
+contract/tests/

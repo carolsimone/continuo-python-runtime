@@ -1,7 +1,5 @@
-# Base image tag published by this repo's image pipeline (PR 9). Tags are
-# v<version>-<engine>, e.g. v0.2.0-postgres; a trino-backed variant is also
-# published as v0.2.0-trino for trino-backed services.
-FROM ghcr.io/carolsimone/continuo-python-runtime:v0.2.0-postgres
+# Tags are v<version>; one image per engine (continuo-python-runtime-postgres / -trino).
+FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.3.0
 COPY contracts/ /app/contracts/
 COPY scripts/ /app/scripts/
 # COPY every OTHER directory your scripts import from, too. CI folds a script's

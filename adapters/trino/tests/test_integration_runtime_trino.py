@@ -98,6 +98,7 @@ def test_ensure_table_creates_typed_table_with_not_null(clean_schema):
             {"name": "label", "type": "VARCHAR(10)", "nullable": True},
             {"name": "amount", "type": "NUMERIC(10,2)", "nullable": False},
         ],
+        config={},
     )
     a.close()
     cols = _columns(clean_schema, "typed")
@@ -113,8 +114,8 @@ def test_ensure_table_is_idempotent(clean_schema):
     """Calling ensure_table twice for the same table does not fail."""
     a = _adapter()
     cols = [{"name": "id", "type": "INT", "nullable": True}]
-    a.ensure_table(clean_schema, "again", cols)
-    a.ensure_table(clean_schema, "again", cols)
+    a.ensure_table(clean_schema, "again", cols, config={})
+    a.ensure_table(clean_schema, "again", cols, config={})
     a.close()
     assert _columns(clean_schema, "again") == [("id", "integer", "YES")]
 
@@ -127,6 +128,7 @@ def test_ensure_and_load_support_quoted_identifiers(clean_schema):
         clean_schema,
         "order table",
         [{"name": 'order"id', "type": "BIGINT", "nullable": False}],
+        config={},
     )
     a.load(
         clean_schema,
@@ -234,7 +236,7 @@ def test_load_preserves_unrelated_suffix_tables(clean_schema):
 def test_load_preserves_iceberg_table_properties(clean_schema):
     """A content replacement retains connector properties but gets a fresh location."""
     a = _adapter()
-    a._ensure_schema(clean_schema)
+    a.ensure_schema(clean_schema)
     target_ref = f'iceberg."{clean_schema}"."partitioned"'
     properties_ref = f'iceberg."{clean_schema}"."partitioned$properties"'
     a._execute(
@@ -277,6 +279,7 @@ def test_load_preserves_not_null_constraint_across_swap(clean_schema):
         clean_schema, "notnull_t",
         [{"name": "id", "type": "BIGINT", "nullable": False},
          {"name": "name", "type": "TEXT", "nullable": True}],
+        config={},
     )
     data = pa.table({"id": pa.array([1], type=pa.int64()), "name": pa.array(["a"])})
     a.load(clean_schema, "notnull_t", data)
@@ -305,6 +308,7 @@ def test_load_failure_leaves_prior_target_intact_and_cleans_up_staging(clean_sch
         clean_schema, "tgt2",
         [{"name": "id", "type": "BIGINT", "nullable": False},
          {"name": "label", "type": "VARCHAR(10)", "nullable": True}],
+        config={},
     )
     a.load(clean_schema, "tgt2", pa.table({
         "id": pa.array([1], type=pa.int64()), "label": pa.array(["a"]),
@@ -332,7 +336,7 @@ def test_load_failure_leaves_prior_target_intact_and_cleans_up_staging(clean_sch
 def test_load_zero_rows_swaps_in_an_empty_table(clean_schema):
     """load() with a 0-row Arrow table swaps in an empty target."""
     a = _adapter()
-    a.ensure_table(clean_schema, "tgt3", [{"name": "id", "type": "INT", "nullable": True}])
+    a.ensure_table(clean_schema, "tgt3", [{"name": "id", "type": "INT", "nullable": True}], config={})
     a.load(clean_schema, "tgt3", pa.table({
         "id": pa.array([1, 2], type=pa.int32()),
     }))

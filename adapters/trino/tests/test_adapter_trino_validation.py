@@ -107,7 +107,7 @@ def test_array_properties_reject_anything_but_a_non_empty_string_list(key, value
 
 
 @pytest.mark.parametrize("value", ["", 2, None], ids=["empty", "int", "null"])
-def test_format_must_be_a_non_empty_string(value):
+def test_format_must_be_one_of_the_allowed_values(value):
     """Format is a string literal; a number would render as an unquoted token."""
     with pytest.raises(ValueError, match="format"):
         _table_properties({"format": value})

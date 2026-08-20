@@ -1,4 +1,4 @@
-"""Unit tests for the trino runtime adapter — pure-logic, mock-free.
+"""Unit tests for the trino adapter's data-plane half — pure-logic, mock-free.
 
 Transactional/live DDL behavior (load's staged rename-swap, the trino
 connection built by from_env, and DDL validity against a real server) is
@@ -24,7 +24,7 @@ from continuo_engine_contract.types import validate_column_type  # type: ignore[
 import continuo_python_runtime_trino.adapter as adapter_module
 
 from continuo_python_runtime_trino.adapter import (
-    TrinoRuntimeAdapter,
+    TrinoAdapter,
     _arrow_table_from_rows,
     _quote,
     _table_properties,
@@ -53,7 +53,7 @@ class _FakeConnection:
 
     Unlike the postgres adapter, trino's ``ensure_table`` never opens more
     than one statement per cursor, and ``_ensure_schema`` + the final
-    ``CREATE TABLE`` both flow through ``TrinoRuntimeAdapter._execute``, so a
+    ``CREATE TABLE`` both flow through ``TrinoAdapter._execute``, so a
     single shared ``statements`` list is enough: a successful call appends
     exactly ``[CREATE SCHEMA ..., CREATE TABLE ...]``, in that order.
     """
@@ -67,15 +67,15 @@ class _FakeConnection:
 
 def test_required_env_names_host_and_catalog():
     """Test that required_env lists exactly the two mandatory TRINO_* vars."""
-    assert TrinoRuntimeAdapter.required_env() == ["TRINO_HOST", "TRINO_CATALOG"]
+    assert TrinoAdapter.required_env() == ["TRINO_HOST", "TRINO_CATALOG"]
 
 
 def test_entry_point_registered_and_loads_adapter():
-    """Test that the trino runtime entry point loads TrinoRuntimeAdapter."""
-    eps = [ep for ep in entry_points(group="continuo_runtime.adapters")
+    """Test that the trino engine entry point loads TrinoAdapter."""
+    eps = [ep for ep in entry_points(group="continuo_engine.adapters")
            if ep.name == "trino"]
     assert len(eps) == 1
-    assert eps[0].load() is TrinoRuntimeAdapter
+    assert eps[0].load() is TrinoAdapter
 
 
 @pytest.mark.parametrize(
@@ -352,8 +352,8 @@ def test_table_properties_rejects_bad_config(config, match):
 _ONE_COL = [{"name": "id", "type": "INT", "nullable": True}]
 
 
-def _adapter(conn: "_FakeConnection") -> TrinoRuntimeAdapter:
-    return TrinoRuntimeAdapter(conn, "iceberg")
+def _adapter(conn: "_FakeConnection") -> TrinoAdapter:
+    return TrinoAdapter(conn, "iceberg")
 
 
 def test_ensure_table_no_recognized_config_key_statement_has_no_with():
@@ -471,7 +471,7 @@ def test_ensure_table_bad_column_type_still_rejects_and_emits_no_ddl():
 )
 def test_validate_config_rejects_what_ensure_table_rejects(config, match):
     with pytest.raises(ValueError, match=match):
-        TrinoRuntimeAdapter.validate_config(config, ["id"])
+        TrinoAdapter.validate_config(config, ["id"])
 
 
 @pytest.mark.parametrize("config", [
@@ -480,7 +480,7 @@ def test_validate_config_rejects_what_ensure_table_rejects(config, match):
     {"partitioning": ["day(event_ts)"], "sorted_by": ["id"], "format": "parquet"},
 ])
 def test_validate_config_accepts_what_ensure_table_accepts(config):
-    assert TrinoRuntimeAdapter.validate_config(config, ["id"]) is None
+    assert TrinoAdapter.validate_config(config, ["id"]) is None
 
 
 def test_validate_config_does_not_constrain_values_to_declared_columns():
@@ -490,7 +490,7 @@ def test_validate_config_does_not_constrain_values_to_declared_columns():
     across engines (postgres needs it for `indexes`), but this engine's
     vocabulary deliberately does not check values against it.
     """
-    assert TrinoRuntimeAdapter.validate_config(
+    assert TrinoAdapter.validate_config(
         {"partitioning": ["bucket(customer_id, 16)"]}, []
     ) is None
 
@@ -498,4 +498,4 @@ def test_validate_config_does_not_constrain_values_to_declared_columns():
 def test_validate_config_is_a_classmethod_needing_no_connection():
     """The harness calls it before any adapter I/O; it must not need a connection."""
     with pytest.raises(ValueError, match="sortkey"):
-        TrinoRuntimeAdapter.validate_config({"sortkey": ["id"]}, ["id"])
+        TrinoAdapter.validate_config({"sortkey": ["id"]}, ["id"])

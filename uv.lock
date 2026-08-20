@@ -118,7 +118,7 @@ test = [
 [[package]]
 name = "continuo-python-runtime-postgres"
 version = "0.2.0"
-source = { editable = "python-runtime-postgres" }
+source = { editable = "adapters/postgres" }
 dependencies = [
     { name = "continuo-engine-contract" },
     { name = "psycopg2-binary" },
@@ -155,7 +155,7 @@ test = [
 [[package]]
 name = "continuo-python-runtime-trino"
 version = "0.2.0"
-source = { editable = "python-runtime-trino" }
+source = { editable = "adapters/trino" }
 dependencies = [
     { name = "continuo-engine-contract" },
     { name = "pyarrow" },

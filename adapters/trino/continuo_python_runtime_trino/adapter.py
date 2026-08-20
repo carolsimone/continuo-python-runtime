@@ -1,7 +1,14 @@
-"""Trino implementation of the RuntimeAdapter port.
+"""Trino implementation of the WarehouseAdapter port.
 
-Data-plane I/O for python nodes: ``fetch`` executes one declared read and returns
-an Arrow table; ``ensure_table``/``load`` build and replace a table's contents.
+One class covers both roles Continuo asks of an engine: validation DDL
+(``ensure_schema``/``drop_schema``, the empty builds and clones, ``check_binds``)
+and python-node data-plane I/O (``fetch`` executes one declared read and returns
+an Arrow table; ``ensure_table``/``load`` build and replace a table's contents).
+
+Trino's namespace is catalog.schema: the catalog comes from TRINO_CATALOG and
+every statement is fully qualified, so the contract's ``schema`` argument stays
+an opaque bare name. Trino has no advisory locks, so ``ensure_schema`` relies on
+``IF NOT EXISTS`` plus tolerating a concurrent creation.
 
 Trino/Iceberg has no multi-statement transactions, so ``load`` cannot be a single
 atomic TRUNCATE+INSERT the way the postgres adapter's is. Two atomic-replace
@@ -63,7 +70,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 import pyarrow as pa  # type: ignore[import-untyped]
 
-from continuo_engine_contract.port import RuntimeAdapter  # type: ignore[import-untyped]
+from continuo_engine_contract.config import ensure_known_keys  # type: ignore[import-untyped]
+from continuo_engine_contract.port import WarehouseAdapter  # type: ignore[import-untyped]
+from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
 from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 
 import trino
@@ -114,7 +123,16 @@ def _sql_string(value: str) -> str:
 # is correct here; this is a deliberate decision of record, not something to
 # "correct" toward the Hive spelling. This tuple's order is the emission
 # order, so the DDL does not depend on the config mapping's own key order.
-_KNOWN_CONFIG_KEYS: tuple[str, ...] = ("partitioning", "sorted_by", "format")
+#
+# `location` is deliberately absent. An explicit table location in a validation
+# build would aim this drop-then-create at the production table's own data path;
+# supporting it needs candidate/prod path rewriting, not just an allowlist entry.
+# `extra_properties` is absent for the same reason: it re-opens the identical
+# hazard via Iceberg's `write.data.path` / `write.metadata.path`.
+_KNOWN_CONFIG_KEYS: tuple[str, ...] = (
+    "partitioning", "sorted_by", "format", "format_version",
+)
+_ARRAY_CONFIG_KEYS = frozenset({"partitioning", "sorted_by"})
 _ALLOWED_FORMATS = frozenset({"PARQUET", "ORC", "AVRO"})
 
 
@@ -122,49 +140,91 @@ def _table_properties(config: dict[str, Any] | None) -> str:
     """Validate *config* against the Iceberg vocabulary; render its ``WITH (...)`` clause.
 
     Returns a leading-space ``WITH (...)`` string, or ``""`` when *config* is
-    absent, empty, or (impossible after validation) carries no recognized key.
-    Partition transforms like ``day(event_ts)`` are expressions Trino parses
-    out of a string literal, so every value is rendered through
-    :func:`_sql_string` rather than identifier-quoted.
+    absent, empty, or carries no recognized key. Property NAMES come from
+    :data:`_KNOWN_CONFIG_KEYS`, this module's own allowlist, so only the values
+    can carry author input into the statement — and every value is escaped or
+    type-checked here. Partition transforms like ``day(event_ts)`` are
+    expressions Trino parses out of a string literal, so array values are
+    rendered through :func:`_sql_string` rather than identifier-quoted.
+
+    Values are not cross-checked against the node's declared columns the way
+    postgres's index columns are: ``partitioning`` takes transform expressions
+    (``day(ts)``, ``bucket(id, 16)``) and ``sorted_by`` takes optional ordering
+    suffixes (``id DESC NULLS LAST``), so a name check would reject valid
+    layouts. Trino rejects an unknown column itself, which fails the release
+    gate the same way.
 
     Raises:
         ValueError: Naming the offending key, for any of: an unrecognized
             config key; ``partitioning``/``sorted_by`` not a non-empty list of
             non-empty strings; ``format`` not a string, or not one of
-            ``PARQUET``/``ORC``/``AVRO`` after ``.upper()``.
+            ``PARQUET``/``ORC``/``AVRO`` after ``.upper()``; ``format_version``
+            not a plain integer.
     """
-    if not config:
+    if config is None:
         return ""
-    for key in config:
-        if key not in _KNOWN_CONFIG_KEYS:
-            raise ValueError(f"unrecognized config key: {key!r}")
+    ensure_known_keys(config, _KNOWN_CONFIG_KEYS, "trino")
 
     rendered = []
-    for key in ("partitioning", "sorted_by"):
+    for key in _KNOWN_CONFIG_KEYS:
         if key not in config:
             continue
         value = config[key]
-        if (
-            not isinstance(value, list)
-            or not value
-            or not all(isinstance(v, str) and v for v in value)
-        ):
-            raise ValueError(
-                f"config {key!r} must be a non-empty list of non-empty strings, got {value!r}"
-            )
-        rendered.append(f"{key} = ARRAY[{', '.join(_sql_string(v) for v in value)}]")
-
-    if "format" in config:
-        value = config["format"]
-        if not isinstance(value, str) or value.upper() not in _ALLOWED_FORMATS:
-            raise ValueError(
-                f"config 'format' must be one of {sorted(_ALLOWED_FORMATS)}, got {value!r}"
-            )
-        rendered.append(f"format = {_sql_string(value.upper())}")
+        if key in _ARRAY_CONFIG_KEYS:
+            if (
+                not isinstance(value, list)
+                or not value
+                or not all(isinstance(v, str) and v for v in value)
+            ):
+                raise ValueError(
+                    f"config {key!r} must be a non-empty list of non-empty strings, "
+                    f"got {value!r}"
+                )
+            rendered.append(f"{key} = ARRAY[{', '.join(_sql_string(v) for v in value)}]")
+        elif key == "format":
+            if not isinstance(value, str) or value.upper() not in _ALLOWED_FORMATS:
+                raise ValueError(
+                    f"config 'format' must be one of {sorted(_ALLOWED_FORMATS)}, got {value!r}"
+                )
+            rendered.append(f"{key} = {_sql_string(value.upper())}")
+        elif key == "format_version":
+            # bool is a subclass of int in python: `True` would render as `1`.
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(
+                    f"config 'format_version' must be an integer, got {value!r}"
+                )
+            rendered.append(f"{key} = {value}")
+        else:  # pragma: no cover — unreachable: every _KNOWN_CONFIG_KEYS entry has a branch
+            raise AssertionError(f"unhandled config key {key!r}")
 
     if not rendered:
         return ""
     return " WITH (" + ", ".join(rendered) + ")"
+
+
+def _column_def(col: dict[str, Any]) -> str:
+    """Render one declared column as Trino DDL: quoted name, type, nullability.
+
+    ``nullable`` absent means True, i.e. no constraint — matching the postgres
+    adapter and the contract's documented default.
+    """
+    definition = f"{_quote(col['name'])} {_trino_type(col['type'])}"
+    if not col.get("nullable", True):
+        definition += " NOT NULL"
+    return definition
+
+
+def _column_ddl(columns: list[dict[str, Any]]) -> str:
+    """Compile declared typed *columns* into a CREATE TABLE column list.
+
+    The single typed-DDL compiler behind both build paths — the validation
+    rebuild (:meth:`TrinoAdapter.build_empty_from_columns`) and the runtime
+    create (:meth:`TrinoAdapter.ensure_table`) — so the two cannot drift into
+    emitting different shapes for the same declared columns. Callers must have
+    run :func:`~continuo_engine_contract.types.validate_column_type` over every
+    ``type`` first.
+    """
+    return ", ".join(_column_def(col) for col in columns)
 
 
 def _sibling_location(location: str, name: str) -> str:
@@ -222,8 +282,8 @@ def _arrow_table_from_rows(colnames: list[str], rows: list[Any]) -> "pa.Table":
 _INSERT_BATCH_SIZE = 500
 
 
-class TrinoRuntimeAdapter(RuntimeAdapter):
-    """RuntimeAdapter speaking Trino (Iceberg connector) over the trino DBAPI."""
+class TrinoAdapter(WarehouseAdapter):
+    """WarehouseAdapter speaking Trino (Iceberg connector) over the trino DBAPI."""
 
     def __init__(self, conn: "trino.dbapi.Connection", catalog: str) -> None:
         self._conn = conn
@@ -235,11 +295,8 @@ class TrinoRuntimeAdapter(RuntimeAdapter):
         return ["TRINO_HOST", "TRINO_CATALOG"]
 
     @classmethod
-    def from_env(cls) -> "TrinoRuntimeAdapter":
-        """Connect from TRINO_* env (port 8080, user continuo, http; password optional).
-
-        Mirrors ``continuo_validation_trino.adapter.TrinoAdapter.from_env`` exactly.
-        """
+    def from_env(cls) -> "TrinoAdapter":
+        """Connect from TRINO_* env (port 8080, user continuo, http; password optional)."""
         catalog = os.environ["TRINO_CATALOG"]
         user = os.environ.get("TRINO_USER", "continuo")
         http_scheme = os.environ.get("TRINO_HTTP_SCHEME", "http")
@@ -298,7 +355,7 @@ class TrinoRuntimeAdapter(RuntimeAdapter):
         rows = self._execute(f"SHOW SCHEMAS FROM {_quote(self._catalog)}")
         return any(row[0] == schema for row in rows)
 
-    def _ensure_schema(self, schema: str) -> None:
+    def ensure_schema(self, schema: str) -> None:
         """Idempotently create *schema*; safe under concurrent callers.
 
         Trino has no advisory locks, so ``IF NOT EXISTS`` does not close the race:
@@ -306,7 +363,7 @@ class TrinoRuntimeAdapter(RuntimeAdapter):
         metastore write. The loser surfaces as a user error or — on the Iceberg
         REST catalog — as an INTERNAL_ERROR query failure, so the error's shape
         cannot be trusted; only the end state can. Re-raise only if the schema is
-        genuinely absent (mirrors the validation trino adapter's ensure_schema).
+        genuinely absent.
         """
         logger.info("ensuring schema %s.%s exists", self._catalog, schema)
         try:
@@ -315,6 +372,87 @@ class TrinoRuntimeAdapter(RuntimeAdapter):
             if not self._schema_exists(schema):
                 raise
             logger.info("schema %s already exists (concurrent create); continuing", schema)
+
+    def drop_schema(self, schema: str) -> None:
+        """Idempotently drop *schema* and everything in it; no-op if absent.
+
+        DROP SCHEMA ... CASCADE removes the schema's tables and views in one
+        statement (the catalog's connector must support CASCADE — Iceberg and
+        Hive do).
+        """
+        logger.info("dropping candidate schema %s.%s", self._catalog, schema)
+        self._execute(f"DROP SCHEMA IF EXISTS {self._schema_ref(schema)} CASCADE")
+
+    def build_empty_from_sql(self, schema: str, table: str, compiled_sql: str) -> None:
+        """Create ``schema.table`` empty, shaped by the compiled SELECT."""
+        logger.info("building empty table: %s", table)
+        # Strip any trailing terminator so the SELECT nests cleanly inside AS ( ... ).
+        inner = compiled_sql.strip().rstrip(";").strip()
+        ref = self._table_ref(schema, table)
+        self._execute(f"DROP TABLE IF EXISTS {ref}")
+        self._execute(f"CREATE TABLE {ref} AS ({inner}) WITH NO DATA")
+
+    def clone_empty_from_prod(self, candidate_schema: str, prod_schema: str, table: str) -> None:
+        """Create ``candidate_schema.table`` empty, shaped like ``prod_schema.table``."""
+        logger.info(
+            "cloning production table %s.%s into candidate schema %s",
+            prod_schema, table, candidate_schema,
+        )
+        ref = self._table_ref(candidate_schema, table)
+        self._execute(f"DROP TABLE IF EXISTS {ref}")
+        self._execute(
+            f"CREATE TABLE {ref} AS "
+            f"SELECT * FROM {self._table_ref(prod_schema, table)} WITH NO DATA"
+        )
+
+    def build_empty_from_columns(
+        self, schema: str, table: str, columns: list[dict], config: dict
+    ) -> None:
+        """Create ``schema.table`` empty from declared typed columns (drop-then-create).
+
+        *config* carries this engine's physical-layout vocabulary — the Iceberg
+        connector's own table properties (``partitioning``, ``sorted_by``,
+        ``format``, ``format_version``) — rendered into the CREATE TABLE's
+        ``WITH`` clause. Every key and value is validated before the first
+        statement runs, so a bad block fails the release gate without leaving a
+        half-built table behind. An empty *config* emits exactly the statement
+        contract 0.4.0 emitted.
+        """
+        for col in columns:
+            validate_column_type(col["type"])
+        # Trino/Iceberg accepts NOT NULL in CREATE TABLE and enforces it on write
+        # (verified live against Trino 483: inserting NULL into such a column
+        # fails with CONSTRAINT_VIOLATION), so `nullable: false` must reach the
+        # DDL exactly as it does on postgres — dropping it would build a
+        # validation table that diverges from the declared output contract.
+        # Build col_defs and the property clause (and let a malformed column dict
+        # or config raise) before dropping the existing table, so a bad request
+        # never leaves the table absent.
+        col_defs = _column_ddl(columns)
+        properties = _table_properties(config)
+        ref = self._table_ref(schema, table)
+        self._execute(f"DROP TABLE IF EXISTS {ref}")
+        self._execute(f"CREATE TABLE {ref} ({col_defs}){properties}")
+
+    def check_binds(self, sql: str) -> None:
+        """Verify *sql* binds against current schema state; EXPLAIN scans no data.
+
+        *sql* must be a single read query, and that is decided by parsing it —
+        see :func:`continuo_engine_contract.sql.ensure_single_read` — before
+        any of it reaches the server, so both adapters share one definition of
+        "a single read" rather than inheriting whatever their driver's protocol
+        happens to allow. Trino's protocol does refuse multi-statement input on
+        its own (unlike psycopg2's simple-query protocol), but relying on that
+        would make the guarantee a property of the driver rather than of the
+        contract. The subquery wrap stays as the second line of defence: it is
+        what makes a non-query statement fail the server's own parse.
+        """
+        ensure_single_read(sql, dialect="trino")
+        inner = sql.strip().rstrip(";").strip()
+        logger.info("bind-checking read via EXPLAIN (TYPE VALIDATE)")
+        self._execute(
+            f"EXPLAIN (TYPE VALIDATE) SELECT * FROM (\n{inner}\n) AS __check_binds__"
+        )
 
     def fetch(self, sql: str) -> "pa.Table":
         """Execute one declared read and return the result as an Arrow table."""
@@ -349,7 +487,7 @@ class TrinoRuntimeAdapter(RuntimeAdapter):
         (``day(event_ts)``, ``bucket(customer_id, 16)``), not bare column names.
 
         Like ``config`` on ``ensure_table``, this method is not declared by the
-        abstract ``RuntimeAdapter`` in
+        abstract ``WarehouseAdapter`` in
         ``continuo-engine-contract``; this repo ships both adapters and the
         harness as one coordinated release. The harness skips the call for an
         adapter that does not provide it (see ``docs/boundary-contract.md``
@@ -377,27 +515,22 @@ class TrinoRuntimeAdapter(RuntimeAdapter):
         is emitted for ``nullable=False`` columns (verified live). *config*
         carries this engine's physical-layout vocabulary — the Iceberg
         connector's own table properties (``partitioning``, ``sorted_by``,
-        ``format``) — validated by :func:`_table_properties` before any DDL
-        runs, so a malformed config never leaves a half-built table behind
-        (fail closed), then rendered into the CREATE TABLE's ``WITH`` clause.
-        Required and keyword-only, matching the contract 0.6.0 port signature.
+        ``format``, ``format_version``) — validated by :func:`_table_properties`
+        before any DDL runs, so a malformed config never leaves a half-built
+        table behind (fail closed), then rendered into the CREATE TABLE's
+        ``WITH`` clause. Required and keyword-only, matching the contract 0.6.0
+        port signature.
         """
         properties = _table_properties(config)
         for col in columns:
             validate_column_type(col["type"])
 
-        self._ensure_schema(schema)
+        self.ensure_schema(schema)
 
-        col_defs = []
-        for col in columns:
-            parts = [_quote(col["name"]), _trino_type(col["type"])]
-            if not col.get("nullable", True):
-                parts.append("NOT NULL")
-            col_defs.append(" ".join(parts))
-
+        col_defs = _column_ddl(columns)
         ref = self._table_ref(schema, table)
         logger.info("ensuring table %s exists", ref)
-        self._execute(f"CREATE TABLE IF NOT EXISTS {ref} ({', '.join(col_defs)}){properties}")
+        self._execute(f"CREATE TABLE IF NOT EXISTS {ref} ({col_defs}){properties}")
 
     def _insert_batches(self, table_ref: str, columns: list[str], data: "pa.Table") -> None:
         """Insert *data*'s rows into *table_ref* in batches of ``_INSERT_BATCH_SIZE``."""

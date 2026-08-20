@@ -11,7 +11,7 @@ import psycopg2
 import pyarrow as pa
 import pytest
 
-from continuo_python_runtime_postgres.adapter import PostgresRuntimeAdapter
+from continuo_python_runtime_postgres.adapter import PostgresAdapter
 
 PG = dict(
     host="localhost",
@@ -27,7 +27,7 @@ def _conn():
 
 
 def _adapter():
-    return PostgresRuntimeAdapter(_conn())
+    return PostgresAdapter(_conn())
 
 
 @pytest.fixture()
@@ -259,7 +259,7 @@ def test_ensure_schema_generic_failure_rolls_back_and_releases_advisory_lock():
     """
     schema = f"lock_leak_it_{uuid.uuid4().hex[:8]}"
     bad_conn = psycopg2.connect(cursor_factory=_RewritingCreateSchemaCursor, **PG)
-    a = PostgresRuntimeAdapter(bad_conn)
+    a = PostgresAdapter(bad_conn)
 
     with pytest.raises(psycopg2.Error):
         a.ensure_table(schema, "t", [{"name": "id", "type": "INT", "nullable": True}])

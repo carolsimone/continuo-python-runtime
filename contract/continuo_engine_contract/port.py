@@ -1,9 +1,18 @@
-"""Validation adapter port and entry-point discovery.
+"""The warehouse-engine adapter port and entry-point discovery.
 
-Validation builds each node as an EMPTY table in the candidate schema; the DDL is
-engine-specific and lives behind the ValidationAdapter port. Engine packages register
-a ``continuo_validation.adapters`` entry point; each runner image installs exactly
-one, so discovery — not configuration — selects the adapter.
+One port covers both roles an engine plays in Continuo:
+
+* **validation DDL** — a release gate builds each node as an EMPTY table in the
+  candidate schema and bind-checks its compiled SQL (``ensure_schema``,
+  ``drop_schema``, ``build_empty_from_sql``, ``build_empty_from_columns``,
+  ``clone_empty_from_prod``, ``check_binds``);
+* **python-node data-plane I/O** — the runtime harness reads declared inputs and
+  writes a node's result (``fetch``, ``ensure_table``, ``load``).
+
+Both roles are served by the same connection to the same warehouse, so they are
+one implementation per engine rather than two. Engine packages register a single
+``continuo_engine.adapters`` entry point; each image installs exactly one, so
+discovery — not configuration — selects the adapter.
 """
 from __future__ import annotations
 
@@ -11,8 +20,7 @@ from abc import ABC, abstractmethod
 from importlib.metadata import entry_points
 from typing import TYPE_CHECKING
 
-ENTRY_POINT_GROUP = "continuo_validation.adapters"
-RUNTIME_ENTRY_POINT_GROUP = "continuo_runtime.adapters"
+ENTRY_POINT_GROUP = "continuo_engine.adapters"
 
 if TYPE_CHECKING:  # pragma: no cover
     import pyarrow
@@ -22,14 +30,15 @@ class AdapterDiscoveryError(Exception):
     """Installed adapter plugins do not resolve to exactly one usable engine."""
 
 
-class ValidationAdapter(ABC):
-    """Port for engine-specific empty-table DDL during blue/green validation.
+class WarehouseAdapter(ABC):
+    """Port for everything Continuo asks of one warehouse engine.
 
-    stdout is a parsed channel: the runner prints one sentinel-framed result block
-    (see ``result.py``) as its last stdout line. Adapters must log diagnostics via
-    the stdlib ``logging`` module (captured from the pod log) rather than printing
-    them, must never write to stdout, and must never emit the
-    ``===CONTINUO_VALIDATION_RESULT_BEGIN/END===`` marker strings themselves.
+    stdout is a parsed channel: the caller prints one sentinel-framed result
+    block (see ``result.py``) as its last stdout line. Adapters must log
+    diagnostics via the stdlib ``logging`` module (captured from the pod log)
+    rather than printing them, must never write to stdout, and must never emit
+    the ``===CONTINUO_VALIDATION_RESULT_BEGIN/END===`` marker strings
+    themselves.
     """
 
     @classmethod
@@ -39,7 +48,7 @@ class ValidationAdapter(ABC):
 
     @classmethod
     @abstractmethod
-    def from_env(cls) -> "ValidationAdapter":
+    def from_env(cls) -> "WarehouseAdapter":
         """Construct a connected adapter from environment variables."""
 
     @abstractmethod
@@ -112,36 +121,6 @@ class ValidationAdapter(ABC):
         """
 
     @abstractmethod
-    def close(self) -> None:
-        """Release the underlying connection."""
-
-
-# Backwards-compatibility alias for engine packages published outside this
-# workspace against contract <= 0.2, which subclass this name instead of
-# ValidationAdapter. The engine libraries in this repo subclass ValidationAdapter
-# directly; this alias exists solely for external adapter packages pinned to
-# older contract releases.
-WarehouseAdapter = ValidationAdapter
-
-
-class RuntimeAdapter(ABC):
-    """Port for engine-specific data-plane I/O at python-node runtime.
-
-    The harness is the only caller: scripts never see this surface. Same
-    stdout discipline as ValidationAdapter — log to stderr, never print.
-    """
-
-    @classmethod
-    @abstractmethod
-    def required_env(cls) -> list[str]:
-        """Names of env vars that must be non-empty before connecting."""
-
-    @classmethod
-    @abstractmethod
-    def from_env(cls) -> "RuntimeAdapter":
-        """Construct a connected adapter from environment variables."""
-
-    @abstractmethod
     def fetch(self, sql: str) -> "pyarrow.Table":
         """Execute one declared read and return the result as Arrow."""
 
@@ -165,8 +144,8 @@ class RuntimeAdapter(ABC):
         signature would let a caller regress to positional passing unnoticed.
         Implementations MUST fail closed on any config key they do not
         recognize, and MUST validate config values before interpolating
-        anything into DDL — the same discipline as
-        ``ValidationAdapter.build_empty_from_columns``.
+        anything into DDL — the same discipline
+        :meth:`build_empty_from_columns` follows.
         """
 
     @abstractmethod
@@ -178,41 +157,33 @@ class RuntimeAdapter(ABC):
         """Release the underlying connection."""
 
 
-def _discover(group: str, kind: str, base: type) -> tuple[str, type]:
-    """Shared logic for discovering and loading an adapter plugin."""
-    eps = list(entry_points(group=group))
+def discover_adapter() -> tuple[str, type[WarehouseAdapter]]:
+    """Return ``(engine_name, adapter_class)`` from the single installed plugin.
+
+    Raises
+    ------
+    AdapterDiscoveryError
+        If zero or multiple adapters are installed, if the entry point fails to
+        import, or if it does not resolve to a WarehouseAdapter subclass.
+    """
+    eps = list(entry_points(group=ENTRY_POINT_GROUP))
     if not eps:
         raise AdapterDiscoveryError(
-            f"no {kind} adapter installed (entry-point group {group!r} is empty); "
-            f"install exactly one engine package"
+            f"no engine adapter installed (entry-point group {ENTRY_POINT_GROUP!r} is "
+            f"empty); install exactly one engine package"
         )
     if len(eps) > 1:
         names = ", ".join(sorted(ep.name for ep in eps))
         raise AdapterDiscoveryError(
-            f"multiple {kind} adapters installed ({names}); an image must install exactly one"
+            f"multiple engine adapters installed ({names}); an image must install exactly one"
         )
     ep = eps[0]
     try:
         cls = ep.load()
     except Exception as exc:
         raise AdapterDiscoveryError(f"failed to load adapter entry point {ep.name!r}: {exc}") from exc
-    if not (isinstance(cls, type) and issubclass(cls, base)):
-        raise AdapterDiscoveryError(f"entry point {ep.name!r} does not resolve to a {base.__name__} subclass")
+    if not (isinstance(cls, type) and issubclass(cls, WarehouseAdapter)):
+        raise AdapterDiscoveryError(
+            f"entry point {ep.name!r} does not resolve to a WarehouseAdapter subclass"
+        )
     return ep.name, cls
-
-
-def discover_adapter() -> tuple[str, type[ValidationAdapter]]:
-    """Return ``(engine_name, adapter_class)`` from the single installed plugin.
-
-    Raises
-    ------
-    AdapterDiscoveryError
-        If zero or multiple adapters are installed, or the entry point does not
-        resolve to a ValidationAdapter subclass.
-    """
-    return _discover(ENTRY_POINT_GROUP, "validation", ValidationAdapter)
-
-
-def discover_runtime_adapter() -> tuple[str, type[RuntimeAdapter]]:
-    """Return ``(engine_name, adapter_class)`` from the single installed runtime plugin."""
-    return _discover(RUNTIME_ENTRY_POINT_GROUP, "runtime", RuntimeAdapter)

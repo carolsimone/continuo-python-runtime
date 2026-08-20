@@ -4,10 +4,10 @@ FROM python:3.14-slim
 COPY pyproject.toml README.md /src/
 COPY continuo_python_runtime /src/continuo_python_runtime
 COPY contract /src/contract
-COPY python-runtime-trino /src/python-runtime-trino
+COPY adapters/trino /src/adapters/trino
 RUN pip install --no-cache-dir \
       /src/contract \
-      /src/python-runtime-trino \
+      /src/adapters/trino \
       /src
 # PYTHONPATH is belt-and-braces: the harness also inserts APP_ROOT and the
 # node script's own directory at the front of sys.path before executing it,

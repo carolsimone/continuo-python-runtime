@@ -16,10 +16,10 @@ jobs:
       - name: Types (runtime)
         run: uv run mypy continuo_python_runtime
       - name: Types (postgres adapter)
-        run: uv run --package continuo-python-runtime-postgres mypy python-runtime-postgres/continuo_python_runtime_postgres
+        run: uv run --package continuo-python-runtime-postgres mypy adapters/postgres/continuo_python_runtime_postgres
       - name: Types (trino adapter)
-        run: uv run --package continuo-python-runtime-trino mypy python-runtime-trino/continuo_python_runtime_trino
+        run: uv run --package continuo-python-runtime-trino mypy adapters/trino/continuo_python_runtime_trino
       - name: Tests (runtime)
         run: uv run pytest --cov=continuo_python_runtime -v
       - name: Tests (adapter units)
-        run: uv run pytest python-runtime-postgres/tests python-runtime-trino/tests -m "not integration" -v
+        run: uv run pytest adapters/postgres/tests adapters/trino/tests -m "not integration" -v

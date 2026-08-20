@@ -4,9 +4,9 @@ Run the stack first:
     docker compose -f docker-compose.integration.yml --profile trino up -d --wait
 
 Note on entry-point discovery: this suite does NOT call
-``discover_runtime_adapter()`` and assert it returns trino. In a dev venv where
+``discover_adapter()`` and assert it returns trino. In a dev venv where
 both runtime packages are installed (as they are in this workspace), the
-``continuo_runtime.adapters`` group has two entries and global discovery
+``continuo_engine.adapters`` group has two entries and global discovery
 deliberately raises. The in-repo test therefore selects the named ``trino`` entry
 point; runner images separately enforce the exactly-one-plugin invariant.
 """
@@ -21,7 +21,7 @@ import pytest
 
 import trino
 
-from continuo_python_runtime_trino.adapter import TrinoRuntimeAdapter
+from continuo_python_runtime_trino.adapter import TrinoAdapter
 
 TRINO_ENV = {
     "TRINO_HOST": "localhost",
@@ -32,12 +32,12 @@ TRINO_ENV = {
 }
 
 
-def _adapter() -> TrinoRuntimeAdapter:
+def _adapter() -> TrinoAdapter:
     """Build an adapter from the live stack's connection env."""
     for key, value in TRINO_ENV.items():
         os.environ[key] = value
     os.environ.pop("TRINO_PASSWORD", None)
-    return TrinoRuntimeAdapter.from_env()
+    return TrinoAdapter.from_env()
 
 
 @pytest.fixture()
@@ -352,15 +352,15 @@ def test_fetch_rejects_duplicate_select_columns(clean_schema):
 
 
 def test_entry_point_resolves_to_this_adapter():
-    """The `trino` runtime entry point is registered and loads TrinoRuntimeAdapter.
+    """The `trino` engine entry point is registered and loads TrinoAdapter.
 
-    Does NOT call discover_runtime_adapter(): see the module docstring — with
+    Does NOT call discover_adapter(): see the module docstring — with
     continuo-python-runtime-postgres also installed in this dev venv, two entry points
-    are registered under continuo_runtime.adapters, and discover_runtime_adapter()
+    are registered under continuo_engine.adapters, and discover_adapter()
     deliberately raises when more than one is installed. Only a runner image
     (which installs exactly one engine package) can rely on discovery choosing
     trino; here we assert the entry point itself is correctly wired.
     """
-    eps = [ep for ep in entry_points(group="continuo_runtime.adapters") if ep.name == "trino"]
+    eps = [ep for ep in entry_points(group="continuo_engine.adapters") if ep.name == "trino"]
     assert len(eps) == 1
-    assert eps[0].load() is TrinoRuntimeAdapter
+    assert eps[0].load() is TrinoAdapter

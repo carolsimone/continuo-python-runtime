@@ -1,7 +1,7 @@
 [project]
 version = "0.2.0"
 name = "continuo-python-runtime-trino"
-description = "Trino runtime adapter for Continuo python nodes."
+description = "Trino warehouse adapter for Continuo: validation and python-node runtime."
 authors = [{ name = "Simone Carolini" }]
 maintainers = [{ name = "Simone Carolini" }]
 readme = "README.md"
@@ -17,8 +17,8 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 
-[project.entry-points."continuo_runtime.adapters"]
-trino = "continuo_python_runtime_trino.adapter:TrinoRuntimeAdapter"
+[project.entry-points."continuo_engine.adapters"]
+trino = "continuo_python_runtime_trino.adapter:TrinoAdapter"
 
 [dependency-groups]
 dev = [

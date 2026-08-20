@@ -10,13 +10,13 @@ from continuo_python_runtime.contract.model import Node
 from continuo_python_runtime.errors import ReadError
 
 if TYPE_CHECKING:
-    from continuo_engine_contract.port import RuntimeAdapter  # type: ignore[import-untyped]
+    from continuo_engine_contract.port import WarehouseAdapter  # type: ignore[import-untyped]
 
 
 class RunContext:
     """Manages declared read access for a node execution."""
 
-    def __init__(self, node: Node, adapter: "RuntimeAdapter") -> None:
+    def __init__(self, node: Node, adapter: "WarehouseAdapter") -> None:
         """Initialize context with a node and adapter.
 
         Args:

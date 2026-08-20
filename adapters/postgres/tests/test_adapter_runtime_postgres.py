@@ -1,4 +1,4 @@
-"""Unit tests for the postgres runtime adapter — pure-logic, mock-free.
+"""Unit tests for the postgres adapter's data-plane half — pure-logic, mock-free.
 
 Transactional/live DDL behavior (load's TRUNCATE + batched insert +
 rollback-on-error, the psycopg2 connection built by from_env, and DDL validity
@@ -28,7 +28,7 @@ from continuo_engine_contract.types import validate_column_type  # type: ignore[
 import continuo_python_runtime_postgres.adapter as adapter_module
 
 from continuo_python_runtime_postgres.adapter import (
-    PostgresRuntimeAdapter,
+    PostgresAdapter,
     _arrow_table_from_rows,
     _index_name,
 )
@@ -62,7 +62,7 @@ class _FakeCursor:
 class _FakeConnection:
     """Minimal connection double: hands out ``_FakeCursor``\\ s, tracks commit/rollback.
 
-    ``autocommit`` is a plain settable attribute — ``PostgresRuntimeAdapter.__init__``
+    ``autocommit`` is a plain settable attribute — ``PostgresAdapter.__init__``
     assigns it directly, no property needed for a test double.
     """
 
@@ -86,17 +86,17 @@ class _FakeConnection:
 
 def test_required_env_names_connection_vars():
     """Test that required_env lists the three mandatory POSTGRES_* vars."""
-    assert PostgresRuntimeAdapter.required_env() == [
+    assert PostgresAdapter.required_env() == [
         "POSTGRES_HOST", "POSTGRES_DB", "POSTGRES_USER",
     ]
 
 
 def test_entry_point_registered_and_loads_adapter():
-    """Test that the postgres runtime entry point loads PostgresRuntimeAdapter."""
-    eps = [ep for ep in entry_points(group="continuo_runtime.adapters")
+    """Test that the postgres engine entry point loads PostgresAdapter."""
+    eps = [ep for ep in entry_points(group="continuo_engine.adapters")
            if ep.name == "postgres"]
     assert len(eps) == 1
-    assert eps[0].load() is PostgresRuntimeAdapter
+    assert eps[0].load() is PostgresAdapter
 
 
 @pytest.mark.parametrize(
@@ -269,7 +269,7 @@ def test_ensure_table_with_none_config_emits_no_index_ddl():
     cursor under test here.
     """
     conn = _FakeConnection()
-    adapter = PostgresRuntimeAdapter(conn)
+    adapter = PostgresAdapter(conn)
     adapter.ensure_table("s", "t", _ONE_COL, config={})
     assert len(conn.cursors[-1].statements) == 1  # CREATE TABLE only
     assert conn.rolled_back == 0
@@ -278,7 +278,7 @@ def test_ensure_table_with_none_config_emits_no_index_ddl():
 def test_ensure_table_with_empty_config_emits_no_index_ddl():
     """Test that config={} creates the table and nothing else."""
     conn = _FakeConnection()
-    adapter = PostgresRuntimeAdapter(conn)
+    adapter = PostgresAdapter(conn)
     adapter.ensure_table("s", "t", _ONE_COL, config={})
     assert len(conn.cursors[-1].statements) == 1  # CREATE TABLE only
     assert conn.rolled_back == 0
@@ -287,15 +287,17 @@ def test_ensure_table_with_empty_config_emits_no_index_ddl():
 def test_ensure_table_single_column_index_emits_expected_create_index():
     """Test that a valid single-column index emits the expected CREATE INDEX statement."""
     conn = _FakeConnection()
-    adapter = PostgresRuntimeAdapter(conn)
+    adapter = PostgresAdapter(conn)
     adapter.ensure_table("s", "t", _ONE_COL, config={"indexes": [{"columns": ["id"]}]})
     statements = conn.cursors[-1].statements
     assert len(statements) == 2
-    expected = pg_sql.SQL("CREATE {}INDEX IF NOT EXISTS {} ON {}.{} ({})").format(
+    expected = pg_sql.SQL("CREATE {}INDEX {}{} ON {}.{} USING {} ({})").format(
         pg_sql.SQL(""),
+        pg_sql.SQL("IF NOT EXISTS "),
         pg_sql.Identifier("ix_t_id"),
         pg_sql.Identifier("s"),
         pg_sql.Identifier("t"),
+        pg_sql.Identifier("btree"),
         pg_sql.SQL(", ").join([pg_sql.Identifier("id")]),
     )
     assert statements[1] == expected
@@ -305,15 +307,17 @@ def test_ensure_table_single_column_index_emits_expected_create_index():
 def test_ensure_table_unique_index_emits_create_unique_index():
     """Test that `unique: true` emits CREATE UNIQUE INDEX."""
     conn = _FakeConnection()
-    adapter = PostgresRuntimeAdapter(conn)
+    adapter = PostgresAdapter(conn)
     adapter.ensure_table(
         "s", "t", _ONE_COL, config={"indexes": [{"columns": ["id"], "unique": True}]}
     )
-    expected = pg_sql.SQL("CREATE {}INDEX IF NOT EXISTS {} ON {}.{} ({})").format(
+    expected = pg_sql.SQL("CREATE {}INDEX {}{} ON {}.{} USING {} ({})").format(
         pg_sql.SQL("UNIQUE "),
+        pg_sql.SQL("IF NOT EXISTS "),
         pg_sql.Identifier("ix_t_id"),
         pg_sql.Identifier("s"),
         pg_sql.Identifier("t"),
+        pg_sql.Identifier("btree"),
         pg_sql.SQL(", ").join([pg_sql.Identifier("id")]),
     )
     assert conn.cursors[-1].statements[1] == expected
@@ -322,15 +326,17 @@ def test_ensure_table_unique_index_emits_create_unique_index():
 def test_ensure_table_custom_index_name_is_used():
     """Test that an explicit `name` overrides the derived name."""
     conn = _FakeConnection()
-    adapter = PostgresRuntimeAdapter(conn)
+    adapter = PostgresAdapter(conn)
     adapter.ensure_table(
         "s", "t", _ONE_COL, config={"indexes": [{"columns": ["id"], "name": "ix_custom"}]}
     )
-    expected = pg_sql.SQL("CREATE {}INDEX IF NOT EXISTS {} ON {}.{} ({})").format(
+    expected = pg_sql.SQL("CREATE {}INDEX {}{} ON {}.{} USING {} ({})").format(
         pg_sql.SQL(""),
+        pg_sql.SQL("IF NOT EXISTS "),
         pg_sql.Identifier("ix_custom"),
         pg_sql.Identifier("s"),
         pg_sql.Identifier("t"),
+        pg_sql.Identifier("btree"),
         pg_sql.SQL(", ").join([pg_sql.Identifier("id")]),
     )
     assert conn.cursors[-1].statements[1] == expected
@@ -339,7 +345,7 @@ def test_ensure_table_custom_index_name_is_used():
 def test_ensure_table_multiple_indexes_all_run_in_one_cursor_block():
     """Test that multiple indexes each emit a statement, in the same cursor block as the table."""
     conn = _FakeConnection()
-    adapter = PostgresRuntimeAdapter(conn)
+    adapter = PostgresAdapter(conn)
     cols = [
         {"name": "id", "type": "INT", "nullable": True},
         {"name": "email", "type": "TEXT", "nullable": True},
@@ -357,7 +363,7 @@ def test_ensure_table_rejects_explicit_name_colliding_with_a_derived_name():
     is rejected too -- the digest suffix alone cannot prevent this collision,
     since the colliding name here is never truncated in the first place."""
     conn = _FakeConnection()
-    adapter = PostgresRuntimeAdapter(conn)
+    adapter = PostgresAdapter(conn)
     with pytest.raises(ValueError, match="ix_t_id"):
         adapter.ensure_table(
             "s", "t", _ONE_COL,
@@ -382,7 +388,7 @@ def test_ensure_table_rejects_two_overlong_explicit_names_sharing_a_63_byte_pref
     check, so this collision is rejected here instead of silently lost at
     the warehouse."""
     conn = _FakeConnection()
-    adapter = PostgresRuntimeAdapter(conn)
+    adapter = PostgresAdapter(conn)
     prefix = "x" * 63
     name_a = prefix + "AAAAAA"  # 69 bytes, shares prefix's first 63 bytes
     name_b = prefix + "BBBBB"  # 68 bytes, shares the same first 63 bytes
@@ -409,16 +415,18 @@ def test_explicit_index_name_over_limit_is_truncated_to_postgres_identifier_limi
     collision after truncation is surfaced (see the duplicate-name test
     above) rather than silently altered to avoid it."""
     conn = _FakeConnection()
-    adapter = PostgresRuntimeAdapter(conn)
+    adapter = PostgresAdapter(conn)
     long_name = "y" * 70
     adapter.ensure_table(
         "s", "t", _ONE_COL, config={"indexes": [{"columns": ["id"], "name": long_name}]}
     )
-    expected = pg_sql.SQL("CREATE {}INDEX IF NOT EXISTS {} ON {}.{} ({})").format(
+    expected = pg_sql.SQL("CREATE {}INDEX {}{} ON {}.{} USING {} ({})").format(
         pg_sql.SQL(""),
+        pg_sql.SQL("IF NOT EXISTS "),
         pg_sql.Identifier("y" * 63),
         pg_sql.Identifier("s"),
         pg_sql.Identifier("t"),
+        pg_sql.Identifier("btree"),
         pg_sql.SQL(", ").join([pg_sql.Identifier("id")]),
     )
     assert conn.cursors[-1].statements[1] == expected
@@ -473,7 +481,7 @@ def test_ensure_table_rejects_bad_config_and_emits_no_ddl(config, match):
     was ever obtained at all: ``conn.cursors`` stays empty.
     """
     conn = _FakeConnection()
-    adapter = PostgresRuntimeAdapter(conn)
+    adapter = PostgresAdapter(conn)
     with pytest.raises(ValueError, match=match):
         adapter.ensure_table("s", "t", _ONE_COL, config=config)
     assert conn.cursors == []
@@ -488,7 +496,7 @@ def test_ensure_table_bad_column_type_still_rejects_and_emits_no_ddl():
     any cursor is obtained, so this also leaves ``conn.cursors`` empty.
     """
     conn = _FakeConnection()
-    adapter = PostgresRuntimeAdapter(conn)
+    adapter = PostgresAdapter(conn)
     with pytest.raises(ValueError):
         adapter.ensure_table(
             "s", "t", [{"name": "id", "type": "NOT_A_TYPE", "nullable": True}], config={}
@@ -507,20 +515,20 @@ def test_ensure_table_bad_column_type_still_rejects_and_emits_no_ddl():
 @pytest.mark.parametrize(("config", "match"), _BAD_CONFIGS)
 def test_validate_config_rejects_everything_ensure_table_rejects(config, match):
     with pytest.raises(ValueError, match=match):
-        PostgresRuntimeAdapter.validate_config(config, ["id"])
+        PostgresAdapter.validate_config(config, ["id"])
 
 
 @pytest.mark.parametrize("config", [None, {}, {"indexes": []}, {"indexes": [
     {"columns": ["id"], "unique": True, "name": "ix_custom"},
 ]}])
 def test_validate_config_accepts_what_ensure_table_accepts(config):
-    assert PostgresRuntimeAdapter.validate_config(config, ["id"]) is None
+    assert PostgresAdapter.validate_config(config, ["id"]) is None
 
 
 def test_validate_config_is_a_classmethod_needing_no_connection():
     """The harness calls it before any adapter I/O; it must not need a connection."""
     with pytest.raises(ValueError, match="nope"):
-        PostgresRuntimeAdapter.validate_config({"indexes": [{"columns": ["nope"]}]}, ["id"])
+        PostgresAdapter.validate_config({"indexes": [{"columns": ["nope"]}]}, ["id"])
 
 
 def test_config_validation_survives_a_second_recognized_top_level_key(monkeypatch):
@@ -536,8 +544,8 @@ def test_config_validation_survives_a_second_recognized_top_level_key(monkeypatc
     monkeypatch.setattr(
         adapter_module, "_KNOWN_CONFIG_KEYS", ("indexes", "fillfactor")
     )
-    assert PostgresRuntimeAdapter.validate_config({"fillfactor": 90}, ["id"]) is None
+    assert PostgresAdapter.validate_config({"fillfactor": 90}, ["id"]) is None
 
     conn = _FakeConnection()
-    PostgresRuntimeAdapter(conn).ensure_table("s", "t", _ONE_COL, config={"fillfactor": 90})
+    PostgresAdapter(conn).ensure_table("s", "t", _ONE_COL, config={"fillfactor": 90})
     assert conn.committed  # DDL ran; no KeyError on the way in

@@ -1,4 +1,4 @@
-"""The contract's single-read gate for :meth:`ValidationAdapter.check_binds`.
+"""The contract's single-read gate for :meth:`WarehouseAdapter.check_binds`.
 
 ``check_binds`` accepts a single read query, raises on any bind failure, and
 scans zero data. Enforcing "a single read" by wrapping the text in a subquery

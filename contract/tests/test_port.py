@@ -1,6 +1,6 @@
-"""Discovery tests for the ValidationAdapter port.
+"""Discovery tests for the WarehouseAdapter port.
 
-These install REAL adapter packages (with genuine ``continuo_validation.adapters``
+These install REAL adapter packages (with genuine ``continuo_engine.adapters``
 entry points) into throwaway virtualenvs and run ``discover_adapter`` against the
 real ``importlib.metadata`` machinery — no monkeypatching of ``entry_points``, so the
 tests exercise actual entry-point loading rather than an assumed return shape.
@@ -12,23 +12,18 @@ from pathlib import Path
 
 import pytest
 
-from continuo_engine_contract.port import (
-    RUNTIME_ENTRY_POINT_GROUP,
-    RuntimeAdapter,
-    ValidationAdapter,
-    WarehouseAdapter,
-)
+from continuo_engine_contract.port import ENTRY_POINT_GROUP, WarehouseAdapter
 
 CONTRACT_ROOT = Path(__file__).resolve().parent.parent  # contract/
 
 
-def test_validation_adapter_cannot_be_instantiated():
+def test_warehouse_adapter_cannot_be_instantiated():
     """The port is abstract — a concrete adapter must implement every method."""
     with pytest.raises(TypeError):
-        ValidationAdapter()  # type: ignore[abstract]
+        WarehouseAdapter()  # type: ignore[abstract]
 
 
-def test_validation_adapter_requires_drop_schema():
+def test_warehouse_adapter_requires_drop_schema():
     """drop_schema is part of the contract: omitting it blocks instantiation.
 
     A concrete adapter that implements every method except the teardown one must
@@ -36,7 +31,7 @@ def test_validation_adapter_requires_drop_schema():
     installed engine.
     """
 
-    class MissingDrop(ValidationAdapter):
+    class MissingDrop(WarehouseAdapter):
         @classmethod
         def required_env(cls):
             return []
@@ -54,6 +49,21 @@ def test_validation_adapter_requires_drop_schema():
         def clone_empty_from_prod(self, candidate_schema, prod_schema, table):
             ...
 
+        def build_empty_from_columns(self, schema, table, columns, config):
+            ...
+
+        def check_binds(self, sql):
+            ...
+
+        def fetch(self, sql):
+            ...
+
+        def ensure_table(self, schema, table, columns, *, config):
+            ...
+
+        def load(self, schema, table, data):
+            ...
+
         def close(self):
             ...
 
@@ -61,12 +71,7 @@ def test_validation_adapter_requires_drop_schema():
         MissingDrop()  # type: ignore[abstract]
 
 
-def test_warehouse_adapter_alias_still_points_to_the_port():
-    """Engine packages published against contract <= 0.2 subclass WarehouseAdapter."""
-    assert WarehouseAdapter is ValidationAdapter
-
-
-def test_validation_adapter_requires_columns_and_binds_methods():
+def test_warehouse_adapter_requires_columns_and_binds_methods():
     """A subclass missing the 0.4.0 methods cannot be instantiated.
 
     Adapters implementing only the 0.3.0 surface (required_env, from_env,
@@ -75,7 +80,7 @@ def test_validation_adapter_requires_columns_and_binds_methods():
     and check_binds existing on every installed engine.
     """
 
-    class Partial(ValidationAdapter):
+    class Partial(WarehouseAdapter):
         @classmethod
         def required_env(cls):
             return []
@@ -103,13 +108,88 @@ def test_validation_adapter_requires_columns_and_binds_methods():
         Partial()  # type: ignore[abstract]
 
 
+def test_partial_engine_cannot_be_instantiated():
+    """A class implementing only the validation half must fail at construction.
+
+    One port means one class per engine covering both roles: an adapter that
+    still only speaks validation DDL is abstract, so a half-migrated engine
+    package cannot be constructed and silently fail later, at the first
+    python-node read.
+    """
+
+    class HalfEngine(WarehouseAdapter):
+        @classmethod
+        def required_env(cls):
+            return []
+
+        @classmethod
+        def from_env(cls):
+            return cls()
+
+        def ensure_schema(self, schema):
+            ...
+
+        def drop_schema(self, schema):
+            ...
+
+        def build_empty_from_sql(self, schema, table, compiled_sql):
+            ...
+
+        def build_empty_from_columns(self, schema, table, columns, config):
+            ...
+
+        def clone_empty_from_prod(self, schema, prod_schema, table):
+            ...
+
+        def check_binds(self, sql):
+            ...
+
+        def close(self):
+            ...
+
+        # fetch / ensure_table / load deliberately missing
+
+    with pytest.raises(TypeError):
+        HalfEngine()  # type: ignore[abstract]
+
+
+def test_single_entry_point_group_and_single_discovery():
+    """One port, one entry-point group, one discovery function — no second half left."""
+    from continuo_engine_contract import port
+
+    assert port.ENTRY_POINT_GROUP == "continuo_engine.adapters"
+    assert not hasattr(port, "RUNTIME_ENTRY_POINT_GROUP")
+    assert not hasattr(port, "discover_runtime_adapter")
+    assert not hasattr(port, "ValidationAdapter")
+    assert not hasattr(port, "RuntimeAdapter")
+
+
+def test_ensure_table_signature_declares_config_keyword_only():
+    """The port itself declares the physical-layout config parameter.
+
+    Adapters receive the node's config through the abstract signature — they
+    must never have to extend beyond the ABC to accept it. It is required and
+    keyword-only: the harness passes ``config=`` unconditionally, and a
+    positional-friendly signature would let callers regress to positional
+    passing unnoticed.
+    """
+    import inspect
+
+    sig = inspect.signature(WarehouseAdapter.ensure_table)
+    params = list(sig.parameters)
+    assert params == ["self", "schema", "table", "columns", "config"]
+    config = sig.parameters["config"]
+    assert config.kind is inspect.Parameter.KEYWORD_ONLY
+    assert config.default is inspect.Parameter.empty
+
+
 # --- Real installed-adapter discovery via throwaway venvs --------------------
 
 _FIXTURE_MODULE = '''\
-from continuo_engine_contract.port import ValidationAdapter
+from continuo_engine_contract.port import WarehouseAdapter
 
 
-class OneAdapter(ValidationAdapter):
+class OneAdapter(WarehouseAdapter):
     @classmethod
     def required_env(cls):
         return []
@@ -128,6 +208,21 @@ class OneAdapter(ValidationAdapter):
         ...
 
     def clone_empty_from_prod(self, candidate_schema, prod_schema, table):
+        ...
+
+    def build_empty_from_columns(self, schema, table, columns, config):
+        ...
+
+    def check_binds(self, sql):
+        ...
+
+    def fetch(self, sql):
+        ...
+
+    def ensure_table(self, schema, table, columns, *, config):
+        ...
+
+    def load(self, schema, table, data):
         ...
 
     def close(self):
@@ -152,30 +247,19 @@ _DISCOVER_SCRIPT = textwrap.dedent(
     """
 )
 
-_DISCOVER_RUNTIME_SCRIPT = textwrap.dedent(
-    """
-    from continuo_engine_contract.port import discover_runtime_adapter, AdapterDiscoveryError
-    try:
-        name, cls = discover_runtime_adapter()
-        print("OK", name, cls.__name__)
-    except AdapterDiscoveryError as exc:
-        print("ERR", exc)
-    """
-)
-
 
 def _run_discovery(
     tmp_path: Path,
     entry_points: dict,
     module_body: str = _FIXTURE_MODULE,
-    group: str = "continuo_validation.adapters",
+    group: str = ENTRY_POINT_GROUP,
     script: str = _DISCOVER_SCRIPT,
 ) -> str:
-    """Run a discovery function in a fresh venv holding the contract + a fixture adapter.
+    """Run discovery in a fresh venv holding the contract + a fixture adapter.
 
     Installs a generated fixture package declaring *entry_points* under *group*
     with *module_body* as its module source, then runs *script* (which calls
-    ``discover_adapter`` or ``discover_runtime_adapter``) and returns its stdout.
+    ``discover_adapter``) and returns its stdout.
     """
     fixture = tmp_path / "fixture"
     (fixture / "cvfixtureadapters").mkdir(parents=True)
@@ -223,7 +307,7 @@ def test_discover_adapter_raises_when_none_installed(tmp_path):
     """
     out = _run_discovery(tmp_path, {})
     assert out.startswith("ERR")
-    assert "no validation adapter installed" in out
+    assert "no engine adapter installed" in out
 
 
 def test_discover_single_installed_adapter_is_found(tmp_path):
@@ -240,10 +324,10 @@ def test_discover_multiple_installed_adapters_raises_naming_them(tmp_path):
 
 
 def test_discover_non_adapter_entry_point_raises(tmp_path):
-    """An entry point that is not a ValidationAdapter subclass is rejected."""
+    """An entry point that is not a WarehouseAdapter subclass is rejected."""
     out = _run_discovery(tmp_path, {"broken": "not_an_adapter"})
     assert out.startswith("ERR")
-    assert "ValidationAdapter subclass" in out
+    assert "WarehouseAdapter subclass" in out
 
 
 def test_discover_wraps_adapter_import_failure(tmp_path):
@@ -259,57 +343,3 @@ def test_discover_wraps_adapter_import_failure(tmp_path):
     )
     assert out.startswith("ERR")
     assert "failed to load adapter entry point" in out
-
-
-# --- RuntimeAdapter tests -------------------------------------------------------
-
-
-def test_runtime_adapter_is_abstract():
-    """The port is abstract — a concrete adapter must implement every method."""
-    with pytest.raises(TypeError):
-        RuntimeAdapter()  # type: ignore[abstract]
-
-
-def test_runtime_ensure_table_signature_declares_config_keyword_only():
-    """The port itself declares the physical-layout config parameter.
-
-    Adapters receive the node's config through the abstract signature — they
-    must never have to extend beyond the ABC to accept it. It is required and
-    keyword-only: the harness passes ``config=`` unconditionally, and a
-    positional-friendly signature would let callers regress to positional
-    passing unnoticed.
-    """
-    import inspect
-
-    sig = inspect.signature(RuntimeAdapter.ensure_table)
-    params = list(sig.parameters)
-    assert params == ["self", "schema", "table", "columns", "config"]
-    config = sig.parameters["config"]
-    assert config.kind is inspect.Parameter.KEYWORD_ONLY
-    assert config.default is inspect.Parameter.empty
-
-
-def test_runtime_entry_point_group_name():
-    """The runtime entry point group constant has the correct value."""
-    assert RUNTIME_ENTRY_POINT_GROUP == "continuo_runtime.adapters"
-
-
-def test_discover_runtime_adapter_empty_group_raises(tmp_path):
-    """With no runtime adapter package installed, discovery raises cleanly.
-
-    This runs in a throwaway venv rather than calling ``discover_runtime_adapter``
-    directly against the ambient environment: nothing in this workspace currently
-    registers a ``continuo_runtime.adapters`` entry point, so the ambient
-    environment happens to pass today, but relying on that would be the same
-    latent trap as its ``discover_adapter`` sibling — a runtime adapter package
-    installed alongside the contract in the future would silently break this
-    test's premise.
-    """
-    out = _run_discovery(
-        tmp_path,
-        {},
-        group=RUNTIME_ENTRY_POINT_GROUP,
-        script=_DISCOVER_RUNTIME_SCRIPT,
-    )
-    assert out.startswith("ERR")
-    assert "no runtime adapter installed" in out

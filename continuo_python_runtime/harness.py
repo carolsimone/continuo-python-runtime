@@ -22,7 +22,7 @@ from types import ModuleType
 from typing import Any
 
 from continuo_engine_contract.port import (  # type: ignore[import-untyped]
-    discover_runtime_adapter,
+    discover_adapter,
 )
 from continuo_engine_contract.result import result_block  # type: ignore[import-untyped]
 
@@ -141,13 +141,13 @@ def load_script(node: Node, repo_root: Path) -> ModuleType:
 
 
 def build_adapter() -> Any:
-    """Discover and construct the single installed runtime adapter.
+    """Discover and construct the single installed warehouse adapter.
 
     Raises:
         LoadError: If any of the adapter's ``required_env()`` vars are unset
             or empty in ``os.environ``.
     """
-    _, cls = discover_runtime_adapter()
+    _, cls = discover_adapter()
     required = cls.required_env()
     missing = [key for key in required if not os.environ.get(key)]
     if missing:
@@ -184,7 +184,7 @@ def _validate_config_early(adapter: Any, node: Node) -> None:
     so this is the earliest point the engine's own rules can be applied.
 
     The call is skipped for an adapter that does not provide ``validate_config``:
-    the abstract ``RuntimeAdapter`` in ``continuo-engine-contract``
+    the abstract ``WarehouseAdapter`` in ``continuo-engine-contract``
     does not declare it (this repo ships the harness and both adapters as one
     coordinated release), and an adapter without it loses only earliness —
     ``ensure_table`` still fails closed on the same config.

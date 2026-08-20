@@ -7,7 +7,7 @@ import yaml
 
 import continuo_python_runtime.cli as cli_module
 from continuo_python_runtime.cli import main
-from tests.conftest import FakeRuntimeAdapter
+from tests.conftest import FakeWarehouseAdapter
 
 
 def test_validate_ok(contract_repo):
@@ -295,9 +295,9 @@ def test_run_success_emits_sentinel_block(harness_repo, monkeypatch, capsys):
     monkeypatch.setenv("CONTRACT_DIR", str(harness_repo / "contracts"))
     monkeypatch.setenv("APP_ROOT", str(harness_repo))
 
-    # Monkeypatch build_adapter to return FakeRuntimeAdapter
+    # Monkeypatch build_adapter to return FakeWarehouseAdapter
     def fake_build_adapter():
-        return FakeRuntimeAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+        return FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1]})})
 
     import continuo_python_runtime.harness
     monkeypatch.setattr(continuo_python_runtime.harness, "build_adapter", fake_build_adapter)

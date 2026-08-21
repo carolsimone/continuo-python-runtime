@@ -1,0 +1,141 @@
+name: release
+
+# Creates a GitHub Release once BOTH tag-triggered publish workflows
+# (publish-pypi.yml, images.yml) have finished successfully for this exact
+# tag. A Release exists here beyond what PyPI already shows because a tag
+# also ships two ghcr.io images that PyPI knows nothing about — the Release
+# is the one place that says "this tag = these packages + these images."
+#
+# Triggered by the same tag push as its two siblings, rather than by
+# workflow_run watching them complete: `needs:` cannot cross workflow files,
+# and this avoids depending on workflow_run's head_branch semantics for a
+# tag-triggered source run, which nothing else in this repo relies on.
+# Instead the job below polls the Actions API for the sibling runs at this
+# exact commit until both report a conclusion — that only depends on the
+# same push:tags trigger every other release workflow here already uses.
+on:
+  push:
+    tags:
+      # Digit after v: keeps this to release tags, same reasoning continuo's
+      # release.yml uses. publish-pypi.yml and images.yml use the looser `v*`
+      # and instead guard internally with startsWith(..., 'v') checks, so
+      # this is deliberately the stricter of the three triggers.
+      - "v[0-9]*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  github-release:
+    # -test tags are a TestPyPI dry run (see publish-pypi.yml) and skip
+    # images.yml's publish job by design (its own if: guards on this same
+    # condition) — no public Release for them.
+    if: "!contains(github.ref_name, '-test')"
+    runs-on: ubuntu-latest
+    # Each wait_for call below can itself run up to 30 minutes (its own
+    # internal timeout), called twice, sequentially — so this job's ceiling
+    # has to clear 60 minutes on its own polling math alone, before even
+    # accounting for how long the siblings actually take to run.
+    timeout-minutes: 70
+    permissions:
+      contents: write # gh release create/edit
+      actions: read # poll sibling workflow runs
+    env:
+      TAG: ${{ github.ref_name }}
+      SHA: ${{ github.sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Wait for publish-pypi.yml and images.yml to finish on this commit
+        run: |
+          set -euo pipefail
+
+          wait_for() {
+            local workflow_file="$1" elapsed=0 interval=20 timeout=1800
+            while :; do
+              # event=push, not just head_sha: images.yml also triggers on
+              # pull_request, and a coincidentally-identical head_sha between
+              # an open PR and this tag would otherwise pick up the wrong run.
+              # Query params go in the URL, not via -f: gh api switches a
+              # request to POST the moment any -f/-F flag is present, and this
+              # listing endpoint only accepts GET — it 404s on POST, which
+              # under `set -e` would abort this script on the very first poll,
+              # every time. Verified against this repo's real API: -f flags
+              # 404 here, the URL query string form returns real run data.
+              conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_file}/runs?head_sha=${SHA}&event=push" \
+                --jq '.workflow_runs[0].conclusion // "pending"')"
+              case "${conclusion}" in
+                success)
+                  echo "${workflow_file}: success"
+                  return 0
+                  ;;
+                pending)
+                  # Covers both "no matching run yet" (API eventual
+                  # consistency right after the push) and "run exists but
+                  # still queued/in_progress" — conclusion is JSON null in
+                  # both cases until the run completes.
+                  ;;
+                *)
+                  echo "::error::${workflow_file} concluded '${conclusion}' for ${SHA}; not creating a Release."
+                  exit 1
+                  ;;
+              esac
+              elapsed=$((elapsed + interval))
+              if [ "${elapsed}" -ge "${timeout}" ]; then
+                echo "::error::timed out after ${timeout}s waiting for ${workflow_file} to finish on ${SHA}."
+                exit 1
+              fi
+              sleep "${interval}"
+            done
+          }
+
+          wait_for "publish-pypi.yml"
+          wait_for "images.yml"
+
+      - name: Extract this version's CHANGELOG section
+        id: notes
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          # Print the body between "## [X.Y.Z]" and the next "## [" heading.
+          if grep -qE "^## \[${VERSION}\]" CHANGELOG.md; then
+            awk -v ver="## [${VERSION}]" '
+              index($0, ver) == 1 { found = 1; next }
+              found && /^## \[/    { exit }
+              found                { print }
+            ' CHANGELOG.md > /tmp/release-body.md
+          fi
+
+          if [ -s /tmp/release-body.md ]; then
+            echo "generate=false" >> "$GITHUB_OUTPUT"
+          else
+            # A tag with no matching CHANGELOG.md section (e.g. someone
+            # forgot to add one before tagging) still gets a Release — just
+            # with GitHub's generated notes instead of failing the job over
+            # a missing doc update.
+            echo "::warning::no '## [${VERSION}]' section in CHANGELOG.md; falling back to generated notes."
+            echo "generate=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create the Release
+        run: |
+          set -euo pipefail
+          # Idempotent: re-running this workflow for an existing tag updates
+          # the Release rather than failing.
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            if [ "${{ steps.notes.outputs.generate }}" = "true" ]; then
+              gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --latest
+            else
+              gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+                --notes-file /tmp/release-body.md --latest
+            fi
+          elif [ "${{ steps.notes.outputs.generate }}" = "true" ]; then
+            gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --title "${TAG}" --generate-notes --latest
+          else
+            gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --title "${TAG}" --notes-file /tmp/release-body.md --latest
+          fi

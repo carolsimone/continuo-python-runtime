@@ -76,6 +76,12 @@ scripts/security-scan.sh
 
 ## Conventions
 
+- **Changelog.** A pull request whose changes are worth a release note adds an entry
+  under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md), Keep a Changelog style. At
+  release time that section is renamed to the new version and a fresh empty
+  `## [Unreleased]` goes above it — `.github/workflows/release.yml` reads the section
+  matching the pushed tag to build the GitHub Release notes, and falls back to
+  GitHub's generated notes if none exists.
 - **Python logging.** Use the standard `logging` module for diagnostic output, never
   `print`. The only exception is machine-parsed stdout protocols (e.g. the CLI's
   sentinel-framed result blocks) — those stay as explicit `print`, since stdout is

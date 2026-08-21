@@ -5,6 +5,8 @@ description = "The contract a Continuo warehouse engine must satisfy: the Wareho
 authors = [{ name = "Simone Carolini" }]
 readme = "README.md"
 requires-python = ">= 3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = ["sqlglot==30.15.0"]
 classifiers = [
     "Development Status :: 4 - Beta",

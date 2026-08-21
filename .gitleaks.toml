@@ -10,10 +10,18 @@ useDefault = true
 description = "Paths that contain no live credentials"
 
 paths = [
+  # Unanchored throughout: the working-tree scan (scripts/security-scan.sh)
+  # mounts the repo at /repo and passes that as the scan target, so gitleaks
+  # matches these patterns against absolute paths like
+  # /repo/.worktrees/stale/file — a leading `^` would never match the actual
+  # prefix and silently disable the exclusion. Verified against v8.24.3 by
+  # planting a fake AWS key under .worktrees/ and confirming a start-anchored
+  # pattern let it through while an unanchored one catches it.
+  #
   # Local agent worktrees hold full stale copies of every tracked file, so a
   # finding in the real tree would otherwise be reported once per worktree.
-  '''^\.worktrees/''',
-  '''^\.claude/''',
+  '''(^|/)\.worktrees/''',
+  '''(^|/)\.claude/''',
   # Build/tooling caches, never committed.
   '''(^|/)\.venv/''',
   '''(^|/)\.mypy_cache/''',
@@ -24,5 +32,5 @@ paths = [
   # default credentials for local-only containers (e.g. MinIO's published
   # "minioadmin"/"minioadmin", Postgres's "continuo"/"continuo") — not
   # secrets, and never reachable outside the compose network they define.
-  '''^tests/smoke/.*/docker-compose\.yml$''',
+  '''(^|/)tests/smoke/[^/]+/docker-compose\.yml$''',
 ]

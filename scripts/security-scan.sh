@@ -12,10 +12,11 @@
 #               them would wedge every pull request behind an ignore-list edit.
 #
 # Usage:
-#   scripts/security-scan.sh                    # every scanner
-#   scripts/security-scan.sh secrets             # gitleaks over the working tree
-#   scripts/security-scan.sh secrets --history    # gitleaks over full git history
-#   scripts/security-scan.sh deps                 # trivy dependency CVEs (advisory)
+#   scripts/security-scan.sh                       # every scanner
+#   scripts/security-scan.sh secrets                # gitleaks over the working tree
+#   scripts/security-scan.sh secrets --history       # gitleaks over full git history
+#   scripts/security-scan.sh secrets --range A..B     # gitleaks over commits A..B
+#   scripts/security-scan.sh deps                    # trivy dependency CVEs (advisory)
 set -uo pipefail
 
 # Single source of truth for the pinned versions. Bump here only.
@@ -59,15 +60,27 @@ have_docker() {
 }
 
 # ── gitleaks ─────────────────────────────────────────────────────────────────
-# Default scans the working tree. --history walks every commit, which is what you
-# want before making the repository public; it is too slow for a per-PR gate.
+# Three modes:
+#   dir            working tree only. Fast, but a secret added in one commit and
+#                   removed in a later one is invisible — the working tree never
+#                   carried it.
+#   --history       walks every commit reachable from HEAD. Catches everything,
+#                   but is too slow to be the per-PR gate on a repository this
+#                   grows into.
+#   --range A..B    walks exactly the commits a pull request introduces. This is
+#                   the per-PR gate: it catches an add-then-remove within the same
+#                   PR that `dir` would miss, without re-walking history `dir`
+#                   already covered on a prior run.
 scan_secrets() {
   have_docker || return 1
 
-  local mode="dir"
-  [ "${1:-}" = "--history" ] && mode="git"
+  local mode="dir" range=""
+  case "${1:-}" in
+    --history) mode="git" ;;
+    --range)   mode="git"; range="${2:?--range requires A..B}" ;;
+  esac
 
-  echo "==> gitleaks (${mode})"
+  echo "==> gitleaks (${mode}${range:+, ${range}})"
 
   # The repo is mounted read-only on purpose, so SARIF cannot be written into it.
   # Bind the output directory separately, read-write, at a path of its own.
@@ -91,11 +104,12 @@ scan_secrets() {
     return
   fi
 
-  # History mode needs the object database, and in a git worktree .git is a file
-  # holding an absolute path to the main repository's gitdir. Bind-mounting the
-  # checkout alone leaves that path dangling inside the container, and gitleaks
-  # then reports "no leaks found in partial scan" — a scan that examined nothing.
-  # Mount both at their real host paths so the absolute reference resolves.
+  # git mode (--history or --range) needs the object database, and in a git
+  # worktree .git is a file holding an absolute path to the main repository's
+  # gitdir. Bind-mounting the checkout alone leaves that path dangling inside
+  # the container, and gitleaks then reports "no leaks found in partial scan" —
+  # a scan that examined nothing. Mount both at their real host paths so the
+  # absolute reference resolves.
   local git_common mounts=()
   git_common="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
   mounts+=(-v "${repo_root}:${repo_root}:ro")
@@ -104,6 +118,9 @@ scan_secrets() {
     *) mounts+=(-v "${git_common}:${git_common}:ro") ;;
   esac
 
+  local log_opts_args=()
+  [ -n "${range}" ] && log_opts_args=(--log-opts="${range}")
+
   docker run --rm \
     ${mounts[@]+"${mounts[@]}"} \
     ${sarif_mount[@]+"${sarif_mount[@]}"} \
@@ -111,6 +128,7 @@ scan_secrets() {
     "${GITLEAKS_IMAGE}" \
     git "${repo_root}" \
     --config "${repo_root}/.gitleaks.toml" \
+    ${log_opts_args[@]+"${log_opts_args[@]}"} \
     ${sarif_args[@]+"${sarif_args[@]}"} \
     --redact \
     --no-banner \
@@ -154,7 +172,7 @@ case "${1:-all}" in
     exit "${rc}"
     ;;
   *)
-    echo "usage: $0 [secrets [--history]|deps|all]" >&2
+    echo "usage: $0 [secrets [--history|--range A..B]|deps|all]" >&2
     exit 2
     ;;
 esac

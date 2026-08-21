@@ -43,28 +43,46 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Always full history: pull_request and push both need to walk a commit
+      # range (below), and this repository is small enough (a few hundred KB,
+      # well under a second to scan) that fetch-depth: 0 costs nothing on every
+      # trigger rather than only on the schedule.
       - uses: actions/checkout@v4
         with:
-          # A full-history scan needs the full history. On pull requests the
-          # shallow default is enough, since only the working tree is scanned.
-          #
-          # Both branches are quoted because GitHub expressions treat the number
-          # 0 as falsy: an unquoted `... && 0 || 1` yields 1 on the scheduled run
-          # too, which would silently reduce the history scan to a shallow clone.
-          fetch-depth: ${{ github.event_name == 'schedule' && '0' || '1' }}
+          fetch-depth: 0
 
-      # Pull requests scan the working tree, which is what a merge would
-      # introduce. The weekly run walks every commit, catching anything that
-      # entered the repository before this gate existed.
+      # pull_request scans exactly the commits the PR introduces (base..head).
+      # A `dir` scan of the final working tree would miss a secret added in one
+      # commit and removed in a later one within the same PR — the working tree
+      # never carries it, but a history-preserving merge still makes that commit
+      # reachable from main. push scans the commits a direct push to main added
+      # (before..after), for the same reason. The weekly schedule walks every
+      # commit reachable from HEAD, catching anything that entered the
+      # repository before this gate existed.
       - name: Run gitleaks
         env:
           SARIF_DIR: sarif
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            bash scripts/security-scan.sh secrets --history
-          else
-            bash scripts/security-scan.sh secrets
-          fi
+          case "${{ github.event_name }}" in
+            schedule)
+              bash scripts/security-scan.sh secrets --history
+              ;;
+            pull_request)
+              bash scripts/security-scan.sh secrets --range \
+                "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+              ;;
+            push)
+              before="${{ github.event.before }}"
+              # A zero SHA means there is no prior commit to diff from — a new
+              # branch's first push, or history rewritten out from under this
+              # ref. Neither has a meaningful range, so fall back to scanning
+              # just the commit that was pushed.
+              if [ "${before}" = "0000000000000000000000000000000000000000" ]; then
+                before="${{ github.event.after }}^"
+              fi
+              bash scripts/security-scan.sh secrets --range "${before}..${{ github.event.after }}"
+              ;;
+          esac
       # if: always() — a blocking scan that fails must still publish what it
       # found, otherwise the findings that justify the failure never appear.
       #

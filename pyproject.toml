@@ -6,6 +6,8 @@ authors = [{ name = "Simone Carolini" }]
 maintainers = [{ name = "Simone Carolini" }]
 readme = "README.md"
 requires-python = ">= 3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     # Exact-pinned like every other dependency here, and for a stronger reason:
     # [tool.uv.sources] below redirects this to the in-tree workspace member for

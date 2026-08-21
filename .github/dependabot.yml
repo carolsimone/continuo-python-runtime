@@ -19,9 +19,6 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
     groups:
       python-minor-patch:
         applies-to: version-updates
@@ -39,11 +36,12 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
     groups:
       actions:
+        applies-to: version-updates
+        update-types: [minor, patch]
+      actions-security:
+        applies-to: security-updates
         patterns: ["*"]
     commit-message:
       prefix: chore(ci)
@@ -55,11 +53,12 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
     groups:
       docker:
+        applies-to: version-updates
+        update-types: [minor, patch]
+      docker-security:
+        applies-to: security-updates
         patterns: ["*"]
     commit-message:
       prefix: chore(deps)

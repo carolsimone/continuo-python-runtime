@@ -1,0 +1,64 @@
+# Dependabot keeps dependencies current so that known CVEs are fixed by an
+# upgrade before a scanner has to report them.
+#
+# Every ecosystem groups its patch and minor updates into a single pull request
+# per week to keep the noise down. Major updates stay ungrouped because they
+# carry breaking changes and need to be reviewed one at a time.
+version: 2
+
+updates:
+  # The uv workspace: this package (root), contract/, and the two adapters. All
+  # four share one lockfile, but Dependabot still needs one entry per pyproject.toml
+  # directory to see each package's own dependency declarations.
+  - package-ecosystem: uv
+    directories:
+      - /
+      - /contract
+      - /adapters/postgres
+      - /adapters/trino
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+      python-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: chore(deps)
+
+  # Actions are a supply-chain surface in their own right: a compromised or
+  # abandoned action runs with access to the workflow token.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        applies-to: version-updates
+        update-types: [minor, patch]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: chore(ci)
+
+  # Dockerfile.postgres and Dockerfile.trino, the published engine images. Most
+  # base-image CVEs are fixed by moving to a newer tag.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      docker:
+        applies-to: version-updates
+        update-types: [minor, patch]
+      docker-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    commit-message:
+      prefix: chore(deps)

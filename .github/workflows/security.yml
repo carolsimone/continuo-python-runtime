@@ -1,0 +1,130 @@
+name: security
+
+# Deliberately separate from ci.yml so a scanner failure or the weekly schedule
+# never blocks or piggybacks on the test/lint pipeline.
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  schedule:
+    # Weekly, Monday 04:00 UTC. The scheduled run is the point of this workflow:
+    # most vulnerabilities are disclosed after the code that depends on them was
+    # last touched, so a pull-request-only trigger never sees them.
+    - cron: "0 4 * * 1"
+
+concurrency:
+  # Keyed by event as well as ref. A schedule event and a push to main both carry
+  # github.ref == refs/heads/main, so keying on ref alone would put them in one
+  # group and let a routine merge, via cancel-in-progress, abort the weekly
+  # full-history secret scan — the run this workflow exists for. Including
+  # github.event_name isolates the scheduled run while still superseding stale
+  # per-PR runs (each PR has a distinct ref).
+  group: security-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+# Each job uploads its findings as SARIF, so they land in Security > Code scanning
+# instead of scrolling away in a job log. security-events: write is what permits
+# that upload; contents: read has to be restated because a permissions block
+# replaces the default set rather than adding to it.
+#
+# Note the Security tab will show findings the blocking gate deliberately
+# ignores: the Trivy dependency scan is advisory by design. A green pipeline
+# with open alerts is the intended state, not a contradiction.
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  secrets:
+    name: Secret scan (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Always full history: pull_request and push both need to walk a commit
+      # range (below), and this repository is small enough (a few hundred KB,
+      # well under a second to scan) that fetch-depth: 0 costs nothing on every
+      # trigger rather than only on the schedule.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # pull_request scans exactly the commits the PR introduces (base..head).
+      # A `dir` scan of the final working tree would miss a secret added in one
+      # commit and removed in a later one within the same PR — the working tree
+      # never carries it, but a history-preserving merge still makes that commit
+      # reachable from main. push scans the commits a direct push to main added
+      # (before..after), for the same reason. The weekly schedule walks every
+      # commit reachable from HEAD, catching anything that entered the
+      # repository before this gate existed.
+      - name: Run gitleaks
+        env:
+          SARIF_DIR: sarif
+        run: |
+          case "${{ github.event_name }}" in
+            schedule)
+              bash scripts/security-scan.sh secrets --history
+              ;;
+            pull_request)
+              bash scripts/security-scan.sh secrets --range \
+                "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+              ;;
+            push)
+              before="${{ github.event.before }}"
+              # A zero SHA means there is no prior commit to diff from — a new
+              # branch's first push, or history rewritten out from under this
+              # ref. Neither has a meaningful range, so fall back to scanning
+              # just the commit that was pushed.
+              if [ "${before}" = "0000000000000000000000000000000000000000" ]; then
+                before="${{ github.event.after }}^"
+              fi
+              bash scripts/security-scan.sh secrets --range "${before}..${{ github.event.after }}"
+              ;;
+          esac
+      # if: always() — a blocking scan that fails must still publish what it
+      # found, otherwise the findings that justify the failure never appear.
+      #
+      # continue-on-error: true — code scanning needs GitHub Advanced Security,
+      # free on a public repo but not on a private one. This repo is private
+      # until the open-sourcing work lands, so the upload 403s
+      # ("Resource not accessible by integration") on every run until then.
+      # The upload is reporting, not the gate; gitleaks failing the step above
+      # is what actually blocks a merge, and must keep doing so independent of
+      # whether the upload succeeds.
+      - name: Upload SARIF to code scanning
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: sarif/
+          category: gitleaks
+
+  dependencies:
+    name: Dependency CVEs (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Advisory: reports HIGH/CRITICAL and always exits 0. Base-image and
+      # transitive CVEs are often unfixable upstream, so gating on them would
+      # block every merge behind an ignore-list edit. Dependabot is what actually
+      # resolves these; this job exists to make them visible.
+      - name: Run Trivy dependency scan
+        env:
+          SARIF_DIR: sarif
+        run: bash scripts/security-scan.sh deps
+      # if: always() — a blocking scan that fails must still publish what it
+      # found, otherwise the findings that justify the failure never appear.
+      #
+      # continue-on-error: true — see the identical note on the secrets job;
+      # same GHAS-requires-public-repo cause, same fix.
+      - name: Upload SARIF to code scanning
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: sarif/
+          category: trivy-fs

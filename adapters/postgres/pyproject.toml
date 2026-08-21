@@ -28,7 +28,7 @@ postgres = "continuo_python_runtime_postgres.adapter:PostgresAdapter"
 [dependency-groups]
 dev = [
     "ruff==0.3.0",
-    "mypy==1.18.2",
+    "mypy==2.3.1",
 ]
 test = [
     "pytest==9.0.3",

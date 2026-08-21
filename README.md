@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/carolsimone/continuo-python-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/carolsimone/continuo-python-runtime/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/carolsimone/continuo-python-runtime?label=release)](https://github.com/carolsimone/continuo-python-runtime/releases)
 
 Runtime harness, contract tooling, and CI lint for Continuo python nodes.
 This repo is what domain data teams (marketing, finance, …) template from to

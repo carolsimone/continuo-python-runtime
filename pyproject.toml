@@ -1,6 +1,6 @@
 [project]
 name = "continuo-python-runtime"
-version = "0.3.0"
+version = "0.3.1"
 description = "Runtime harness, contract tooling, and CI lint for Continuo python nodes."
 authors = [{ name = "Simone Carolini" }]
 maintainers = [{ name = "Simone Carolini" }]

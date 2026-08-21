@@ -1,6 +1,8 @@
 """tests/test_csv_loader.py — unit tier: the loader through a local-file test
 double of the PORT (the port is ours; substituting a test implementation of
 our own abstraction is not stubbing an external service)."""
+from decimal import Decimal
+
 import pyarrow as pa
 import pytest
 
@@ -79,3 +81,36 @@ def test_produce_csv_no_warning_when_all_columns_declared(caplog):
             b"order_id,amount\n1,10.5\n2,20.0\n"))
 
     assert "csv_header_extra_columns" not in caplog.text
+
+
+def test_produce_csv_preserves_lexical_value_for_declared_varchar_column():
+    """A declared VARCHAR column must be read as text -- pyarrow's default
+    type inference on `00123` would infer int64, and conform() would then
+    write back "123", silently dropping the leading zeros. Passing the
+    declared output_columns as read_csv's convert schema (spec: 'output_columns
+    names/types as the convert schema') prevents that: the column is parsed as
+    a string in the first place, so no lossy int64 round-trip ever happens."""
+    node = _csv_node(output_columns=(
+        Column(name="order_id", type="VARCHAR(20)", nullable=False),
+        Column(name="amount", type="DOUBLE PRECISION"),
+    ))
+    table = produce_csv(node, reader=LocalFileReader(
+        b"order_id,amount\n00123,10.5\n00456,20.0\n"))
+
+    assert table.column("order_id").to_pylist() == ["00123", "00456"]
+
+
+def test_produce_csv_declared_decimal_column_not_corrupted_by_float_inference():
+    """A declared NUMERIC column must not be inferred as float64 first --
+    conform()'s own lossy-cast guard rejects float->decimal casts outright,
+    so without an explicit convert schema this would fail conform() even for
+    a value that is a perfectly valid decimal."""
+    node = _csv_node(output_columns=(
+        Column(name="order_id", type="INTEGER", nullable=False),
+        Column(name="amount", type="NUMERIC(10,2)"),
+    ))
+    table = produce_csv(node, reader=LocalFileReader(
+        b"order_id,amount\n1,10.50\n2,20.00\n"))
+
+    assert pa.types.is_decimal(table.schema.field("amount").type)
+    assert table.column("amount").to_pylist() == [Decimal("10.50"), Decimal("20.00")]

@@ -1,5 +1,5 @@
 # Tags are v<version>; one image per engine (continuo-python-runtime-postgres / -trino).
-FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.3.1
+FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.4.0
 COPY contracts/ /app/contracts/
 COPY scripts/ /app/scripts/
 # COPY every OTHER directory your scripts import from, too. CI folds a script's

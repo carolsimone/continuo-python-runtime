@@ -242,9 +242,9 @@ A domain repo picks its warehouse engine by which base image it builds
 `FROM`:
 
 ```dockerfile
-FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.3.1
+FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.4.0
 # or
-FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.3.1
+FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.4.0
 ```
 
 The engine is part of the image **name**; the tag is the bare version, so

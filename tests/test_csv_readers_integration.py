@@ -56,6 +56,20 @@ OVERFLOW_BODY = b"z" * (MAX_HEADER_BYTES + 100_000)
 # overflow (FIX 1).
 NO_NEWLINE_MID_BODY = b"a" * 100_000
 
+# A header line that DOES terminate in a newline, but only after exceeding
+# MAX_HEADER_BYTES. Unlike OVERFLOW_BODY (no newline anywhere), this exercises
+# the ordering bug where a newline arriving inside an already-oversized buffer
+# was returned as a successful (if oversized) header instead of being
+# rejected: the length check must run on the resolved line itself, not only
+# on an intermediate buffer length reached before any newline was seen.
+OVERSIZED_WITH_NEWLINE_LEN = MAX_HEADER_BYTES + 50_000
+OVERSIZED_WITH_NEWLINE_BODY, _ = _long_header_body(OVERSIZED_WITH_NEWLINE_LEN)
+
+# A UTF-8 byte-order mark prefixed onto an otherwise-ordinary header: the
+# reader must strip it so the first declared column name still matches.
+BOM_CSV_BODY = b"\xef\xbb\xbf" + CSV_BODY
+BOM_HEADER_STR = "order_id,amount,extra"
+
 
 @pytest.fixture(scope="session")
 def minio(minio_container):  # minio_container: session fixture starting minio via docker
@@ -68,6 +82,9 @@ def minio(minio_container):  # minio_container: session fixture starting minio v
     client.put_object(Bucket="drops", Key="orders.csv", Body=CSV_BODY)
     client.put_object(Bucket="drops", Key="long_header.csv", Body=LONG_HEADER_BODY)
     client.put_object(Bucket="drops", Key="overflow.csv", Body=OVERFLOW_BODY)
+    client.put_object(
+        Bucket="drops", Key="oversized_with_newline.csv", Body=OVERSIZED_WITH_NEWLINE_BODY)
+    client.put_object(Bucket="drops", Key="bom.csv", Body=BOM_CSV_BODY)
     return endpoint
 
 
@@ -103,6 +120,23 @@ def test_s3_fetch_header_line_overflow_raises(minio, monkeypatch):
         S3CsvSourceReader().fetch_header_line(parse_csv_uri("s3://drops/overflow.csv"))
 
 
+def test_s3_fetch_header_line_oversized_line_with_late_newline_raises(minio, monkeypatch):
+    """A newline that only shows up after the accumulated buffer already
+    exceeds MAX_HEADER_BYTES must still raise -- not be returned as a
+    successful (oversized) header line."""
+    monkeypatch.setenv("S3_ENDPOINT_URL", minio)
+    with pytest.raises(ValueError, match="exceeds"):
+        S3CsvSourceReader().fetch_header_line(
+            parse_csv_uri("s3://drops/oversized_with_newline.csv"))
+
+
+def test_s3_fetch_header_line_strips_utf8_bom(minio, monkeypatch):
+    monkeypatch.setenv("S3_ENDPOINT_URL", minio)
+    header = S3CsvSourceReader().fetch_header_line(parse_csv_uri("s3://drops/bom.csv"))
+    assert header == BOM_HEADER_STR
+    assert header[0] != "﻿"
+
+
 class _RangeHandler(http.server.BaseHTTPRequestHandler):
     honour_range = True
 
@@ -111,6 +145,8 @@ class _RangeHandler(http.server.BaseHTTPRequestHandler):
         "/long_header.csv": LONG_HEADER_BODY,
         "/overflow.csv": OVERFLOW_BODY,
         "/no_newline.csv": NO_NEWLINE_MID_BODY,
+        "/oversized_with_newline.csv": OVERSIZED_WITH_NEWLINE_BODY,
+        "/bom.csv": BOM_CSV_BODY,
     }
 
     def do_GET(self):
@@ -183,6 +219,81 @@ def test_https_fetch_header_line_no_newline_mid_size_is_not_a_false_overflow(htt
     uri = CsvUri(scheme="https", raw=f"http://{http_csv_server}/no_newline.csv")
     header = HttpsCsvSourceReader().fetch_header_line(uri)
     assert header == NO_NEWLINE_MID_BODY.decode("utf-8")
+
+
+def test_https_fetch_header_line_oversized_line_with_late_newline_raises(http_csv_server):
+    """A newline that only shows up after the accumulated buffer already
+    exceeds MAX_HEADER_BYTES must still raise -- not be returned as a
+    successful (oversized) header line. Exercises both the range-honoured
+    (multi-probe accumulation) and range-ignored (single bounded read) paths."""
+    uri = CsvUri(scheme="https", raw=f"http://{http_csv_server}/oversized_with_newline.csv")
+    with pytest.raises(ValueError, match="exceeds"):
+        HttpsCsvSourceReader().fetch_header_line(uri)
+
+
+def test_https_fetch_header_line_strips_utf8_bom(http_csv_server):
+    uri = CsvUri(scheme="https", raw=f"http://{http_csv_server}/bom.csv")
+    header = HttpsCsvSourceReader().fetch_header_line(uri)
+    assert header == BOM_HEADER_STR
+    assert header[0] != "﻿"
+
+
+class _DowngradeTargetHandler(http.server.BaseHTTPRequestHandler):
+    """A REACHABLE plain-HTTP server standing in for a downgrade target. Using
+    a reachable target (rather than a nonexistent host) makes the redirect
+    tests below meaningful: the vulnerable (pre-fix) code doesn't merely fail
+    to connect, it actually follows the redirect and successfully returns
+    this server's content -- proving the redirect really would have been
+    followed, not just that *some* exception happened to occur."""
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(CSV_BODY)))
+        self.end_headers()
+        self.wfile.write(CSV_BODY)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def downgrade_redirect_uri():
+    """An https:// (test-convention) source whose every request 302s to a
+    second, reachable, genuinely plain-HTTP server."""
+    with socketserver.TCPServer(("127.0.0.1", 0), _DowngradeTargetHandler) as target:
+        tt = threading.Thread(target=target.serve_forever, daemon=True)
+        tt.start()
+        target_port = target.server_address[1]
+
+        redirector = type("Redirector", (http.server.BaseHTTPRequestHandler,), {
+            "do_GET": lambda self: (
+                self.send_response(302),
+                self.send_header("Location", f"http://127.0.0.1:{target_port}/orders.csv"),
+                self.end_headers(),
+            ),
+            "log_message": lambda self, *a: None,
+        })
+        with socketserver.TCPServer(("127.0.0.1", 0), redirector) as src:
+            ts = threading.Thread(target=src.serve_forever, daemon=True)
+            ts.start()
+            yield f"http://127.0.0.1:{src.server_address[1]}/redirect.csv"
+            src.shutdown()
+        target.shutdown()
+
+
+def test_https_fetch_header_line_rejects_redirect_to_non_https(downgrade_redirect_uri):
+    """An https:// source that redirects to a REACHABLE non-https target must
+    not be followed -- the pre-fix code would have silently downgraded to
+    plaintext and returned the target's header line instead of raising."""
+    uri = CsvUri(scheme="https", raw=downgrade_redirect_uri)
+    with pytest.raises(Exception):
+        HttpsCsvSourceReader().fetch_header_line(uri)
+
+
+def test_https_fetch_rejects_redirect_to_non_https(downgrade_redirect_uri, tmp_path):
+    uri = CsvUri(scheme="https", raw=downgrade_redirect_uri)
+    with pytest.raises(Exception):
+        HttpsCsvSourceReader().fetch(uri, tmp_path / "o.csv")
 
 
 def test_reader_for_dispatches_on_scheme():

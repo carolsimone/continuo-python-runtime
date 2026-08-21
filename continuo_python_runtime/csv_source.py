@@ -22,9 +22,14 @@ class CsvUri:
 def parse_csv_uri(uri: str) -> CsvUri:
     """Parse a csv source URI. Accepts exactly s3://bucket/key and https://...
 
-    Raises ValueError for anything else (http:// included) so contract
-    validation fails at lint/parse time, never at run time.
+    Raises ValueError for anything else (http:// included), and for a
+    non-string ``uri`` (e.g. a contract's `reads: {csv: 123}`) rather than
+    letting `.startswith()` raise a bare AttributeError/TypeError -- callers
+    (the contract loader) catch ValueError to turn this into a ContractError,
+    so a malformed uri fails at lint/parse time, never at run time.
     """
+    if not isinstance(uri, str):
+        raise ValueError(f"csv uri must be a string, got {type(uri).__name__}: {uri!r}")
     if uri.startswith("s3://"):
         bucket, _, key = uri[len("s3://"):].partition("/")
         if not bucket or not key:
@@ -38,6 +43,28 @@ def parse_csv_uri(uri: str) -> CsvUri:
     raise ValueError(
         f"invalid csv uri {uri!r}: must be s3://bucket/key or https://..."
     )
+
+
+def extract_header_line(data: bytes, source_desc: str) -> str:
+    """Return the first line of ``data`` (no trailing newline), decoded as
+    utf-8-sig so a UTF-8 byte-order mark on the CSV's first byte does not end
+    up prepended to the first column name.
+
+    Shared by every :class:`CsvSourceReader` adapter's ``fetch_header_line``:
+    the check must run on the *resolved line itself* (the bytes up to, and
+    including the absence of, the first newline), not merely on an
+    intermediate buffer length -- a newline that only arrives after the
+    accumulated buffer has already grown past ``MAX_HEADER_BYTES`` must still
+    be rejected as oversized, not returned as a successful (if enormous)
+    header line.
+
+    Raises:
+        ValueError: If the line exceeds ``MAX_HEADER_BYTES``.
+    """
+    line = data.split(b"\n", 1)[0] if b"\n" in data else data
+    if len(line) > MAX_HEADER_BYTES:
+        raise ValueError(f"csv header line exceeds {MAX_HEADER_BYTES} bytes: {source_desc}")
+    return line.rstrip(b"\r").decode("utf-8-sig")
 
 
 def check_header(header_cols: list[str], declared_cols: list[str]) -> set[str]:

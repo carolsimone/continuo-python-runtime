@@ -8,6 +8,7 @@ from continuo_python_runtime.csv_source import (
     MAX_HEADER_BYTES,
     CsvSourceReader,
     CsvUri,
+    extract_header_line,
 )
 from continuo_python_runtime.validation.s3 import make_s3_client
 
@@ -38,9 +39,9 @@ class S3CsvSourceReader(CsvSourceReader):
                 raise
             buf += body
             if b"\n" in buf:
-                return buf.split(b"\n", 1)[0].rstrip(b"\r").decode("utf-8")
+                return extract_header_line(buf, uri.raw)
             if len(body) < HEADER_PROBE_BYTES:  # whole object read, no newline
-                return buf.rstrip(b"\r").decode("utf-8")
+                return buf.rstrip(b"\r").decode("utf-8-sig")
             if len(buf) > MAX_HEADER_BYTES:
                 raise ValueError(
                     f"csv header line exceeds {MAX_HEADER_BYTES} bytes: {uri.raw}")

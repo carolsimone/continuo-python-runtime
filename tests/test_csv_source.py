@@ -35,6 +35,16 @@ def test_parse_rejects_invalid(bad):
         parse_csv_uri(bad)
 
 
+@pytest.mark.parametrize("bad", [123, 1.5, None, True, [], {}, b"s3://drops/x.csv"])
+def test_parse_rejects_non_string(bad):
+    """A non-string uri (e.g. `reads: {csv: 123}`) must raise ValueError, not
+    AttributeError from a bare `.startswith()` call -- callers (the contract
+    loader) catch ValueError/TypeError to turn this into a ContractError, and
+    an uncaught AttributeError would crash validation instead."""
+    with pytest.raises(ValueError):
+        parse_csv_uri(bad)
+
+
 def test_check_header_presence_only_any_order():
     extras = check_header(["b", "a", "c"], ["a", "b"])
     assert extras == {"c"}

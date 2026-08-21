@@ -174,7 +174,7 @@ def parse_node(
         raise ContractError(f"{label}: unknown key(s) {sorted(unknown)}")
 
     kind = raw.get("kind", "python-model")
-    if kind not in KINDS:
+    if not isinstance(kind, str) or kind not in KINDS:
         raise ContractError(
             f"{label}: 'kind' must be one of {sorted(KINDS)}, got {kind!r}"
         )

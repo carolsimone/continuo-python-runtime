@@ -808,6 +808,31 @@ def test_main_build_from_columns_without_csv_source_unchanged(monkeypatch, capsy
     assert '"status":"success"' in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("bad", [0, False, [], {}], ids=["zero", "false", "list", "dict"])
+def test_main_build_from_columns_falsey_non_string_csv_source_exits_2(monkeypatch, capsys, bad):
+    """A csv_source key that IS present but falsey and non-string (0, false,
+    [], {}) must still be rejected as a type error: exit 2, never silently
+    treated as 'no csv_source' (which would skip the header check entirely
+    and let a malformed python-csv candidate pass promotion)."""
+    _set_common_env(monkeypatch)
+    monkeypatch.setenv("VALIDATION_OP", "build_from_columns")
+    monkeypatch.setenv("CANDIDATE_SPEC_URI", "s3://continuo/candidate-spec/rel-1/svc.orders.json")
+    fake = FakeWarehouseAdapter()
+    _install_fake_adapter(monkeypatch, fake)
+    spec = _spec()
+    spec["csv_source"] = bad
+    monkeypatch.setattr(runner, "load_candidate_spec", lambda: spec)
+
+    with pytest.raises(SystemExit) as exc:
+        runner.main()
+
+    assert exc.value.code == 2
+    assert fake.column_builds == []  # never reached the adapter
+    out = capsys.readouterr().out
+    assert '"status":"error"' in out
+    assert "csv_source" in out
+
+
 # --------------------------------------------------------------------------
 # main — sentinel-block invariant across every block-emitting exit path
 # --------------------------------------------------------------------------

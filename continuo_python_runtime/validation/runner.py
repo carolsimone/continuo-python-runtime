@@ -186,7 +186,11 @@ def main() -> None:
                 sys.exit(2)
             config = raw_config or {}
             csv_source = spec.get("csv_source", "")
-            if csv_source and not isinstance(csv_source, str):
+            if "csv_source" in spec and not isinstance(csv_source, str):
+                # Checked by presence, not truthiness: `csv_source: 0` / `false` /
+                # `[]` / `{}` are all non-string values a malformed spec could
+                # carry, and a truthiness guard would silently skip both this
+                # type check and the header check below for every one of them.
                 msg = f"candidate spec 'csv_source' must be a string, got {type(csv_source).__name__}"
                 logger.error("%s", msg)
                 print(result.result_block("error", msg, unique_id=unique_id), flush=True)

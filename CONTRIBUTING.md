@@ -39,7 +39,8 @@ repository; please do not add headers to new files.
 ## Development setup
 
 Prerequisites: Python 3.14+, [uv](https://docs.astral.sh/uv/), and Docker (only needed
-for the Postgres/Trino integration tests).
+for the Postgres/Trino integration tests and the csv-reader/validation-runner
+integration tests, which start a real minio backend via `docker run`).
 
 ```bash
 uv sync --all-packages --all-groups
@@ -58,14 +59,16 @@ uv run mypy continuo_python_runtime
 uv run mypy contract/continuo_engine_contract
 uv run --package continuo-python-runtime-postgres mypy adapters/postgres/continuo_python_runtime_postgres
 uv run --package continuo-python-runtime-trino mypy adapters/trino/continuo_python_runtime_trino
-uv run pytest --cov=continuo_python_runtime -m "not image" -v
+uv run pytest --cov=continuo_python_runtime -m "not image and not integration" -v
+uv run pytest tests/test_csv_readers_integration.py tests/test_validation_runner.py -m integration -v
 uv run pytest contract/tests -v
 uv run pytest adapters/postgres/tests adapters/trino/tests -m "not integration" -v
 ```
 
 These are exactly what `.github/workflows/ci.yml` runs. Integration tests against a real
-Postgres/Trino stack need Docker and are not required for most changes — see
-`.github/workflows/ci.yml` for how CI stands them up if you want to run them locally.
+Postgres/Trino stack, or against the csv-reader/validation-runner minio backend, need
+Docker and are not required for most changes — see `.github/workflows/ci.yml` for how CI
+stands them up if you want to run them locally.
 
 Also run the security scan before opening a pull request that touches dependencies or
 anything that could carry a credential:

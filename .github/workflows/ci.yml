@@ -24,9 +24,15 @@ jobs:
         run: uv run --package continuo-python-runtime-trino mypy adapters/trino/continuo_python_runtime_trino
       # `-m "not image"` deselects tests/test_image_smoke_validation.py, which
       # needs a built engine image and the env naming it. Those tests run in
-      # images.yml's smoke jobs, where an image actually exists.
+      # images.yml's smoke jobs, where an image actually exists. `and not
+      # integration` deselects the csv-reader/validation-runner tests that
+      # need a real minio backend (started via `docker run` by the
+      # `minio_container` fixture, not docker-compose) -- those run in the
+      # dedicated step below, on the same runner, where docker is available.
       - name: Tests (runtime)
-        run: uv run pytest --cov=continuo_python_runtime -m "not image" -v
+        run: uv run pytest --cov=continuo_python_runtime -m "not image and not integration" -v
+      - name: Tests (runtime, integration)
+        run: uv run pytest tests/test_csv_readers_integration.py tests/test_validation_runner.py -m integration -v
       - name: Tests (contract)
         run: uv run pytest contract/tests -v
       - name: Tests (adapter units)

@@ -1,4 +1,4 @@
-from continuo_python_runtime.contract.model import Column, Node
+from continuo_python_runtime.contract.model import KINDS, Column, Node
 
 
 def _node(**over):
@@ -29,3 +29,17 @@ def test_defaults_and_relation():
 def test_config_accepts_nested_mapping():
     n = _node(config={"indexes": [{"columns": ["id"], "unique": True}]})
     assert n.config == {"indexes": [{"columns": ["id"], "unique": True}]}
+
+
+def test_kind_defaults_to_python_model():
+    n = _node()
+    assert n.kind == "python-model"
+
+
+def test_kind_accepts_python_csv():
+    n = _node(kind="python-csv")
+    assert n.kind == "python-csv"
+
+
+def test_kinds_frozenset_contains_both_kinds():
+    assert KINDS == frozenset({"python-model", "python-csv"})

@@ -215,6 +215,10 @@ def minio_container():
         # credentials to boto3's own chain, so the chain needs something to
         # find. This is session-scoped (not monkeypatch, which is
         # function-scoped) -- set directly and restore on teardown.
+        # WARNING: any other test that runs while this fixture is active and
+        # makes a REAL (non-mocked, non-S3_ENDPOINT_URL-redirected) AWS call
+        # would authenticate with these fake minioadmin credentials, not the
+        # caller's real ones.
         prior_key = os.environ.get("AWS_ACCESS_KEY_ID")
         prior_secret = os.environ.get("AWS_SECRET_ACCESS_KEY")
         os.environ["AWS_ACCESS_KEY_ID"] = "minioadmin"

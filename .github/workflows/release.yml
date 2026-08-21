@@ -36,12 +36,11 @@ jobs:
     # condition) — no public Release for them.
     if: "!contains(github.ref_name, '-test')"
     runs-on: ubuntu-latest
-    # Generous relative to the two siblings' own timeouts (publish-pypi has
-    # none set; images.yml's build/smoke/publish jobs run unbounded too) —
-    # this job mostly just waits on them, so its ceiling has to clear
-    # whatever theirs turns out to be in practice, not just the polling math
-    # below.
-    timeout-minutes: 40
+    # Each wait_for call below can itself run up to 30 minutes (its own
+    # internal timeout), called twice, sequentially — so this job's ceiling
+    # has to clear 60 minutes on its own polling math alone, before even
+    # accounting for how long the siblings actually take to run.
+    timeout-minutes: 70
     permissions:
       contents: write # gh release create/edit
       actions: read # poll sibling workflow runs
@@ -60,8 +59,13 @@ jobs:
               # event=push, not just head_sha: images.yml also triggers on
               # pull_request, and a coincidentally-identical head_sha between
               # an open PR and this tag would otherwise pick up the wrong run.
-              conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_file}/runs" \
-                -f head_sha="${SHA}" -f event=push \
+              # Query params go in the URL, not via -f: gh api switches a
+              # request to POST the moment any -f/-F flag is present, and this
+              # listing endpoint only accepts GET — it 404s on POST, which
+              # under `set -e` would abort this script on the very first poll,
+              # every time. Verified against this repo's real API: -f flags
+              # 404 here, the URL query string form returns real run data.
+              conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_file}/runs?head_sha=${SHA}&event=push" \
                 --jq '.workflow_runs[0].conclusion // "pending"')"
               case "${conclusion}" in
                 success)

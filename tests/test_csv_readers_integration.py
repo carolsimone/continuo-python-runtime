@@ -48,6 +48,14 @@ LONG_HEADER_BODY, LONG_HEADER_STR = _long_header_body(LONG_HEADER_LEN)
 # or return a truncated line.
 OVERFLOW_BODY = b"z" * (MAX_HEADER_BYTES + 100_000)
 
+# No newline anywhere, sized strictly between HEADER_PROBE_BYTES and
+# MAX_HEADER_BYTES. A server that ignores Range and re-serves this whole
+# body on every retry must recognize its first response as final (via the
+# response status) rather than re-appending it pass after pass, which would
+# otherwise double the buffer past MAX_HEADER_BYTES and raise a false
+# overflow (FIX 1).
+NO_NEWLINE_MID_BODY = b"a" * 100_000
+
 
 @pytest.fixture(scope="session")
 def minio(minio_container):  # minio_container: session fixture starting minio via docker
@@ -102,6 +110,7 @@ class _RangeHandler(http.server.BaseHTTPRequestHandler):
         "/orders.csv": CSV_BODY,
         "/long_header.csv": LONG_HEADER_BODY,
         "/overflow.csv": OVERFLOW_BODY,
+        "/no_newline.csv": NO_NEWLINE_MID_BODY,
     }
 
     def do_GET(self):
@@ -163,6 +172,17 @@ def test_https_fetch_header_line_overflow_raises(http_csv_server):
     uri = CsvUri(scheme="https", raw=f"http://{http_csv_server}/overflow.csv")
     with pytest.raises(Exception):
         HttpsCsvSourceReader().fetch_header_line(uri)
+
+
+def test_https_fetch_header_line_no_newline_mid_size_is_not_a_false_overflow(http_csv_server):
+    """A no-newline body sized between HEADER_PROBE_BYTES and MAX_HEADER_BYTES
+    must come back as the header line verbatim, on both a Range-honouring
+    server (multi-probe extend, whole object read on the short final probe)
+    and a Range-ignoring one (FIX 1: the 200 response is terminal on the
+    first pass, never re-appended)."""
+    uri = CsvUri(scheme="https", raw=f"http://{http_csv_server}/no_newline.csv")
+    header = HttpsCsvSourceReader().fetch_header_line(uri)
+    assert header == NO_NEWLINE_MID_BODY.decode("utf-8")
 
 
 def test_reader_for_dispatches_on_scheme():

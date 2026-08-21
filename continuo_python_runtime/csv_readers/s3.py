@@ -1,6 +1,8 @@
 """continuo_python_runtime/csv_readers/s3.py"""
 from pathlib import Path
 
+from botocore.exceptions import ClientError  # type: ignore[import-untyped]
+
 from continuo_python_runtime.csv_source import (
     HEADER_PROBE_BYTES,
     MAX_HEADER_BYTES,
@@ -21,9 +23,19 @@ class S3CsvSourceReader(CsvSourceReader):
         buf = b""
         while True:
             end = start + HEADER_PROBE_BYTES - 1
-            body = client.get_object(
-                Bucket=uri.bucket, Key=uri.key, Range=f"bytes={start}-{end}"
-            )["Body"].read()
+            try:
+                body = client.get_object(
+                    Bucket=uri.bucket, Key=uri.key, Range=f"bytes={start}-{end}"
+                )["Body"].read()
+            except ClientError as exc:
+                if start == 0 and exc.response.get("Error", {}).get("Code") == "InvalidRange":
+                    # A Range request on byte 0 is unsatisfiable only when the
+                    # object itself is 0 bytes long: treat a 0-byte csv source
+                    # as an empty header line rather than a hard failure --
+                    # the caller (validation/runner.py) raises a clear error
+                    # for an empty header line.
+                    return ""
+                raise
             buf += body
             if b"\n" in buf:
                 return buf.split(b"\n", 1)[0].rstrip(b"\r").decode("utf-8")

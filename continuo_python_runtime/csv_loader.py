@@ -35,6 +35,18 @@ def produce_csv(node: Node, reader: CsvSourceReader | None = None) -> "pyarrow.T
         raise
     except Exception as exc:
         raise LoadError(f"csv fetch failed for {node.relation}: {exc}") from exc
+    declared = {col.name for col in node.output_columns}
+    extras = set(table.column_names) - declared
+    if extras:
+        # Spec parity with the validation runner's csv_source header check
+        # (continuo_python_runtime/validation/runner.py): extra_columns: drop
+        # silently discards these at conform() time, so this structured
+        # warning is the only place the RUN path surfaces which columns were
+        # dropped.
+        logger.warning(
+            "csv_header_extra_columns node=%s columns=%s — columns present in the "
+            "csv but not declared in output_columns; they will not be loaded",
+            node.relation, sorted(extras))
     logger.info("csv source %s: %d rows, columns=%s",
                 uri.raw, table.num_rows, table.column_names)
     return table

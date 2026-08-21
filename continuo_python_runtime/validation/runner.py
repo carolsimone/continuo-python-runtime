@@ -239,6 +239,11 @@ def main() -> None:
                 if csv_source:
                     csv_uri = parse_csv_uri(csv_source)
                     header_line = reader_for(csv_uri).fetch_header_line(csv_uri)
+                    if not header_line:
+                        raise ValueError(
+                            "csv source has no header line (empty or unreadable): "
+                            f"{csv_source}"
+                        )
                     declared = [c["name"] for c in spec["output_columns"]]
                     extras = check_header(next(csv.reader([header_line])), declared)
                     if extras:

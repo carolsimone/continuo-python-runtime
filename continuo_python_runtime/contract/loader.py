@@ -226,8 +226,7 @@ def parse_node(
     if kind == "python-csv":
         if not isinstance(reads, dict) or set(reads) != {"csv"}:
             raise ContractError(
-                f"{label}: a python-csv node's 'reads' must be exactly "
-                "{csv: <uri>}"
+                f"{label}: a python-csv node's 'reads' must be exactly {{csv: <uri>}}"
             )
         try:
             parse_csv_uri(reads["csv"])

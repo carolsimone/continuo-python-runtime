@@ -661,13 +661,13 @@ CSV_HEADER_MISSING_COLUMN_BODY = b"order_id,amount\n1,10.5\n2,20.0\n"
 def csv_source_bucket(minio_container):
     """Real minio-backed csv fixtures for the csv_source header-check tests.
 
-    Uploads two objects into a bucket dedicated to this module (kept separate
+    Uploads objects into a bucket dedicated to this module (kept separate
     from test_csv_readers_integration.py's own ``drops`` bucket so the two
     modules' session-scoped setup never race each other): a csv whose header
-    has an extra undeclared column, and one missing a declared column.
-    ``nope.csv`` is deliberately never uploaded, so a test can point
-    csv_source at it to exercise the unreachable-source path against the
-    real minio backend.
+    has an extra undeclared column, one missing a declared column, and a
+    0-byte object (FIX 6 — empty/no-header source). ``nope.csv`` is
+    deliberately never uploaded, so a test can point csv_source at it to
+    exercise the unreachable-source path against the real minio backend.
     """
     endpoint, access, secret = minio_container
     client = boto3.client(
@@ -680,6 +680,7 @@ def csv_source_bucket(minio_container):
         Bucket="csv-validation", Key="orders_missing_col.csv",
         Body=CSV_HEADER_MISSING_COLUMN_BODY,
     )
+    client.put_object(Bucket="csv-validation", Key="empty.csv", Body=b"")
     return endpoint
 
 
@@ -761,6 +762,33 @@ def test_main_build_from_columns_unreachable_csv_fails(monkeypatch, capsys, csv_
     assert fake.column_builds == []
     out = capsys.readouterr().out
     assert '"status":"error"' in out
+
+
+@pytest.mark.integration
+def test_main_build_from_columns_empty_csv_source_gives_legible_error(
+    monkeypatch, capsys, csv_source_bucket
+):
+    """A 0-byte csv_source (fetch_header_line returns "") must not surface as
+    an opaque StopIteration from csv.reader: exit 1, error block names the
+    empty/no-header source (FIX 6)."""
+    _set_common_env(monkeypatch)
+    monkeypatch.setenv("VALIDATION_OP", "build_from_columns")
+    monkeypatch.setenv("S3_ENDPOINT_URL", csv_source_bucket)
+    fake = FakeWarehouseAdapter()
+    _install_fake_adapter(monkeypatch, fake)
+    spec = _spec()
+    spec["csv_source"] = "s3://csv-validation/empty.csv"
+    monkeypatch.setattr(runner, "load_candidate_spec", lambda: spec)
+
+    with pytest.raises(SystemExit) as exc:
+        runner.main()
+
+    assert exc.value.code == 1
+    assert fake.column_builds == []  # header check blocks the build
+    out = capsys.readouterr().out
+    assert '"status":"error"' in out
+    assert "no header line" in out
+    assert "s3://csv-validation/empty.csv" in out
 
 
 def test_main_build_from_columns_without_csv_source_unchanged(monkeypatch, capsys):
@@ -912,6 +940,17 @@ def _setup_build_from_columns_non_object_config(monkeypatch):
     monkeypatch.setattr(runner, "load_candidate_spec", lambda: _spec(config=["indexes"]))
 
 
+def _setup_build_from_columns_non_string_csv_source(monkeypatch):
+    """Arrange a build_from_columns run whose spec csv_source is not a string (FIX 3)."""
+    _set_common_env(monkeypatch)
+    monkeypatch.setenv("VALIDATION_OP", "build_from_columns")
+    monkeypatch.setenv("CANDIDATE_SPEC_URI", "s3://continuo/candidate-spec/rel-1/svc.orders.json")
+    _install_fake_adapter(monkeypatch, FakeWarehouseAdapter())
+    spec = _spec()
+    spec["csv_source"] = 123
+    monkeypatch.setattr(runner, "load_candidate_spec", lambda: spec)
+
+
 def _setup_build_from_columns_invalid_json(monkeypatch):
     """Arrange a build_from_columns run whose spec body is not valid JSON."""
     _set_common_env(monkeypatch)
@@ -957,6 +996,11 @@ _SENTINEL_SCENARIOS = [
     ("build_from_columns_missing_spec_uri", _setup_build_from_columns_missing_spec_uri, 2),
     ("build_from_columns_empty_output_columns", _setup_build_from_columns_empty_output_columns, 2),
     ("build_from_columns_non_object_config", _setup_build_from_columns_non_object_config, 2),
+    (
+        "build_from_columns_non_string_csv_source",
+        _setup_build_from_columns_non_string_csv_source,
+        2,
+    ),
     ("build_from_columns_invalid_json", _setup_build_from_columns_invalid_json, 2),
     (
         "build_from_columns_non_object_json_list",
@@ -986,13 +1030,14 @@ def test_main_emits_exactly_one_sentinel_block_as_last_stdout_line(monkeypatch, 
 
     The contract (see ``result.py``) is: exactly ONE sentinel-framed block, as the
     terminal non-empty stdout line, on every outcome that emits one. Exercises all
-    twenty block-emitting paths through ``main()`` — success, ensure_schema,
+    twenty-one block-emitting paths through ``main()`` — success, ensure_schema,
     drop_schema, empty candidate SQL, S3-fetch error, unknown VALIDATION_OP, adapter
     discovery failure, missing required adapter env, missing DBT_TARGET_SCHEMA,
-    missing PROD_SCHEMA, and the ten build_from_columns paths (success, a failing
+    missing PROD_SCHEMA, and the eleven build_from_columns paths (success, a failing
     bind check, missing CANDIDATE_SPEC_URI, empty output_columns, a non-object config,
-    invalid spec JSON, and spec JSON that parses to a list/null/int/str instead of an
-    object) — each in its own isolated monkeypatch context so scenarios cannot leak
+    a non-string csv_source, invalid spec JSON, and spec JSON that parses to a
+    list/null/int/str instead of an object) — each in its own isolated monkeypatch
+    context so scenarios cannot leak
     patches into one another.
     """
     for name, setup, expected_exit in _SENTINEL_SCENARIOS:

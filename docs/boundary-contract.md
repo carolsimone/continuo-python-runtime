@@ -22,13 +22,36 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
 
 - Schema per §3: `contract_version: 1`, `service`, `nodes: [...]` — every
   node's wire entry carries `schema`, `table`, `owner`, `schedule`,
-  `criticality`, `script`, `reads`, `output_columns`, `description`,
+  `criticality`, `kind`, `script`, `reads`, `output_columns`, `description`,
   `extra_columns`, the four hash fields (`source_hash`, `shared_code_hash`,
   `config_hash`, `content_hash`), and `config` (physical layout — see
   below), which is present on every wire entry, defaulting to `{}` when
   the author's contract file didn't declare one. "Optional" describes the
   contract *file* an author writes, not the merged wire artifact, where
   every field above is always present.
+- **`kind`** is additive: it defaults to `python-model` (a script-backed
+  node, everything described above and in §13.4). `python-csv` is the one
+  other value — a **contract-only** node with no script: it declares no
+  Python to run, and its `reads` must be exactly `{csv: <uri>}` (one key,
+  named `csv`, whose value is an `s3://bucket/key` or `https://...` URI —
+  anything else fails `ContractError` at merge time). Because there is no
+  script or import closure to hash, `source_hash` is instead
+  `sha256(uri_bytes)` over that same `csv` URI (`shared_code_hash` is `""`,
+  the empty-closure value), so a `python-csv` node's `content_hash` changes
+  when the URI itself changes, never when the data at that URI changes. The
+  runtime harness's dispatch on `run_node` reads `kind` to skip script
+  execution entirely for a `python-csv` node and instead fetch and parse
+  the csv (`csv_loader.produce_csv` in this repo), which the harness then
+  conforms to the declared `output_columns` exactly as it would a script
+  node's returned dataframe (§13.4's "Sole write sink" paragraph, unchanged
+  from that point on). The validation runner mirrors the same idea at
+  release-validation time: its `build_from_columns` op checks the csv's
+  header line — fetched via a `csv_source` key on the candidate spec,
+  without downloading the full object — against the declared columns
+  instead of bind-checking a SELECT, so a `python-csv` node still fails the
+  release gate on a missing declared column exactly as a script node fails
+  it on a missing bind. §13.4 below still applies unchanged to
+  `kind: python-model` nodes.
 - **Reads must be single-statement SELECTs with every table reference
   schema-qualified** (`analytics.table_a`, never `table_a`) — the resolver
   raises `UnqualifiedTableReference` and rejects the whole release otherwise

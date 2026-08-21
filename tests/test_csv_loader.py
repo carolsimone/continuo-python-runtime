@@ -54,3 +54,28 @@ def test_produce_csv_fetch_failure_maps_to_load_error():
 
     with pytest.raises(LoadError, match="csv fetch failed"):
         produce_csv(_csv_node(), reader=Broken())
+
+
+def test_produce_csv_logs_structured_warning_for_undeclared_columns(caplog):
+    """FIX 7 — spec parity: when the csv carries a column not declared in
+    output_columns, the RUN path logs the same structured
+    csv_header_extra_columns warning the validation runner emits, so
+    extra_columns: drop's silent-discard behavior is observable in both
+    places, not just at validation time."""
+    node = _csv_node()  # declares only order_id, amount
+    with caplog.at_level("WARNING"):
+        produce_csv(node, reader=LocalFileReader(
+            b"order_id,amount,extra\n1,10.5,x\n2,20.0,y\n"))
+
+    assert "csv_header_extra_columns" in caplog.text
+    assert node.relation in caplog.text
+    assert "extra" in caplog.text
+
+
+def test_produce_csv_no_warning_when_all_columns_declared(caplog):
+    """No extras: no csv_header_extra_columns warning is logged."""
+    with caplog.at_level("WARNING"):
+        produce_csv(_csv_node(), reader=LocalFileReader(
+            b"order_id,amount\n1,10.5\n2,20.0\n"))
+
+    assert "csv_header_extra_columns" not in caplog.text

@@ -93,7 +93,7 @@ wheels = [
 
 [[package]]
 name = "continuo-engine-contract"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "contract" }
 dependencies = [
     { name = "sqlglot" },
@@ -104,7 +104,7 @@ requires-dist = [{ name = "sqlglot", specifier = "==30.15.0" }]
 
 [[package]]
 name = "continuo-python-runtime"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },

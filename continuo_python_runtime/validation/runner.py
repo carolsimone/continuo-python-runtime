@@ -8,10 +8,16 @@ Dispatches on ``VALIDATION_OP`` env var (default ``build_from_sql``):
 - ``build_from_columns``: for python nodes, which have no SELECT to shape their output
   from. Fetch the node's validation spec JSON from S3 (``CANDIDATE_SPEC_URI`` —
   ``{"reads": [sql, ...], "output_columns": [{"name","type","nullable"}, ...],
-  "config": {...}}``; ``config`` is optional and defaults to ``{}``), bind-check every
-  declared read against the candidate schema so an upstream that
-  dropped a column the script reads fails the release gate, then materialize the
-  output table empty from the declared typed columns and the declared physical layout.
+  "config": {...}, "csv_source": "s3://..." | "https://..."}``; ``config`` and
+  ``csv_source`` are both optional. When ``csv_source`` is set, its header row is
+  fetched (without downloading the full object) and checked against the declared
+  output columns: a declared column missing from the header fails the release gate,
+  while a header column not declared only logs a ``csv_header_extra_columns``
+  warning (it is silently dropped at load time). ``config`` defaults to ``{}``.
+  Every declared read is bind-checked against the candidate schema so an upstream
+  that dropped a column the script reads fails the release gate, then the output
+  table is materialized empty from the declared typed columns and the declared
+  physical layout.
 
 The engine adapter is discovered from the single installed
 ``continuo_engine.adapters`` entry point — each runner image installs exactly one.
@@ -19,6 +25,7 @@ stdout is reserved exclusively for the runner's one structured ``result_block``,
 printed as its last line; all diagnostics go to stderr via the ``logging`` module.
 A non-zero exit marks the node failed.
 """
+import csv
 import json
 import logging
 import os
@@ -29,6 +36,8 @@ from continuo_engine_contract.port import (  # type: ignore[import-untyped]
     AdapterDiscoveryError,
     discover_adapter,
 )
+from continuo_python_runtime.csv_readers import reader_for
+from continuo_python_runtime.csv_source import check_header, parse_csv_uri
 from continuo_python_runtime.validation import s3
 
 logger = logging.getLogger("validation_runner")
@@ -126,6 +135,7 @@ def main() -> None:
     prod_schema = None
     spec: dict | None = None
     config: dict = {}
+    csv_source: str = ""
     if op in _NODE_OPS:
         table = _require("TABLE_NAME")
         unique_id = _node_id() or f"model.{table}"
@@ -175,6 +185,12 @@ def main() -> None:
                 print(result.result_block("error", msg, unique_id=unique_id), flush=True)
                 sys.exit(2)
             config = raw_config or {}
+            csv_source = spec.get("csv_source", "")
+            if csv_source and not isinstance(csv_source, str):
+                msg = f"candidate spec 'csv_source' must be a string, got {type(csv_source).__name__}"
+                logger.error("%s", msg)
+                print(result.result_block("error", msg, unique_id=unique_id), flush=True)
+                sys.exit(2)
         else:
             prod_schema = _require("PROD_SCHEMA")
     elif op in _SCHEMA_OPS:
@@ -220,6 +236,16 @@ def main() -> None:
                 adapter.build_empty_from_sql(schema, table, candidate_sql)
             elif op == "build_from_columns":
                 assert spec is not None, "spec must be set for build_from_columns"
+                if csv_source:
+                    csv_uri = parse_csv_uri(csv_source)
+                    header_line = reader_for(csv_uri).fetch_header_line(csv_uri)
+                    declared = [c["name"] for c in spec["output_columns"]]
+                    extras = check_header(next(csv.reader([header_line])), declared)
+                    if extras:
+                        logger.warning(
+                            "csv_header_extra_columns node=%s columns=%s — columns present in the "
+                            "csv but not declared in output_columns; they will not be loaded",
+                            unique_id, sorted(extras))
                 for read_sql in spec.get("reads", []):
                     adapter.check_binds(read_sql)
                 adapter.build_empty_from_columns(schema, table, spec["output_columns"], config)

@@ -1,4 +1,5 @@
 """Unit tests for the runner — hand-written fakes, no live DB or S3."""
+import boto3
 import pytest
 
 from continuo_engine_contract import result
@@ -646,6 +647,137 @@ def test_main_build_from_columns_adapter_config_rejection_fails_the_gate(monkeyp
     out = capsys.readouterr().out
     assert '"status":"error"' in out
     assert "sortkey" in out
+
+
+# --------------------------------------------------------------------------
+# main — build_from_columns csv_source header check (python-csv-nodes A6)
+# --------------------------------------------------------------------------
+
+CSV_HEADER_WITH_EXTRA_BODY = b"order_id,amount,extra\n1,10.5,x\n2,20.0,y\n"
+CSV_HEADER_MISSING_COLUMN_BODY = b"order_id,amount\n1,10.5\n2,20.0\n"
+
+
+@pytest.fixture(scope="session")
+def csv_source_bucket(minio_container):
+    """Real minio-backed csv fixtures for the csv_source header-check tests.
+
+    Uploads two objects into a bucket dedicated to this module (kept separate
+    from test_csv_readers_integration.py's own ``drops`` bucket so the two
+    modules' session-scoped setup never race each other): a csv whose header
+    has an extra undeclared column, and one missing a declared column.
+    ``nope.csv`` is deliberately never uploaded, so a test can point
+    csv_source at it to exercise the unreachable-source path against the
+    real minio backend.
+    """
+    endpoint, access, secret = minio_container
+    client = boto3.client(
+        "s3", endpoint_url=endpoint,
+        aws_access_key_id=access, aws_secret_access_key=secret,
+    )
+    client.create_bucket(Bucket="csv-validation")
+    client.put_object(Bucket="csv-validation", Key="orders.csv", Body=CSV_HEADER_WITH_EXTRA_BODY)
+    client.put_object(
+        Bucket="csv-validation", Key="orders_missing_col.csv",
+        Body=CSV_HEADER_MISSING_COLUMN_BODY,
+    )
+    return endpoint
+
+
+@pytest.mark.integration
+def test_main_build_from_columns_with_csv_source_checks_header(
+    monkeypatch, capsys, caplog, csv_source_bucket
+):
+    """csv_source header conformance against a real minio object: declared
+    columns are all present, and the csv's extra undeclared column ("extra")
+    logs a structured warning but does not block the build."""
+    _set_common_env(monkeypatch)
+    monkeypatch.setenv("VALIDATION_OP", "build_from_columns")
+    monkeypatch.setenv("S3_ENDPOINT_URL", csv_source_bucket)
+    fake = FakeWarehouseAdapter()
+    _install_fake_adapter(monkeypatch, fake)
+    columns = [
+        {"name": "order_id", "type": "BIGINT", "nullable": False},
+        {"name": "amount", "type": "DOUBLE PRECISION", "nullable": True},
+    ]
+    spec = _spec(columns=columns)
+    spec["csv_source"] = "s3://csv-validation/orders.csv"
+    monkeypatch.setattr(runner, "load_candidate_spec", lambda: spec)
+
+    with caplog.at_level("WARNING"):
+        runner.main()
+
+    assert fake.column_builds == [("_candidate_relA", "orders", columns, {})]
+    out = capsys.readouterr().out
+    assert '"status":"success"' in out
+    assert "csv_header_extra_columns" in caplog.text
+    assert "extra" in caplog.text
+
+
+@pytest.mark.integration
+def test_main_build_from_columns_csv_header_missing_column_fails(
+    monkeypatch, capsys, csv_source_bucket
+):
+    """A declared column absent from the real csv header fails the release
+    gate: exit 1, error block names the missing column."""
+    _set_common_env(monkeypatch)
+    monkeypatch.setenv("VALIDATION_OP", "build_from_columns")
+    monkeypatch.setenv("S3_ENDPOINT_URL", csv_source_bucket)
+    fake = FakeWarehouseAdapter()
+    _install_fake_adapter(monkeypatch, fake)
+    columns = [
+        {"name": "order_id", "type": "BIGINT", "nullable": False},
+        {"name": "customer_id", "type": "BIGINT", "nullable": False},
+    ]
+    spec = _spec(columns=columns)
+    spec["csv_source"] = "s3://csv-validation/orders_missing_col.csv"
+    monkeypatch.setattr(runner, "load_candidate_spec", lambda: spec)
+
+    with pytest.raises(SystemExit) as exc:
+        runner.main()
+
+    assert exc.value.code == 1
+    assert fake.column_builds == []  # header check blocks the build
+    out = capsys.readouterr().out
+    assert '"status":"error"' in out
+    assert "missing declared column" in out
+
+
+@pytest.mark.integration
+def test_main_build_from_columns_unreachable_csv_fails(monkeypatch, capsys, csv_source_bucket):
+    """An unreachable csv_source blocks promotion: exit 1, error block emitted."""
+    _set_common_env(monkeypatch)
+    monkeypatch.setenv("VALIDATION_OP", "build_from_columns")
+    monkeypatch.setenv("S3_ENDPOINT_URL", csv_source_bucket)
+    fake = FakeWarehouseAdapter()
+    _install_fake_adapter(monkeypatch, fake)
+    spec = _spec()
+    spec["csv_source"] = "s3://csv-validation/nope.csv"
+    monkeypatch.setattr(runner, "load_candidate_spec", lambda: spec)
+
+    with pytest.raises(SystemExit) as exc:
+        runner.main()
+
+    assert exc.value.code == 1
+    assert fake.column_builds == []
+    out = capsys.readouterr().out
+    assert '"status":"error"' in out
+
+
+def test_main_build_from_columns_without_csv_source_unchanged(monkeypatch, capsys):
+    """No csv_source key in the spec: behavior is unchanged from before A6 —
+    no header fetch is attempted, and the build proceeds straight through."""
+    _set_common_env(monkeypatch)
+    monkeypatch.setenv("VALIDATION_OP", "build_from_columns")
+    monkeypatch.setenv("CANDIDATE_SPEC_URI", "s3://continuo/candidate-spec/rel-1/svc.orders.json")
+    fake = FakeWarehouseAdapter()
+    _install_fake_adapter(monkeypatch, fake)
+    columns = [{"name": "id", "type": "BIGINT", "nullable": False}]
+    monkeypatch.setattr(runner, "load_candidate_spec", lambda: _spec([], columns))
+
+    runner.main()
+
+    assert fake.column_builds == [("_candidate_relA", "orders", columns, {})]
+    assert '"status":"success"' in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------------

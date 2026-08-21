@@ -30,8 +30,11 @@ def parse_csv_uri(uri: str) -> CsvUri:
         if not bucket or not key:
             raise ValueError(f"invalid s3 csv uri (missing bucket or key): {uri!r}")
         return CsvUri(scheme="s3", raw=uri, bucket=bucket, key=key)
-    if uri.startswith("https://") and len(uri) > len("https://"):
-        return CsvUri(scheme="https", raw=uri)
+    if uri.startswith("https://"):
+        remainder = uri[len("https://"):]
+        host, _, _ = remainder.partition("/")
+        if host:
+            return CsvUri(scheme="https", raw=uri)
     raise ValueError(
         f"invalid csv uri {uri!r}: must be s3://bucket/key or https://..."
     )

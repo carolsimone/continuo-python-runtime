@@ -25,6 +25,8 @@ def test_parse_https_uri():
     "s3://bucket-only",
     "s3://bucket/",
     "gs://bucket/key",
+    "https:///x.csv",              # empty host not accepted
+    "https://",                     # empty host not accepted
     "orders.csv",
     "",
 ])

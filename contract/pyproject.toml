@@ -1,5 +1,5 @@
 [project]
-version = "0.7.0"
+version = "0.7.1"
 name = "continuo-engine-contract"
 description = "The contract a Continuo warehouse engine must satisfy: the WarehouseAdapter port and the result-block wire format."
 authors = [{ name = "Simone Carolini" }]

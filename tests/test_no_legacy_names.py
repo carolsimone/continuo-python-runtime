@@ -25,7 +25,10 @@ LEGACY = [
 # plan and spec, and the 2026-08-07 config-hash plan). They describe what was
 # true on the day they were written; rewriting them to today's names would
 # falsify the design history, so they are exempt from the sweep.
-EXEMPT_PREFIXES = ("docs/superpowers/",)
+#
+# CHANGELOG.md is the same category: its 0.3.0 entry names the package this
+# rename replaced, because that is what actually shipped in that release.
+EXEMPT_PREFIXES = ("docs/superpowers/", "CHANGELOG.md")
 
 
 def test_no_legacy_validation_names_anywhere():

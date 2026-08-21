@@ -95,16 +95,47 @@ jobs:
           wait_for "publish-pypi.yml"
           wait_for "images.yml"
 
+      - name: Extract this version's CHANGELOG section
+        id: notes
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          # Print the body between "## [X.Y.Z]" and the next "## [" heading.
+          if grep -qE "^## \[${VERSION}\]" CHANGELOG.md; then
+            awk -v ver="## [${VERSION}]" '
+              index($0, ver) == 1 { found = 1; next }
+              found && /^## \[/    { exit }
+              found                { print }
+            ' CHANGELOG.md > /tmp/release-body.md
+          fi
+
+          if [ -s /tmp/release-body.md ]; then
+            echo "generate=false" >> "$GITHUB_OUTPUT"
+          else
+            # A tag with no matching CHANGELOG.md section (e.g. someone
+            # forgot to add one before tagging) still gets a Release — just
+            # with GitHub's generated notes instead of failing the job over
+            # a missing doc update.
+            echo "::warning::no '## [${VERSION}]' section in CHANGELOG.md; falling back to generated notes."
+            echo "generate=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create the Release
         run: |
           set -euo pipefail
-          # No CHANGELOG.md exists in this repo (unlike continuo's
-          # deploy/continuo/CHANGELOG.md), so generated notes are the only
-          # source available. Idempotent: re-running this workflow for an
-          # existing tag updates the Release rather than failing.
+          # Idempotent: re-running this workflow for an existing tag updates
+          # the Release rather than failing.
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --latest
-          else
+            if [ "${{ steps.notes.outputs.generate }}" = "true" ]; then
+              gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --latest
+            else
+              gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+                --notes-file /tmp/release-body.md --latest
+            fi
+          elif [ "${{ steps.notes.outputs.generate }}" = "true" ]; then
             gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" \
               --title "${TAG}" --generate-notes --latest
+          else
+            gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --title "${TAG}" --notes-file /tmp/release-body.md --latest
           fi

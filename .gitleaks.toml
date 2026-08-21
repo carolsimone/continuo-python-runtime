@@ -1,0 +1,28 @@
+# gitleaks configuration.
+#
+# Extends the upstream default ruleset rather than replacing it, so rules added
+# upstream apply automatically. Only repository-specific exemptions live here.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Paths that contain no live credentials"
+
+paths = [
+  # Local agent worktrees hold full stale copies of every tracked file, so a
+  # finding in the real tree would otherwise be reported once per worktree.
+  '''^\.worktrees/''',
+  '''^\.claude/''',
+  # Build/tooling caches, never committed.
+  '''(^|/)\.venv/''',
+  '''(^|/)\.mypy_cache/''',
+  '''(^|/)\.ruff_cache/''',
+  '''(^|/)\.pytest_cache/''',
+  '''(^|/)dist/''',
+  # The tier-2 smoke stacks under tests/smoke/ use documented, throwaway
+  # default credentials for local-only containers (e.g. MinIO's published
+  # "minioadmin"/"minioadmin", Postgres's "continuo"/"continuo") — not
+  # secrets, and never reachable outside the compose network they define.
+  '''^tests/smoke/.*/docker-compose\.yml$''',
+]

@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in the Continuo Python runtime behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not report security vulnerabilities here — see SECURITY.md.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you observe, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Write a contract with ...
+        2. Run `continuo-runtime validate ...`
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which component
+      multiple: true
+      options:
+        - continuo_python_runtime (harness / CLI)
+        - contract (continuo-engine-contract)
+        - adapters/postgres
+        - adapters/trino
+        - template
+        - CI (.github/workflows)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Package version (PyPI) or commit SHA.
+      placeholder: "v0.3.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Please redact any credentials before pasting.
+      render: shell

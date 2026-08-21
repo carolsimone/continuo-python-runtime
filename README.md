@@ -1,5 +1,8 @@
 # Continuo Python Runtime
 
+[![CI](https://github.com/carolsimone/continuo-python-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/carolsimone/continuo-python-runtime/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 Runtime harness, contract tooling, and CI lint for Continuo python nodes.
 This repo is what domain data teams (marketing, finance, …) template from to
 ship a python node into Continuo: write a contract + a `run(ctx)` script,

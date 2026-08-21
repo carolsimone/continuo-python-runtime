@@ -597,6 +597,60 @@ def test_ensure_import_paths_is_idempotent(tmp_path):
     assert sys.path.count(str(script_dir.resolve())) == 1
 
 
+# --- python-csv nodes: run_node dispatches on node.kind, never touches load_script ---
+
+
+def test_run_node_on_csv_node_never_calls_load_script(monkeypatch, tmp_path, capsys):
+    """A python-csv node must be produced via produce_csv, not load_script/_execute_script."""
+    import continuo_python_runtime.harness as harness_mod
+    from continuo_python_runtime.csv_source import CsvSourceReader
+
+    class LocalFileReader(CsvSourceReader):
+        def __init__(self, body: bytes):
+            self.body = body
+
+        def fetch_header_line(self, uri):
+            return self.body.split(b"\n", 1)[0].decode()
+
+        def fetch(self, uri, dest):
+            dest.write_bytes(self.body)
+            return dest
+
+    def _boom_if_called(*args, **kwargs):
+        raise AssertionError("load_script must not be called for a python-csv node")
+
+    monkeypatch.setattr(harness_mod, "load_script", _boom_if_called)
+
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
+        "schema": "analytics", "table": "orders_csv", "owner": "m", "schedule": "daily",
+        "criticality": "SECONDARY", "kind": "python-csv",
+        "reads": {"csv": "s3://drops/orders.csv"},
+        "output_columns": [
+            {"name": "order_id", "type": "INTEGER", "nullable": False},
+            {"name": "amount", "type": "DOUBLE PRECISION"},
+        ],
+    }]}))
+
+    env = {
+        "NODE_ID": "python-csv.svc.analytics.orders_csv",
+        "TABLE_NAME": "orders_csv",
+        "TARGET_SCHEMA": "analytics",
+        "CONTRACT_DIR": str(tmp_path / "contracts"),
+        "APP_ROOT": str(tmp_path),
+    }
+    ad = FakeWarehouseAdapter()
+    reader = LocalFileReader(b"order_id,amount\n1,10.5\n2,20.0\n")
+
+    assert run_node(env, adapter=ad, reader=reader) == 0
+    out = capsys.readouterr().out
+    assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
+    assert ad.ensured is not None
+    assert ad.loaded is not None
+    assert ad.loaded[0:2] == ("analytics", "orders_csv")
+    assert ad.loaded[2].num_rows == 2
+
+
 def test_adapter_construction_failure_emits_single_load_error_block(monkeypatch, harness_repo, capsys):
     import continuo_python_runtime.harness as harness_mod
 

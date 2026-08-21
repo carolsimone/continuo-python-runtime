@@ -31,6 +31,8 @@ from continuo_python_runtime.context import RunContext
 from continuo_python_runtime.contract.loader import load_contract_dir
 from continuo_python_runtime.contract.model import Node
 from continuo_python_runtime.contract.paths import resolve_script_path
+from continuo_python_runtime.csv_loader import produce_csv
+from continuo_python_runtime.csv_source import CsvSourceReader
 from continuo_python_runtime.errors import ContractError, HarnessError, LoadError, ScriptError
 
 logger = logging.getLogger("continuo_python_runtime.harness")
@@ -206,8 +208,15 @@ def _validate_config_early(adapter: Any, node: Node) -> None:
         ) from exc
 
 
-def run_node(env: Mapping[str, str], adapter: Any = None) -> int:
+def run_node(
+    env: Mapping[str, str], adapter: Any = None, reader: CsvSourceReader | None = None
+) -> int:
     """Run a single node end-to-end and print exactly one sentinel result block.
+
+    ``reader`` mirrors the ``adapter`` injection seam: when given, it is
+    threaded into :func:`produce_csv` for a python-csv node instead of
+    letting that function pick a reader via ``reader_for``. Ignored for a
+    python-model node.
 
     Returns 0 on success, 1 on any :class:`HarnessError`.
     """
@@ -246,13 +255,15 @@ def run_node(env: Mapping[str, str], adapter: Any = None) -> int:
 
         _validate_config_early(active_adapter, node)
 
-        with contextlib.redirect_stdout(sys.stderr):
-            module = load_script(node, app_root)
+        if node.kind == "python-csv":
+            table = produce_csv(node, reader=reader)
+        else:
+            with contextlib.redirect_stdout(sys.stderr):
+                module = load_script(node, app_root)
+            ctx = RunContext(node, active_adapter)
+            raw_result = _execute_script(module, ctx)
+            table = to_arrow(raw_result)
 
-        ctx = RunContext(node, active_adapter)
-        raw_result = _execute_script(module, ctx)
-
-        table = to_arrow(raw_result)
         conformed = conform(table, node.output_columns, node.extra_columns)
 
         columns = [

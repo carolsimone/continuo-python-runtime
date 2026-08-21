@@ -67,8 +67,17 @@ jobs:
           fi
       # if: always() — a blocking scan that fails must still publish what it
       # found, otherwise the findings that justify the failure never appear.
+      #
+      # continue-on-error: true — code scanning needs GitHub Advanced Security,
+      # free on a public repo but not on a private one. This repo is private
+      # until the open-sourcing work lands, so the upload 403s
+      # ("Resource not accessible by integration") on every run until then.
+      # The upload is reporting, not the gate; gitleaks failing the step above
+      # is what actually blocks a merge, and must keep doing so independent of
+      # whether the upload succeeds.
       - name: Upload SARIF to code scanning
         if: always()
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: sarif/
@@ -91,8 +100,12 @@ jobs:
         run: bash scripts/security-scan.sh deps
       # if: always() — a blocking scan that fails must still publish what it
       # found, otherwise the findings that justify the failure never appear.
+      #
+      # continue-on-error: true — see the identical note on the secrets job;
+      # same GHAS-requires-public-repo cause, same fix.
       - name: Upload SARIF to code scanning
         if: always()
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: sarif/

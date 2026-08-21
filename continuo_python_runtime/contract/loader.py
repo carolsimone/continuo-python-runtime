@@ -199,11 +199,12 @@ def parse_node(
             )
         script = ""
     else:
-        script = raw.get("script")
-        if not isinstance(script, str) or not script.strip():
+        raw_script = raw.get("script")
+        if not isinstance(raw_script, str) or not raw_script.strip():
             raise ContractError(
                 f"{label}: required field 'script' must be a non-empty string"
             )
+        script = raw_script
 
     criticality = raw.get("criticality")
     if not isinstance(criticality, str) or criticality not in CRITICALITIES:

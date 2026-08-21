@@ -18,9 +18,11 @@ from sqlglot.errors import TokenError
 from continuo_python_runtime.contract.model import (
     CRITICALITIES,
     EXTRA_COLUMNS_POLICIES,
+    KINDS,
     Column,
     Node,
 )
+from continuo_python_runtime.csv_source import parse_csv_uri
 from continuo_python_runtime.errors import ContractError
 from continuo_python_runtime.types import parse_sql_type
 
@@ -31,6 +33,7 @@ _ALLOWED_KEYS = {
     "owner",
     "schedule",
     "criticality",
+    "kind",
     "script",
     "extra_columns",
     "reads",
@@ -39,7 +42,7 @@ _ALLOWED_KEYS = {
     "content_hash",
 }
 
-_REQUIRED_STRING_FIELDS = ("schema", "table", "owner", "schedule", "script")
+_REQUIRED_STRING_FIELDS = ("schema", "table", "owner", "schedule")
 
 _ALLOWED_OUTPUT_COLUMN_KEYS = {"name", "type", "nullable"}
 
@@ -170,6 +173,12 @@ def parse_node(
     if unknown:
         raise ContractError(f"{label}: unknown key(s) {sorted(unknown)}")
 
+    kind = raw.get("kind", "python-model")
+    if not isinstance(kind, str) or kind not in KINDS:
+        raise ContractError(
+            f"{label}: 'kind' must be one of {sorted(KINDS)}, got {kind!r}"
+        )
+
     for field in _REQUIRED_STRING_FIELDS:
         value = raw.get(field)
         if not isinstance(value, str) or not value.strip():
@@ -181,7 +190,21 @@ def parse_node(
     table = raw["table"]
     owner = raw["owner"]
     schedule = raw["schedule"]
-    script = raw["script"]
+
+    if kind == "python-csv":
+        if "script" in raw:
+            raise ContractError(
+                f"{label}: 'script' is forbidden for kind python-csv "
+                "(csv nodes are contract-only)"
+            )
+        script = ""
+    else:
+        raw_script = raw.get("script")
+        if not isinstance(raw_script, str) or not raw_script.strip():
+            raise ContractError(
+                f"{label}: required field 'script' must be a non-empty string"
+            )
+        script = raw_script
 
     criticality = raw.get("criticality")
     if not isinstance(criticality, str) or criticality not in CRITICALITIES:
@@ -200,39 +223,50 @@ def parse_node(
         )
 
     reads = raw.get("reads")
-    if not isinstance(reads, dict) or not reads:
-        raise ContractError(
-            f"{label}: 'reads' must be a non-empty mapping of name -> SQL"
-        )
-    for name, sql in reads.items():
-        if not isinstance(name, str) or not name.strip():
+    if kind == "python-csv":
+        if not isinstance(reads, dict) or set(reads) != {"csv"}:
             raise ContractError(
-                f"{label}: 'reads' name {name!r} must be a non-empty string"
+                f"{label}: a python-csv node's 'reads' must be exactly {{csv: <uri>}}"
             )
-        if not isinstance(sql, str) or not sql.strip():
-            raise ContractError(
-                f"{label}: 'reads.{name}' must be a non-empty SQL string"
-            )
-        if not check_reads:
-            continue
         try:
-            ensure_single_read(sql, dialect)
-        except (ValueError, TokenError) as exc:
-            # ensure_single_read's own message is phrased for check_binds
-            # (its only other caller today), so it's wrapped rather than
-            # surfaced bare here. TokenError is also caught: an unterminated
-            # string literal or comment fails sqlglot's tokenizer with a
-            # TokenError, a SqlglotError sibling of ParseError and not a
-            # subclass of ValueError -- despite ensure_single_read's
-            # docstring promising every rejection is a ValueError. Only
-            # TokenError, not the broader SqlglotError, is caught here: by
-            # the time control reaches this point `dialect` has already been
-            # validated once in load_contract_dir, so any other SqlglotError
-            # a future sqlglot version might raise from this call should
-            # surface as itself, not get relabeled as a rejected read.
+            parse_csv_uri(reads["csv"])
+        except (ValueError, TypeError) as exc:
+            raise ContractError(f"{label}: invalid csv uri: {exc}") from exc
+    else:
+        if not isinstance(reads, dict) or not reads:
             raise ContractError(
-                f"{label}: 'reads.{name}' must be a single read query ({exc})"
-            ) from exc
+                f"{label}: 'reads' must be a non-empty mapping of name -> SQL"
+            )
+        for name, sql in reads.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ContractError(
+                    f"{label}: 'reads' name {name!r} must be a non-empty string"
+                )
+            if not isinstance(sql, str) or not sql.strip():
+                raise ContractError(
+                    f"{label}: 'reads.{name}' must be a non-empty SQL string"
+                )
+            if not check_reads:
+                continue
+            try:
+                ensure_single_read(sql, dialect)
+            except (ValueError, TokenError) as exc:
+                # ensure_single_read's own message is phrased for check_binds
+                # (its only other caller today), so it's wrapped rather than
+                # surfaced bare here. TokenError is also caught: an unterminated
+                # string literal or comment fails sqlglot's tokenizer with a
+                # TokenError, a SqlglotError sibling of ParseError and not a
+                # subclass of ValueError -- despite ensure_single_read's
+                # docstring promising every rejection is a ValueError. Only
+                # TokenError, not the broader SqlglotError, is caught here: by
+                # the time control reaches this point `dialect` has already
+                # been validated once in load_contract_dir, so any other
+                # SqlglotError a future sqlglot version might raise from this
+                # call should surface as itself, not get relabeled as a
+                # rejected read.
+                raise ContractError(
+                    f"{label}: 'reads.{name}' must be a single read query ({exc})"
+                ) from exc
 
     raw_columns = raw.get("output_columns")
     if not isinstance(raw_columns, list) or not raw_columns:
@@ -297,6 +331,7 @@ def parse_node(
         extra_columns=extra_columns,
         config=config,
         content_hash=content_hash,
+        kind=kind,
     )
 
 

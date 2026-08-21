@@ -7,10 +7,13 @@ import decimal
 import os
 import uuid
 
+import boto3
 import psycopg2
 import pyarrow as pa
 import pytest
+import yaml
 
+from continuo_python_runtime.harness import run_node
 from continuo_python_runtime_postgres.adapter import PostgresAdapter
 
 PG = dict(
@@ -303,3 +306,79 @@ def test_ensure_schema_generic_failure_rolls_back_and_releases_advisory_lock():
     second.commit()
     second.close()
     assert acquired is True
+
+
+# --- python-csv node end-to-end: real minio -> run_node -> real postgres ---
+#
+# minio_container is declared in adapters/postgres/tests/conftest.py (this
+# package cannot see the root tests/conftest.py fixture of the same name --
+# see that conftest's module docstring).
+
+CSV_BODY = b"order_id,amount\n1,10.5\n2,20.0\n3,5.25\n"
+
+
+@pytest.fixture(scope="session")
+def csv_minio(minio_container):
+    """Seed a real minio bucket with the csv this test's node reads."""
+    endpoint, access, secret = minio_container
+    client = boto3.client(
+        "s3", endpoint_url=endpoint,
+        aws_access_key_id=access, aws_secret_access_key=secret,
+    )
+    client.create_bucket(Bucket="pg-drops")
+    client.put_object(Bucket="pg-drops", Key="orders.csv", Body=CSV_BODY)
+    return endpoint
+
+
+def _csv_contract_dir(tmp_path, schema):
+    """A contract dir with a single python-csv node reading s3://pg-drops/orders.csv."""
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
+        "schema": schema, "table": "orders_csv", "owner": "m", "schedule": "daily",
+        "criticality": "SECONDARY", "kind": "python-csv",
+        "reads": {"csv": "s3://pg-drops/orders.csv"},
+        "output_columns": [
+            {"name": "order_id", "type": "INTEGER", "nullable": False},
+            {"name": "amount", "type": "DOUBLE PRECISION"},
+        ],
+    }]}))
+    return tmp_path
+
+
+@pytest.mark.integration
+def test_run_node_csv_kind_loads_minio_csv_into_postgres(clean_schema, csv_minio, monkeypatch, tmp_path):
+    """run_node on a python-csv node fetches from real minio and writes to real postgres.
+
+    Exercises the full production path added in this task: harness.run_node
+    dispatches on node.kind to csv_loader.produce_csv (no reader/adapter test
+    doubles here -- the S3CsvSourceReader from csv_readers.reader_for talks
+    to the real minio container, and PostgresAdapter writes to the real
+    postgres stack), then conform()/ensure_table()/load() proceed exactly as
+    for a python-model node.
+    """
+    monkeypatch.setenv("S3_ENDPOINT_URL", csv_minio)
+    repo = _csv_contract_dir(tmp_path, clean_schema)
+    env = {
+        "NODE_ID": f"python-csv.svc.{clean_schema}.orders_csv",
+        "TABLE_NAME": "orders_csv",
+        "TARGET_SCHEMA": clean_schema,
+        "CONTRACT_DIR": str(repo / "contracts"),
+        "APP_ROOT": str(repo),
+    }
+    a = _adapter()
+
+    assert run_node(env, adapter=a) == 0
+
+    assert _columns(clean_schema, "orders_csv") == [
+        ("order_id", "integer", "NO"),
+        ("amount", "double precision", "YES"),
+    ]
+    assert _count(clean_schema, "orders_csv") == 3
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute(
+            f'SELECT order_id, amount FROM "{clean_schema}"."orders_csv" ORDER BY order_id'
+        )
+        rows = cur.fetchall()
+    conn.close()
+    assert rows == [(1, 10.5), (2, 20.0), (3, 5.25)]

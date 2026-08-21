@@ -1,5 +1,7 @@
 """Tests for contract v1 merger."""
 
+from hashlib import sha256
+
 import yaml
 
 import pytest
@@ -10,7 +12,7 @@ from continuo_python_runtime.hashing import content_hash_fold
 
 WIRE_ENTRY_KEYS = {
     "schema", "table", "owner", "schedule", "criticality", "script", "reads",
-    "output_columns", "description", "extra_columns", "config",
+    "output_columns", "description", "extra_columns", "config", "kind",
     "source_hash", "shared_code_hash", "config_hash", "content_hash",
 }
 
@@ -428,3 +430,54 @@ def test_write_wire_contract_creates_missing_out_dir(contract_repo, tmp_path):
     write_wire_contract(doc, out)
     assert out.exists()
     assert yaml.safe_load(out.read_text())["service"] == "s"
+
+
+def test_wire_entry_carries_kind(contract_repo):
+    repo = contract_repo
+    doc = build_wire_contract(repo / "contracts", repo, "s")
+    assert doc["nodes"][0]["kind"] == "python-model"
+
+
+def test_csv_wire_entry_hashes_the_uri(tmp_path):
+    uri = "s3://drops/orders.csv"
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "contracts" / "c.yml").write_text(
+        "nodes:\n"
+        "  - schema: analytics\n"
+        "    table: orders_csv\n"
+        "    owner: team\n"
+        "    schedule: daily\n"
+        "    criticality: SECONDARY\n"
+        "    kind: python-csv\n"
+        f"    reads: {{csv: {uri}}}\n"
+        "    output_columns:\n"
+        "      - {name: order_id, type: INTEGER, nullable: false}\n"
+    )
+    doc = build_wire_contract(tmp_path / "contracts", tmp_path, "svc")
+    entry = doc["nodes"][0]
+    assert entry["kind"] == "python-csv"
+    assert entry["script"] == ""
+    assert entry["source_hash"] == sha256(uri.encode()).hexdigest()
+    assert entry["shared_code_hash"] == ""
+    assert entry["content_hash"] == content_hash_fold(
+        entry["source_hash"], "", entry["config_hash"])
+
+
+def test_csv_node_needs_no_script_file_on_disk(tmp_path):
+    # same fixture as above: note NO scripts/ dir exists — must not raise
+    uri = "s3://drops/orders.csv"
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "contracts" / "c.yml").write_text(
+        "nodes:\n"
+        "  - schema: analytics\n"
+        "    table: orders_csv\n"
+        "    owner: team\n"
+        "    schedule: daily\n"
+        "    criticality: SECONDARY\n"
+        "    kind: python-csv\n"
+        f"    reads: {{csv: {uri}}}\n"
+        "    output_columns:\n"
+        "      - {name: order_id, type: INTEGER, nullable: false}\n"
+    )
+    doc = build_wire_contract(tmp_path / "contracts", tmp_path, "svc")
+    assert len(doc["nodes"]) == 1

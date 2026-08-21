@@ -94,7 +94,9 @@ the Go parser has not been taught is a production outage, not a refactor.
    login` step to `release.yml`.
 5. Write a contract file under `contracts/` (see
    `template/contracts/example.yml`) and a script under `scripts/` that
-   implements `run(ctx)` (see `template/scripts/example.py`).
+   implements `run(ctx)` (see `template/scripts/example.py`). A node that
+   only needs to land a csv file needs no script at all — see
+   `template/contracts/example_csv.yml` and "Node kinds" below.
 6. Push to `main`. The `release.yml` workflow lints the scripts, validates
    and merges the contracts, builds and pushes the image, uploads the merged
    contract to S3, and POSTs the release.
@@ -120,6 +122,30 @@ continuo-runtime validate contracts/ --dialect postgres   # or trino
 The runtime image does not re-run this gate, so a read that passes here is
 not re-judged under a different grammar in production. See
 `docs/boundary-contract.md` §13.1.
+
+## Node kinds
+
+A contract node's `kind:` field selects how the node produces its rows.
+Every rule below (`extra_columns`, `output_columns`, "Conform rules") applies
+to both kinds identically — `kind` only changes how the pre-conform table is
+produced, never how it is checked or written.
+
+- **`python-model`** (the default; the field may be omitted) — a script node.
+  It requires `script:` and a `reads:` map of one or more named SQL queries,
+  as described in "The script API" below.
+- **`python-csv`** — a contract-only node: it has no script and its `reads:`
+  map must be exactly `{csv: <uri>}`, where the uri is `s3://bucket/key` or
+  an `https://` url (`http://` is rejected at validate time, not run time).
+  The harness fetches the file, parses it with RFC 4180 defaults, and feeds
+  the result straight into `conform()` — declared `output_columns` types
+  decide the warehouse schema, not whatever pyarrow infers from the csv.
+  Because there is no script, `script:` is a forbidden key for this kind;
+  `continuo-runtime validate`/`merge`/`lint` reject one that sets it. The
+  csv's header row must contain every declared output column (checked again,
+  independently, at release time before promotion); columns present in the
+  header but not declared are governed by the same `extra_columns` policy as
+  a script node's output — `raise` (default) fails the run, `warn` drops
+  them and logs a warning. See `template/contracts/example_csv.yml`.
 
 ## The script API
 

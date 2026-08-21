@@ -27,6 +27,7 @@ def node_entry(node: Node) -> dict:
         "owner": node.owner,
         "schedule": node.schedule,
         "criticality": node.criticality,
+        "kind": node.kind,
         "script": node.script,
         "reads": node.reads,
         "output_columns": [
@@ -128,12 +129,19 @@ def build_wire_contract(
     for node in nodes:
         entry = node_entry(node)
 
-        script_path = resolve_script_path(node.script, repo_root, context=node.relation)
-        script_bytes = script_path.read_bytes()
-        closure = resolve_closure(script_path, repo_root)
-        member_bytes = [member.read_bytes() for member in closure]
-        _lint_node_closure(node, repo_root, script_path, script_bytes, closure, member_bytes)
-        entry.update(hash_parts(entry, script_bytes, member_bytes))
+        if node.kind == "python-csv":
+            # A csv node has no script and no import closure: its source IS
+            # the uri -- new file content at the same uri is new data, not a
+            # new node version.
+            uri_bytes = node.reads["csv"].encode()
+            entry.update(hash_parts(entry, uri_bytes, []))
+        else:
+            script_path = resolve_script_path(node.script, repo_root, context=node.relation)
+            script_bytes = script_path.read_bytes()
+            closure = resolve_closure(script_path, repo_root)
+            member_bytes = [member.read_bytes() for member in closure]
+            _lint_node_closure(node, repo_root, script_path, script_bytes, closure, member_bytes)
+            entry.update(hash_parts(entry, script_bytes, member_bytes))
 
         wire_nodes.append(entry)
 

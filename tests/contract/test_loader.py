@@ -137,6 +137,65 @@ def test_unknown_key_error_names_source_and_node():
         assert "analytics.t" in str(exc)
 
 
+def _model_entry(**over):
+    entry = dict(VALID)
+    entry.update(over)
+    return entry
+
+
+def _csv_entry(**over):
+    entry = {
+        "schema": "analytics", "table": "orders_csv", "owner": "team",
+        "schedule": "daily", "criticality": "SECONDARY",
+        "kind": "python-csv",
+        "reads": {"csv": "s3://drops/orders.csv"},
+        "output_columns": [{"name": "order_id", "type": "INTEGER", "nullable": False}],
+    }
+    entry.update(over)
+    return entry
+
+
+def test_kind_defaults_to_python_model():
+    node = parse_node(_model_entry(), "f.yml")
+    assert node.kind == "python-model"
+
+
+def test_csv_node_parses():
+    node = parse_node(_csv_entry(), "f.yml", check_reads=False)
+    assert node.kind == "python-csv"
+    assert node.reads == {"csv": "s3://drops/orders.csv"}
+    assert node.script == ""
+
+
+def test_csv_node_with_script_is_a_contract_error():
+    with pytest.raises(ContractError, match="'script' is forbidden"):
+        parse_node(_csv_entry(script="scripts/x.py"), "f.yml")
+
+
+def test_csv_node_reads_must_be_exactly_csv_uri():
+    with pytest.raises(ContractError, match="exactly"):
+        parse_node(_csv_entry(reads={"csv": "s3://b/k", "other": "select 1"}), "f.yml")
+    with pytest.raises(ContractError, match="exactly"):
+        parse_node(_csv_entry(reads={"dwh": "s3://b/k"}), "f.yml")
+
+
+def test_csv_node_bad_uri_is_a_contract_error():
+    with pytest.raises(ContractError, match="csv uri"):
+        parse_node(_csv_entry(reads={"csv": "http://insecure/x.csv"}), "f.yml")
+
+
+def test_unknown_kind_rejected():
+    with pytest.raises(ContractError, match="kind"):
+        parse_node(_csv_entry(kind="python-parquet"), "f.yml")
+
+
+def test_model_node_still_requires_script():
+    entry = _model_entry()
+    del entry["script"]
+    with pytest.raises(ContractError, match="script"):
+        parse_node(entry, "f.yml")
+
+
 def test_bad_criticality_and_policy_and_type():
     with pytest.raises(ContractError, match="criticality"):
         parse_node({**VALID, "criticality": "HIGH"}, "f.yml")

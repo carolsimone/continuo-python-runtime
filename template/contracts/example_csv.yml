@@ -1,0 +1,17 @@
+nodes:
+  - schema: analytics
+    table: example_csv
+    description: "Contract-only node: loads a csv from the declared uri"
+    owner: your-team
+    schedule: daily
+    criticality: SECONDARY
+    kind: python-csv
+    # A csv node has no script and exactly one read: the source uri.
+    # s3://bucket/key and https:// urls are accepted; the file's header row
+    # must contain every declared output column (extra columns are dropped
+    # per extra_columns and surfaced as a warning).
+    reads:
+      csv: s3://your-bucket/drops/example.csv
+    output_columns:
+      - {name: order_id, type: INTEGER, nullable: false}
+      - {name: amount, type: "DOUBLE PRECISION", nullable: true}

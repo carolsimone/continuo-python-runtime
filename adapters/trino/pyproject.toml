@@ -14,7 +14,7 @@ dependencies = [
     # directly, so the pair must stay the tested one.
     "continuo-engine-contract==0.7.2",
     "trino==0.338.0",
-    "pyarrow==25.0.0",
+    "pyarrow==25.0.1",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -27,11 +27,11 @@ trino = "continuo_python_runtime_trino.adapter:TrinoAdapter"
 
 [dependency-groups]
 dev = [
-    "ruff==0.3.0",
+    "ruff==0.16.3",
     "mypy==2.3.1",
 ]
 test = [
-    "pytest==9.0.3",
+    "pytest==9.1.1",
     "pytest-cov==7.1.0",
 ]
 
@@ -44,6 +44,10 @@ packages = ["continuo_python_runtime_trino"]
 
 [tool.ruff]
 target-version = "py312"
+
+[tool.ruff.lint]
+# Kept in lockstep with the root pyproject's select — see the note there.
+select = ["E4", "E7", "E9", "F"]
 
 [tool.mypy]
 python_version = "3.14"

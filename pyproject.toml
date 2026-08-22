@@ -20,11 +20,11 @@ dependencies = [
     # contract version never exists without a new runtime version to match it;
     # an exact pin therefore costs nothing and keeps the tested pair together.
     "continuo-engine-contract==0.7.2",
-    "boto3==1.43.59",
-    "pyarrow==25.0.0",
+    "boto3==1.43.74",
+    "pyarrow==25.0.1",
     "PyYAML==6.0.3",
     # Pinned in lockstep with continuo-engine-contract's OWN sqlglot pin
-    # (currently ==30.15.0) -- bump this whenever that pin moves.
+    # (currently ==30.17.0) -- bump this whenever that pin moves.
     # continuo_python_runtime/contract/loader.py imports sqlglot.errors
     # directly to catch TokenError, which escapes
     # continuo_engine_contract.sql.ensure_single_read uncaught despite
@@ -33,7 +33,7 @@ dependencies = [
     # parser's own ParseError handling ever runs). Once that contract bug is
     # fixed upstream, this direct import -- and this explicit pin, since
     # sqlglot would then again be needed only transitively -- can be dropped.
-    "sqlglot==30.15.0",
+    "sqlglot==30.17.0",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -45,8 +45,8 @@ classifiers = [
 continuo-runtime = "continuo_python_runtime.cli:main"
 
 [dependency-groups]
-dev = ["ruff==0.3.0", "mypy==2.3.1", "types-PyYAML==6.0.12.20250915"]
-test = ["pytest==9.0.3", "pytest-cov==7.1.0"]
+dev = ["ruff==0.16.3", "mypy==2.3.1", "types-PyYAML==6.0.12.20250915"]
+test = ["pytest==9.1.1", "pytest-cov==7.1.0"]
 
 [build-system]
 requires = ["hatchling"]
@@ -57,6 +57,15 @@ packages = ["continuo_python_runtime"]
 
 [tool.ruff]
 target-version = "py312"
+
+[tool.ruff.lint]
+# Pin the rule set ruff enforced by default through 0.3.0. Ruff's default
+# `select` widened enormously in later releases (0.16 enables 400+ rules by
+# default), so an unpinned bump silently switches on hundreds of new rules —
+# including behavior-changing ones (e.g. TRY004 wants TypeError over
+# ValueError). Adopting more rules should be a deliberate change here, not a
+# side effect of a dependency bump.
+select = ["E4", "E7", "E9", "F"]
 
 [tool.mypy]
 python_version = "3.14"

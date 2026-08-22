@@ -6,7 +6,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
       - name: Sync
         run: uv sync --all-packages --all-groups
@@ -41,7 +41,7 @@ jobs:
   integration-postgres:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
       - run: uv sync --all-packages --all-groups
       - name: Start postgres stack
@@ -55,7 +55,7 @@ jobs:
   integration-trino:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
       - run: uv sync --all-packages --all-groups
       - name: Start trino stack

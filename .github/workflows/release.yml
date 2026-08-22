@@ -53,7 +53,7 @@ jobs:
       # other source of the repo's files. Its absence went unnoticed through
       # review because this job only triggers on push:tags, never on
       # pull_request, so no PR's CI ever actually executes it.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Wait for publish-pypi.yml and images.yml to finish on this commit
         run: |

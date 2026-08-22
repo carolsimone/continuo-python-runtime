@@ -43,7 +43,7 @@ jobs:
       id-token: write # OIDC token for Trusted Publishing
       contents: read # actions/checkout needs read access to the repo
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
       - name: Test before publishing
         # `-m "not image"` deselects the image smoke tests; images.yml runs

@@ -47,7 +47,7 @@ jobs:
       # range (below), and this repository is small enough (a few hundred KB,
       # well under a second to scan) that fetch-depth: 0 costs nothing on every
       # trigger rather than only on the schedule.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -106,7 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Advisory: reports HIGH/CRITICAL and always exits 0. Base-image and
       # transitive CVEs are often unfixable upstream, so gating on them would

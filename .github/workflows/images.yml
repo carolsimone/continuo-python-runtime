@@ -25,7 +25,7 @@ jobs:
         run: docker build -f Dockerfile.${{ matrix.engine }} -t cpr-smoke-${{ matrix.engine }} .
       - name: Save image
         run: docker save cpr-smoke-${{ matrix.engine }} -o /tmp/cpr-smoke-${{ matrix.engine }}.tar
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cpr-smoke-${{ matrix.engine }}-image
           path: /tmp/cpr-smoke-${{ matrix.engine }}.tar

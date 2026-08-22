@@ -20,8 +20,8 @@ dependencies = [
     # contract version never exists without a new runtime version to match it;
     # an exact pin therefore costs nothing and keeps the tested pair together.
     "continuo-engine-contract==0.7.2",
-    "boto3==1.43.59",
-    "pyarrow==25.0.0",
+    "boto3==1.43.74",
+    "pyarrow==25.0.1",
     "PyYAML==6.0.3",
     # Pinned in lockstep with continuo-engine-contract's OWN sqlglot pin
     # (currently ==30.15.0) -- bump this whenever that pin moves.
@@ -33,7 +33,7 @@ dependencies = [
     # parser's own ParseError handling ever runs). Once that contract bug is
     # fixed upstream, this direct import -- and this explicit pin, since
     # sqlglot would then again be needed only transitively -- can be dropped.
-    "sqlglot==30.15.0",
+    "sqlglot==30.17.0",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

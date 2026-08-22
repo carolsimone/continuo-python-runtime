@@ -45,6 +45,10 @@ packages = ["continuo_python_runtime_trino"]
 [tool.ruff]
 target-version = "py312"
 
+[tool.ruff.lint]
+# Kept in lockstep with the root pyproject's select — see the note there.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.mypy]
 python_version = "3.14"
 strict = false

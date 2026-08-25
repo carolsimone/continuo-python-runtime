@@ -18,6 +18,12 @@ on:
 
 jobs:
   build:
+    # This workflow also triggers on workflow_run (publish-pypi completion) to
+    # run the `publish` job below; that trigger checks out the default branch,
+    # not the tag commit, and has no downstream consumer for this job's
+    # smoke-test images (publish's needs: was removed), so skip it here rather
+    # than run a wrong-ref, pointless build on every release.
+    if: github.event_name != 'workflow_run'
     strategy:
       matrix:
         engine: [postgres, trino]
@@ -39,6 +45,10 @@ jobs:
 
   smoke-postgres:
     needs: build
+    # Redundant with build's own guard skipping it via `needs`, but explicit
+    # here too: this job must never run against a workflow_run-triggered,
+    # default-branch checkout.
+    if: github.event_name != 'workflow_run'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -108,6 +118,10 @@ jobs:
 
   smoke-trino:
     needs: build
+    # Redundant with build's own guard skipping it via `needs`, but explicit
+    # here too: this job must never run against a workflow_run-triggered,
+    # default-branch checkout.
+    if: github.event_name != 'workflow_run'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

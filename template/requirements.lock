@@ -7,16 +7,16 @@
 # Dockerfile) — they carry no hashes yet, so installing from this file AS-IS
 # WILL FAIL. Do not ship it unmodified.
 #
-# Once continuo-python-runtime==0.4.0 and continuo-postgres-adapter==0.2.0 (or
+# Once continuo-python-runtime==0.4.1 and continuo-postgres-adapter==0.2.0 (or
 # whichever versions you depend on) are published on PyPI, regenerate a real
 # hash-locked file for your engine and versions with:
 #
 #   uv pip compile --generate-hashes --python-version 3.14 - -o template/requirements.lock <<'EOF'
-#   continuo-python-runtime==0.4.0
+#   continuo-python-runtime==0.4.1
 #   continuo-<engine>-adapter==X.Y.Z
 #   EOF
 #
 # Swap <engine>/X.Y.Z for the adapter you actually use (e.g. trino==0.2.0),
 # then commit the regenerated file with its --hash entries.
-continuo-python-runtime==0.4.0
+continuo-python-runtime==0.4.1
 continuo-postgres-adapter==0.2.0

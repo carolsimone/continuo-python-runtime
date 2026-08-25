@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 from continuo_python_runtime.harness import run_node
-from continuo_python_runtime_postgres.adapter import PostgresAdapter
+from continuo_postgres_adapter.adapter import PostgresAdapter
 
 PG = dict(
     host="localhost",

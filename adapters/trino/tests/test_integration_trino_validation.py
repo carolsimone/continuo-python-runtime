@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from continuo_python_runtime_trino.adapter import TrinoAdapter
+from continuo_trino_adapter.adapter import TrinoAdapter
 
 TRINO_ENV = {
     "TRINO_HOST": "localhost",

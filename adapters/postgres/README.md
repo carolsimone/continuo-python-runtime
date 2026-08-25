@@ -1,4 +1,4 @@
-# continuo-python-runtime-postgres
+# continuo-postgres-adapter
 
 Postgres engine-adapter library for Continuo python nodes. `PostgresAdapter`
 implements `continuo_engine_contract.port.WarehouseAdapter` (from the

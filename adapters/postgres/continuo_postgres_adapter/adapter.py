@@ -39,7 +39,7 @@ from psycopg2 import errors as pg_errors  # type: ignore[import-untyped]
 from psycopg2 import sql as pg_sql  # type: ignore[import-untyped]
 from psycopg2.extras import execute_values  # type: ignore[import-untyped]
 
-logger = logging.getLogger("continuo_python_runtime_postgres")
+logger = logging.getLogger("continuo_postgres_adapter")
 
 # The postgres physical-layout vocabulary, mirroring dbt-postgres's own `indexes`
 # config so the graph reads a python node's layout the way it reads a dbt model's.

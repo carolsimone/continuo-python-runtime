@@ -6,7 +6,7 @@ Iceberg stack in test_integration_trino.py, not with mocked cursors/connections 
 """
 import pytest
 
-from continuo_python_runtime_trino.adapter import (
+from continuo_trino_adapter.adapter import (
     TrinoAdapter,
     _quote,
     _sql_string,

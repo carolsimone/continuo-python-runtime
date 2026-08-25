@@ -21,9 +21,9 @@ import pyarrow as pa
 import pytest
 from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 
-import continuo_python_runtime_trino.adapter as adapter_module
+import continuo_trino_adapter.adapter as adapter_module
 
-from continuo_python_runtime_trino.adapter import (
+from continuo_trino_adapter.adapter import (
     TrinoAdapter,
     _arrow_table_from_rows,
     _quote,

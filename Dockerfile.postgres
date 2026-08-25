@@ -1,16 +1,50 @@
 FROM python:3.14-slim
-# One dual-role image per engine: the python-node runtime harness (default
-# command `run`, domain repos build FROM this) and the blue/green validation
-# runner (`validation-op`, continuo's executor sets it as the container
-# command). Everything installs from this repo's own workspace paths in one
-# pip transaction — no PyPI propagation lag; images always build from repo head.
-#   docker build -f Dockerfile.postgres .
-COPY pyproject.toml README.md /src/
-COPY contract /src/contract
-COPY continuo_python_runtime /src/continuo_python_runtime
-COPY adapters/postgres /src/adapters/postgres
-RUN pip install --no-cache-dir /src/contract /src/adapters/postgres /src \
-    && rm -rf /src
+# One dual-role image per engine — the python-node runtime harness (default
+# command `run`) and the blue/green validation runner (`validation-op`). It
+# installs the PUBLISHED, versioned libraries, never the repo source:
+#   WHEEL_SOURCE=pypi       (release) installs the pins from PyPI. PyPI versions
+#                           are immutable and the image is consumed
+#                           digest-pinned, so no hash lock is needed here.
+#   WHEEL_SOURCE=wheelhouse (CI/PR)   installs the same pins from ./wheelhouse
+#                           (built by CI) so an unreleased change is testable.
+# The wheelhouse holds only this repo's own first-party wheels (built via
+# `uv build --all-packages`); third-party dependencies always resolve from
+# PyPI in both branches, so the wheelhouse branch never passes --no-index to
+# the requirements install below.
+# The pinned versions live in image-requirements-postgres.txt, kept equal to the
+# repo's pyproject versions by tests/test_image_requirements_sync.py.
+#
+# The wheelhouse branch installs its three first-party wheels (contract,
+# runtime, adapter) by exact local file first, with --no-index --no-deps: a
+# plain `--find-links=/tmp/wheelhouse -r req.txt` is not enough, because pip
+# does not prefer a find-links wheel over an index match at the same
+# name+version, and continuo-python-runtime / continuo-engine-contract are
+# already published on PyPI under the version this repo's HEAD currently
+# carries (a routine dependency bump lands between releases without a version
+# bump). Left unpinned-by-file, pip silently installs the last PyPI release's
+# transitive pins instead of the wheel this build just produced, defeating
+# the point of testing an unreleased change. Installing the exact local files
+# first (no index contacted at all for this step) is unambiguous; the second
+# install then only has PyPI-only third-party deps left to resolve, and finds
+# the three first-party packages already satisfied.
+ARG WHEEL_SOURCE=pypi
+COPY image-requirements-postgres.txt /tmp/req.txt
+# Optional COPY: the bracket glob matches ./wheelhouse when it exists (the CI/PR
+# WHEEL_SOURCE=wheelhouse path builds it) and no-ops when it is absent, so a
+# release build or a plain `docker build -f Dockerfile.postgres .` needs no
+# pre-created directory. Only the wheelhouse branch below reads its contents.
+COPY wheelhous[e] /tmp/wheelhouse
+RUN set -eu; \
+    if [ "$WHEEL_SOURCE" = "wheelhouse" ]; then \
+      pip install --no-cache-dir --no-index --no-deps \
+        /tmp/wheelhouse/continuo_engine_contract-*.whl \
+        /tmp/wheelhouse/continuo_python_runtime-*.whl \
+        /tmp/wheelhouse/continuo_postgres_adapter-*.whl; \
+      pip install --no-cache-dir -r /tmp/req.txt; \
+    else \
+      pip install --no-cache-dir -r /tmp/req.txt; \
+    fi; \
+    rm -rf /tmp/req.txt /tmp/wheelhouse
 # PYTHONPATH is belt-and-braces: the harness also inserts APP_ROOT and the
 # node script's own directory at the front of sys.path before executing it.
 ENV CONTRACT_DIR=/app/contracts APP_ROOT=/app PYTHONPATH=/app

@@ -1,0 +1,23 @@
+# Shape 2 — build a python-node image on YOUR OWN base, installing the Continuo
+# runtime + one engine adapter from PyPI. Deterministic via a hash-locked
+# requirements file (regenerate with the command in template/README.md).
+# Shape 1 (FROM the engine image, see template/Dockerfile) is simpler; use this
+# only when you must control the base image.
+FROM python:3.14-slim
+COPY requirements.lock /tmp/requirements.lock
+RUN pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock \
+    && rm -f /tmp/requirements.lock
+ENV CONTRACT_DIR=/app/contracts APP_ROOT=/app PYTHONPATH=/app
+WORKDIR /app
+COPY contracts/ /app/contracts/
+COPY scripts/ /app/scripts/
+# COPY every OTHER directory your scripts import from, too. CI folds a script's
+# transitive in-repo import closure into shared_code_hash, so a helper module in
+# e.g. lib/ or common/ is hashed whether or not it is in the image — a helper
+# left out here produces a valid release artifact and a node that dies with
+# ModuleNotFoundError on its first run. Add one line per such directory, e.g.:
+# COPY lib/ /app/lib/
+RUN useradd --uid 65532 --no-create-home --shell /usr/sbin/nologin nonroot
+USER 65532:65532
+ENTRYPOINT ["continuo-runtime"]
+CMD ["run"]

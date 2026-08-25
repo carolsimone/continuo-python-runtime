@@ -57,8 +57,8 @@ uv run ruff check .
 uv run ruff check contract
 uv run mypy continuo_python_runtime
 uv run mypy contract/continuo_engine_contract
-uv run --package continuo-python-runtime-postgres mypy adapters/postgres/continuo_python_runtime_postgres
-uv run --package continuo-python-runtime-trino mypy adapters/trino/continuo_python_runtime_trino
+uv run --package continuo-postgres-adapter mypy adapters/postgres/continuo_postgres_adapter
+uv run --package continuo-trino-adapter mypy adapters/trino/continuo_trino_adapter
 uv run pytest --cov=continuo_python_runtime -m "not image and not integration" -v
 uv run pytest tests/test_csv_readers_integration.py tests/test_validation_runner.py -m integration -v
 uv run pytest contract/tests -v

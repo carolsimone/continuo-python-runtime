@@ -7,7 +7,7 @@ cursors/connections here.
 """
 import pytest
 
-from continuo_python_runtime_postgres.adapter import PostgresAdapter, _index_name, _validated_indexes
+from continuo_postgres_adapter.adapter import PostgresAdapter, _index_name, _validated_indexes
 
 
 def test_required_env_names_connection_vars():

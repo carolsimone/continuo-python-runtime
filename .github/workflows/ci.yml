@@ -19,9 +19,9 @@ jobs:
       - name: Types (contract)
         run: uv run mypy contract/continuo_engine_contract
       - name: Types (postgres adapter)
-        run: uv run --package continuo-python-runtime-postgres mypy adapters/postgres/continuo_python_runtime_postgres
+        run: uv run --package continuo-postgres-adapter mypy adapters/postgres/continuo_postgres_adapter
       - name: Types (trino adapter)
-        run: uv run --package continuo-python-runtime-trino mypy adapters/trino/continuo_python_runtime_trino
+        run: uv run --package continuo-trino-adapter mypy adapters/trino/continuo_trino_adapter
       # `-m "not image"` deselects tests/test_image_smoke_validation.py, which
       # needs a built engine image and the env naming it. Those tests run in
       # images.yml's smoke jobs, where an image actually exists. `and not

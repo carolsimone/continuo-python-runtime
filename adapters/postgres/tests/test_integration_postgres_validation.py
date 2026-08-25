@@ -6,7 +6,7 @@ import uuid
 import psycopg2
 import pytest
 
-from continuo_python_runtime_postgres.adapter import PostgresAdapter
+from continuo_postgres_adapter.adapter import PostgresAdapter
 
 PG = dict(
     host="localhost",

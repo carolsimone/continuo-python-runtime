@@ -9,9 +9,9 @@ resolution-markers = [
 [manifest]
 members = [
     "continuo-engine-contract",
+    "continuo-postgres-adapter",
     "continuo-python-runtime",
-    "continuo-python-runtime-postgres",
-    "continuo-python-runtime-trino",
+    "continuo-trino-adapter",
 ]
 
 [[package]]
@@ -171,6 +171,43 @@ dependencies = [
 requires-dist = [{ name = "sqlglot", specifier = "==30.17.0" }]
 
 [[package]]
+name = "continuo-postgres-adapter"
+version = "0.2.0"
+source = { editable = "adapters/postgres" }
+dependencies = [
+    { name = "continuo-engine-contract" },
+    { name = "psycopg2-binary" },
+    { name = "pyarrow" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "ruff" },
+]
+test = [
+    { name = "pytest" },
+    { name = "pytest-cov" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "continuo-engine-contract", editable = "contract" },
+    { name = "psycopg2-binary", specifier = "==2.9.12" },
+    { name = "pyarrow", specifier = "==25.0.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = "==2.3.1" },
+    { name = "ruff", specifier = "==0.16.3" },
+]
+test = [
+    { name = "pytest", specifier = "==9.1.1" },
+    { name = "pytest-cov", specifier = "==7.1.0" },
+]
+
+[[package]]
 name = "continuo-python-runtime"
 version = "0.4.0"
 source = { editable = "." }
@@ -214,44 +251,7 @@ test = [
 ]
 
 [[package]]
-name = "continuo-python-runtime-postgres"
-version = "0.2.0"
-source = { editable = "adapters/postgres" }
-dependencies = [
-    { name = "continuo-engine-contract" },
-    { name = "psycopg2-binary" },
-    { name = "pyarrow" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "ruff" },
-]
-test = [
-    { name = "pytest" },
-    { name = "pytest-cov" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "continuo-engine-contract", editable = "contract" },
-    { name = "psycopg2-binary", specifier = "==2.9.12" },
-    { name = "pyarrow", specifier = "==25.0.1" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = "==2.3.1" },
-    { name = "ruff", specifier = "==0.16.3" },
-]
-test = [
-    { name = "pytest", specifier = "==9.1.1" },
-    { name = "pytest-cov", specifier = "==7.1.0" },
-]
-
-[[package]]
-name = "continuo-python-runtime-trino"
+name = "continuo-trino-adapter"
 version = "0.2.0"
 source = { editable = "adapters/trino" }
 dependencies = [

@@ -21,7 +21,7 @@ import pytest
 
 import trino
 
-from continuo_python_runtime_trino.adapter import TrinoAdapter
+from continuo_trino_adapter.adapter import TrinoAdapter
 
 TRINO_ENV = {
     "TRINO_HOST": "localhost",
@@ -359,7 +359,7 @@ def test_entry_point_resolves_to_this_adapter():
     """The `trino` engine entry point is registered and loads TrinoAdapter.
 
     Does NOT call discover_adapter(): see the module docstring — with
-    continuo-python-runtime-postgres also installed in this dev venv, two entry points
+    continuo-postgres-adapter also installed in this dev venv, two entry points
     are registered under continuo_engine.adapters, and discover_adapter()
     deliberately raises when more than one is installed. Only a runner image
     (which installs exactly one engine package) can rely on discovery choosing

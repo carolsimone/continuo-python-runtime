@@ -1,4 +1,4 @@
-# continuo-python-runtime-trino
+# continuo-trino-adapter
 
 Trino (Iceberg connector) engine-adapter library for Continuo python nodes.
 `TrinoAdapter` implements `continuo_engine_contract.port.WarehouseAdapter`
@@ -24,7 +24,7 @@ the adapter module docstring.
 Unlike the postgres runtime adapter, Trino/Iceberg has no multi-statement
 transactions, so `load()` cannot be a single atomic TRUNCATE+INSERT. Two
 atomic-replace primitives were verified live (Trino 483 + Iceberg REST catalog)
-before choosing one — see the full writeup in `continuo_python_runtime_trino/adapter.py`'s
+before choosing one — see the full writeup in `continuo_trino_adapter/adapter.py`'s
 module docstring:
 
 - `CREATE OR REPLACE TABLE t AS SELECT * FROM stage` is a single Iceberg

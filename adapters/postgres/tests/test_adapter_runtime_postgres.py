@@ -25,9 +25,9 @@ import pyarrow as pa
 import pytest
 from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 
-import continuo_python_runtime_postgres.adapter as adapter_module
+import continuo_postgres_adapter.adapter as adapter_module
 
-from continuo_python_runtime_postgres.adapter import (
+from continuo_postgres_adapter.adapter import (
     PostgresAdapter,
     _arrow_table_from_rows,
     _index_name,

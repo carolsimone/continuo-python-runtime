@@ -79,7 +79,7 @@ import trino
 
 from trino.auth import BasicAuthentication
 
-logger = logging.getLogger("continuo_python_runtime_trino")
+logger = logging.getLogger("continuo_trino_adapter")
 
 # Grammar spellings that are not valid Trino type names, mapped to the Trino
 # spelling with equivalent semantics. Matching is case-insensitive; lookup keys

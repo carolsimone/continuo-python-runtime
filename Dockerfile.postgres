@@ -29,8 +29,11 @@ FROM python:3.14-slim
 # the three first-party packages already satisfied.
 ARG WHEEL_SOURCE=pypi
 COPY image-requirements-postgres.txt /tmp/req.txt
-# CI always creates ./wheelhouse (empty on release) so this COPY never fails.
-COPY wheelhouse /tmp/wheelhouse
+# Optional COPY: the bracket glob matches ./wheelhouse when it exists (the CI/PR
+# WHEEL_SOURCE=wheelhouse path builds it) and no-ops when it is absent, so a
+# release build or a plain `docker build -f Dockerfile.postgres .` needs no
+# pre-created directory. Only the wheelhouse branch below reads its contents.
+COPY wheelhous[e] /tmp/wheelhouse
 RUN set -eu; \
     if [ "$WHEEL_SOURCE" = "wheelhouse" ]; then \
       pip install --no-cache-dir --no-index --no-deps \

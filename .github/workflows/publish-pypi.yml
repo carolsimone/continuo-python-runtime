@@ -48,11 +48,21 @@ jobs:
       - name: Refuse a tag that changed a package without bumping its version
         run: python scripts/check_version_bumps.py
       - name: Test before publishing
-        # `-m "not image"` deselects the image smoke tests; images.yml runs
-        # those against a built engine image.
+        # Gate all four published projects, including both adapter suites — an
+        # adapter regression must block its own immutable PyPI upload, and
+        # images.yml runs in parallel so its smoke failure cannot. Each suite is
+        # a SEPARATE pytest invocation: every workspace member's tests/ is its
+        # own `tests` package (with __init__.py + conftest.py), so running two
+        # of them in one process collides on the `tests.conftest` module name
+        # (see the [tool.pytest.ini_options] note in pyproject.toml). `not image
+        # and not integration` deselects the tests needing a built engine image
+        # or a live warehouse (images.yml / the smoke jobs cover those). The
+        # step's default `set -e` fails the gate if any invocation fails.
         run: |
           uv sync --all-packages --all-groups
-          uv run pytest tests contract/tests -m "not image" -q
+          uv run pytest tests contract/tests -m "not image and not integration" -q
+          uv run pytest adapters/postgres/tests -m "not image and not integration" -q
+          uv run pytest adapters/trino/tests -m "not image and not integration" -q
       - name: Build the contract sdist + wheel
         run: uv build --package continuo-engine-contract -o dist
       - name: Build the runtime sdist + wheel

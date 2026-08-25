@@ -198,18 +198,21 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # The Dockerfiles unconditionally COPY ./wheelhouse (see Dockerfile.postgres
-      # / Dockerfile.trino); this build installs from PyPI (WHEEL_SOURCE
-      # defaults to pypi below), so the directory only needs to exist, not
-      # contain anything.
-      - name: Create empty wheelhouse (release installs from PyPI, not this dir)
-        run: mkdir -p wheelhouse
+      # The pinned distributions declare Requires-Python >= 3.14, so the
+      # availability probe must resolve them under a 3.14 interpreter — the
+      # runner's default python is older and pip would reject them even after
+      # they are published, spinning out every retry. (The image build itself
+      # installs inside python:3.14-slim, so it is unaffected; this is only for
+      # the host-side probe below.)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
       - name: Wait until the pinned versions are installable from PyPI
         run: |
           set -eu
           req="image-requirements-${{ matrix.engine }}.txt"
           for i in $(seq 1 30); do
-            if pip download --dest /tmp/probe -r "$req" >/tmp/probe.log 2>&1; then
+            if python -m pip download --dest /tmp/probe -r "$req" >/tmp/probe.log 2>&1; then
               echo "installable"; exit 0
             fi
             echo "attempt $i: not yet on index; sleeping"; sleep 20

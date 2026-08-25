@@ -4,8 +4,8 @@ name: publish-pypi
 # (the harness) and continuo-engine-contract (the port, result-block format,
 # and shared guards) — via PyPI Trusted Publishing (OIDC, no stored token).
 #
-# The two engine adapters (continuo-python-runtime-postgres /
-# continuo-python-runtime-trino) are deliberately NOT published here. Nothing
+# The two engine adapters (continuo-postgres-adapter /
+# continuo-trino-adapter) are deliberately NOT published here. Nothing
 # installs them from an index: the engine images build them from the build
 # context (see Dockerfile.postgres / Dockerfile.trino and images.yml), and the
 # harness package does not depend on them — adapters are found at run time

@@ -50,8 +50,8 @@ validation-side port, adapter class, entry-point group, or image. One
 | --- | --- | --- | --- |
 | `continuo-python-runtime` | `continuo_python_runtime` | this repo (root) | Harness (CLI, `conform()`, `RunContext`, error taxonomy) **and** the validation runner (`continuo-runtime validation-op`). Published to PyPI. |
 | `continuo-engine-contract` | `continuo_engine_contract` | this repo, `contract/` | The `WarehouseAdapter` port, contract schema, the SQL/type/config guards adapters must run, and the result-block format. Published to PyPI. |
-| `continuo-python-runtime-postgres` | `continuo_python_runtime_postgres` | this repo, `adapters/postgres/` | `PostgresAdapter` — one class, both roles. **Not published to PyPI** — built from source into the image. |
-| `continuo-python-runtime-trino` | `continuo_python_runtime_trino` | this repo, `adapters/trino/` | `TrinoAdapter` — one class, both roles, for Trino/Iceberg. **Not published to PyPI** — built from source into the image. |
+| `continuo-postgres-adapter` | `continuo_postgres_adapter` | this repo, `adapters/postgres/` | `PostgresAdapter` — one class, both roles. **Not published to PyPI** — built from source into the image. |
+| `continuo-trino-adapter` | `continuo_trino_adapter` | this repo, `adapters/trino/` | `TrinoAdapter` — one class, both roles, for Trino/Iceberg. **Not published to PyPI** — built from source into the image. |
 
 All four are uv workspace members (`[tool.uv.workspace]` in the root
 `pyproject.toml`), so `uv sync --all-packages --all-groups` at the repo root

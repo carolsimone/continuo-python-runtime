@@ -20,6 +20,52 @@ This is a copy-ready template for implementing a [Continuo Python domain repo](h
 5. **Write your contracts** in `contracts/` and **implement scripts** in `scripts/`
 6. **Push to main** to trigger the release pipeline
 
+## Choosing a base
+
+This template ships two Dockerfiles that produce the same kind of image
+(`ENTRYPOINT ["continuo-runtime"]`, `CMD ["run"]`, contracts + scripts baked
+in, running as uid 65532) via two different build shapes. Pick one; you only
+need one Dockerfile in your repo.
+
+**Shape 1 — `Dockerfile`, `FROM` the engine image (simplest).** Builds
+`FROM ghcr.io/carolsimone/continuo-python-runtime-<engine>:vX.Y.Z`, an image
+that already has the Continuo runtime and one engine adapter installed and
+pinned by the publisher. You only add your `contracts/` and `scripts/` (and
+any extra dependency your script needs). Pin by tag or digest
+(`:vX.Y.Z@sha256:<digest>`) for reproducibility. Use this unless you have a
+specific reason not to.
+
+**Shape 2 — `Dockerfile.pip`, your own base (hash-locked).** Builds
+`FROM python:3.14-slim` (or another base you control) and installs
+`continuo-python-runtime` plus one `continuo-<engine>-adapter` from PyPI via
+`pip install --require-hashes -r requirements.lock`. Use this when you must
+control the base image yourself — e.g. your org mandates a specific base,
+you need OS packages the engine image doesn't carry, or you're building on a
+platform the published engine images don't target. `requirements.lock` is
+the one place in this template where `--require-hashes` and a committed
+hash-lock are used (the engine images themselves pin by version only); this
+is what makes the Shape-2 build deterministic without depending on the
+publisher's image layers.
+
+Regenerate `requirements.lock` for your engine and versions with:
+
+```bash
+uv pip compile --generate-hashes --python-version 3.14 - -o requirements.lock <<'EOF'
+continuo-python-runtime==0.4.0
+continuo-<engine>-adapter==X.Y.Z
+EOF
+```
+
+The committed `requirements.lock` in this template is a **placeholder**: the
+adapters were not yet published to PyPI when it was written, so it has no
+`--hash` entries and `pip install --require-hashes` will refuse to install it
+as-is. Regenerate it once your chosen adapter version is actually on PyPI.
+
+The image name (`continuo-python-runtime-<engine>`, what Shape 1 pulls) and
+the pip distribution name (`continuo-<engine>-adapter`, what Shape 2
+installs) are two artifacts published from the same adapter source — same
+engine, same version, same runtime behavior, different packaging.
+
 ## Pipeline Overview
 
 The CI/CD pipeline (`release.yml`) performs the six-step orchestration:

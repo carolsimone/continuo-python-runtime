@@ -18,9 +18,9 @@ name: publish-pypi
 # claims every tag beginning with "v"; no other pattern may be introduced.
 # Tag `v<ver>-test<n>` publishes to TestPyPI; `v<ver>` publishes to real PyPI.
 # The GitHub environment name is what the PyPI "pending publisher" is
-# registered against — both project names need one on each index.
+# registered against — all four project names need one on each index.
 #
-# Both distributions are built into a single `dist/` and uploaded in one
+# All four distributions are built into a single `dist/` and uploaded in one
 # publish call, so there is no ordering constraint between them. The runtime
 # wheel declares continuo-engine-contract as a dependency and resolves it from
 # the index at install time ([tool.uv.sources] is dev-only and is not embedded

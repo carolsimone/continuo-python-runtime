@@ -12,18 +12,9 @@ on:
   push:
     tags:
       - "v*"
-  workflow_run:
-    workflows: ["publish-pypi"]
-    types: [completed]
 
 jobs:
   build:
-    # This workflow also triggers on workflow_run (publish-pypi completion) to
-    # run the `publish` job below; that trigger checks out the default branch,
-    # not the tag commit, and has no downstream consumer for this job's
-    # smoke-test images (publish's needs: was removed), so skip it here rather
-    # than run a wrong-ref, pointless build on every release.
-    if: github.event_name != 'workflow_run'
     strategy:
       matrix:
         engine: [postgres, trino]
@@ -45,10 +36,6 @@ jobs:
 
   smoke-postgres:
     needs: build
-    # Redundant with build's own guard skipping it via `needs`, but explicit
-    # here too: this job must never run against a workflow_run-triggered,
-    # default-branch checkout.
-    if: github.event_name != 'workflow_run'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -118,10 +105,6 @@ jobs:
 
   smoke-trino:
     needs: build
-    # Redundant with build's own guard skipping it via `needs`, but explicit
-    # here too: this job must never run against a workflow_run-triggered,
-    # default-branch checkout.
-    if: github.event_name != 'workflow_run'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -173,29 +156,31 @@ jobs:
         if: always()
         run: docker compose -f tests/smoke/trino-stack/docker-compose.yml down -v
 
-  # Runs after publish-pypi.yml finishes publishing this tag's wheels to the
-  # real PyPI index (workflow_run, not push:tags — this job must not race the
-  # publish it depends on). It builds both engine images for linux/amd64 and
-  # linux/arm64 installing the pinned versions FROM PyPI (WHEEL_SOURCE=pypi,
-  # the Dockerfile default), so the published image is never ahead of what's
-  # actually installable, then pushes them to
-  # ghcr.io/<owner>/continuo-python-runtime-<engine>:<tag>. The engine belongs
-  # in the image NAME, not the tag: Continuo's Helm chart pins an image as
-  # `<name>:vX.Y.Z@sha256:<digest>`, so the tag must be the bare version. Both
-  # platforms are required: domain repos build their own images FROM these,
-  # and Continuo's e2e runs them in a kind cluster on aarch64 developer
-  # machines as well as on amd64 CI runners, so a single-arch publish is
-  # unusable off amd64. The smoke jobs above stay single-arch — they load a
-  # `docker save` tarball, which has no multi-platform equivalent.
+  # Runs on this same tag push, after the smoke jobs above pass. It builds both
+  # engine images for linux/amd64 and linux/arm64 installing the pinned
+  # versions FROM PyPI (WHEEL_SOURCE=pypi, the Dockerfile default), then
+  # pushes them to ghcr.io/<owner>/continuo-python-runtime-<engine>:<tag>. The
+  # engine belongs in the image NAME, not the tag: Continuo's Helm chart pins
+  # an image as `<name>:vX.Y.Z@sha256:<digest>`, so the tag must be the bare
+  # version. Both platforms are required: domain repos build their own images
+  # FROM these, and Continuo's e2e runs them in a kind cluster on aarch64
+  # developer machines as well as on amd64 CI runners, so a single-arch
+  # publish is unusable off amd64. The smoke jobs above stay single-arch —
+  # they load a `docker save` tarball, which has no multi-platform
+  # equivalent.
+  #
+  # publish-pypi.yml runs in parallel on this same tag push, not before this
+  # job: there is no cross-workflow `needs:`, so this job cannot wait on that
+  # workflow directly. Instead the wait-until-installable step below polls
+  # PyPI until the pinned versions this tag just published are actually
+  # installable, which is what orders this build after publish-pypi.yml
+  # completes without a cross-workflow dependency.
   # -test tags publish to TestPyPI only (see publish-pypi.yml), so this job
   # skips them: there is no real-PyPI installable version to build an image
   # from for those.
   publish:
-    if: >-
-      github.event_name == 'workflow_run'
-      && github.event.workflow_run.conclusion == 'success'
-      && startsWith(github.event.workflow_run.head_branch, 'v')
-      && !contains(github.event.workflow_run.head_branch, '-test')
+    needs: [smoke-postgres, smoke-trino]
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-test')
     strategy:
       matrix:
         engine: [postgres, trino]
@@ -205,8 +190,6 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - name: Log in to ghcr.io
@@ -226,7 +209,7 @@ jobs:
           set -eu
           req="image-requirements-${{ matrix.engine }}.txt"
           for i in $(seq 1 30); do
-            if pip download --no-deps --dest /tmp/probe -r "$req" >/tmp/probe.log 2>&1; then
+            if pip download --dest /tmp/probe -r "$req" >/tmp/probe.log 2>&1; then
               echo "installable"; exit 0
             fi
             echo "attempt $i: not yet on index; sleeping"; sleep 20
@@ -239,4 +222,4 @@ jobs:
           file: Dockerfile.${{ matrix.engine }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/continuo-python-runtime-${{ matrix.engine }}:${{ github.event.workflow_run.head_branch }}
+          tags: ghcr.io/${{ github.repository_owner }}/continuo-python-runtime-${{ matrix.engine }}:${{ github.ref_name }}

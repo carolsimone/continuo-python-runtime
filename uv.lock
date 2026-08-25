@@ -161,7 +161,7 @@ wheels = [
 
 [[package]]
 name = "continuo-engine-contract"
-version = "0.7.2"
+version = "0.7.3"
 source = { editable = "contract" }
 dependencies = [
     { name = "sqlglot" },
@@ -209,7 +209,7 @@ test = [
 
 [[package]]
 name = "continuo-python-runtime"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },

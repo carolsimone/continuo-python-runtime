@@ -204,7 +204,7 @@ jobs:
       # they are published, spinning out every retry. (The image build itself
       # installs inside python:3.14-slim, so it is unaffected; this is only for
       # the host-side probe below.)
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
       - name: Wait until the pinned versions are installable from PyPI

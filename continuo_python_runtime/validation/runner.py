@@ -18,6 +18,11 @@ Dispatches on ``VALIDATION_OP`` env var (default ``build_from_sql``):
   that dropped a column the script reads fails the release gate, then the output
   table is materialized empty from the declared typed columns and the declared
   physical layout.
+- ``check_binds``: for a dbt test's compiled SQL (``CANDIDATE_SQL_URI``, fetched
+  the same way as ``build_from_sql``). EXPLAINs it against the candidate schema
+  via the engine adapter and creates nothing — a test whose compiled SQL names
+  a column a candidate change dropped or renamed fails the release at its
+  source, before any table is built.
 
 The engine adapter is discovered from the single installed
 ``continuo_engine.adapters`` entry point — each runner image installs exactly one.
@@ -108,7 +113,7 @@ def load_candidate_spec() -> dict:
     return spec
 
 
-_NODE_OPS = ("build_from_sql", "clone_from_prod", "build_from_columns")
+_NODE_OPS = ("build_from_sql", "clone_from_prod", "build_from_columns", "check_binds")
 _SCHEMA_OPS = ("ensure_schema", "drop_schema")
 
 
@@ -116,10 +121,13 @@ def main() -> None:
     """Run one validation op end to end; exits non-zero on failure.
 
     Node ops (``build_from_sql``/``clone_from_prod``/``build_from_columns``)
-    materialize one empty node table and require ``TABLE_NAME``. Schema ops
-    (``ensure_schema``/``drop_schema``) act on the whole candidate schema —
-    the executor schedules them as one-shot engine-image Jobs to own the
-    candidate-schema lifecycle without connecting to the warehouse itself —
+    materialize one empty node table and require ``TABLE_NAME``. ``check_binds``
+    is also a node op and requires ``TABLE_NAME`` (for identity only, in the
+    result block's ``unique_id``) but creates nothing: it bind-checks a dbt
+    test's compiled SQL against the candidate schema with the engine's EXPLAIN.
+    Schema ops (``ensure_schema``/``drop_schema``) act on the whole candidate
+    schema — the executor schedules them as one-shot engine-image Jobs to own
+    the candidate-schema lifecycle without connecting to the warehouse itself —
     and take no table.
     """
     logging.basicConfig(
@@ -139,7 +147,7 @@ def main() -> None:
     if op in _NODE_OPS:
         table = _require("TABLE_NAME")
         unique_id = _node_id() or f"model.{table}"
-        if op == "build_from_sql":
+        if op in ("build_from_sql", "check_binds"):
             try:
                 raw_sql = load_candidate_sql()
             except Exception as exc:
@@ -150,7 +158,7 @@ def main() -> None:
             if not raw_sql:
                 logger.error(
                     "CANDIDATE_SQL_URI is unset or the object is empty for a "
-                    "build_from_sql node; cannot validate"
+                    "%s node; cannot validate", op
                 )
                 print(result.result_block("error", "CANDIDATE_SQL_URI is unset or empty",
                                           unique_id=unique_id), flush=True)
@@ -238,6 +246,12 @@ def main() -> None:
             if op == "build_from_sql":
                 assert candidate_sql is not None, "candidate_sql must be set for build_from_sql"
                 adapter.build_empty_from_sql(schema, table, candidate_sql)
+            elif op == "check_binds":
+                # A dbt test: EXPLAIN its compiled SQL against the candidate
+                # schema. A dropped or renamed column fails here; no table is
+                # created and no row is read.
+                assert candidate_sql is not None, "candidate_sql must be set for check_binds"
+                adapter.check_binds(candidate_sql)
             elif op == "build_from_columns":
                 assert spec is not None, "spec must be set for build_from_columns"
                 if csv_source:

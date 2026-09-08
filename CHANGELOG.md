@@ -5,6 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `VALIDATION_OP=check_binds`: bind-checks a dbt test's compiled SQL
+  (`CANDIDATE_SQL_URI`) against the candidate schema with the engine's
+  EXPLAIN and creates nothing. Continuo's release-controller emits it for
+  every dbt test of a changed model.
+
 ## [0.3.1] - 2026-08-21
 
 ### Added

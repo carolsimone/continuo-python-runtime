@@ -246,6 +246,66 @@ def test_main_build_from_sql_s3_error_emits_error_block(monkeypatch, capsys):
     assert '"status":"error"' in out
 
 
+# --------------------------------------------------------------------------
+# main — check_binds (dbt test bind check: creates nothing)
+# --------------------------------------------------------------------------
+
+def test_main_check_binds_calls_adapter_and_emits_success(monkeypatch, capsys):
+    """Bind-check a dbt test's compiled SQL and emit success, creating nothing."""
+    _set_common_env(monkeypatch)
+    monkeypatch.setenv("VALIDATION_OP", "check_binds")
+    fake = FakeWarehouseAdapter()
+    _install_fake_adapter(monkeypatch, fake)
+    sql = 'select amount_eur from "_candidate_relA".tbind where amount_eur is null'
+    monkeypatch.setattr(runner, "load_candidate_sql", lambda: sql)
+
+    runner.main()
+
+    assert fake.schemas_ensured == ["_candidate_relA"]
+    assert fake.checked_binds == [sql]
+    assert fake.builds == []
+    assert fake.clones == []
+    assert fake.column_builds == []
+    assert fake.closed is True
+    out = capsys.readouterr().out
+    assert result.SENTINEL_BEGIN in out
+    assert '"status":"success"' in out
+    assert out.strip().endswith(result.SENTINEL_END)
+
+
+def test_main_check_binds_bind_error_exits_1(monkeypatch, capsys):
+    """A failing bind check on the test's compiled SQL emits an error block and exits 1."""
+    _set_common_env(monkeypatch)
+    monkeypatch.setenv("VALIDATION_OP", "check_binds")
+    sql = "select missing from t"
+    fake = FakeWarehouseAdapter()
+    fake.raise_on_binds = {sql: RuntimeError('column "missing" does not exist')}
+    _install_fake_adapter(monkeypatch, fake)
+    monkeypatch.setattr(runner, "load_candidate_sql", lambda: sql)
+
+    with pytest.raises(SystemExit) as exc:
+        runner.main()
+
+    assert exc.value.code == 1
+    assert fake.checked_binds == [sql]
+    assert fake.builds == [] and fake.clones == [] and fake.column_builds == []
+    out = capsys.readouterr().out
+    assert result.SENTINEL_BEGIN in out
+    assert '"status":"error"' in out
+    assert 'column \\"missing\\" does not exist' in out  # JSON-escaped in the result block
+
+
+def test_main_check_binds_empty_candidate_sql_errors(monkeypatch, capsys):
+    """Exit 2 when candidate SQL is empty, same as build_from_sql."""
+    _set_common_env(monkeypatch)
+    monkeypatch.setenv("VALIDATION_OP", "check_binds")
+    monkeypatch.setattr(runner, "load_candidate_sql", lambda: "")
+    with pytest.raises(SystemExit) as exc:
+        runner.main()
+    assert exc.value.code == 2
+    assert '"status":"error"' in capsys.readouterr().out
+
+
 def test_main_clone_from_prod_calls_adapter(monkeypatch, capsys):
     """Clone from prod and emit success block."""
     _set_common_env(monkeypatch)
@@ -921,6 +981,24 @@ def _setup_drop_schema(monkeypatch):
     _install_fake_adapter(monkeypatch, FakeWarehouseAdapter())
 
 
+def _setup_check_binds_success(monkeypatch):
+    """Arrange a check_binds run that reaches the success block."""
+    _set_common_env(monkeypatch)
+    monkeypatch.setenv("VALIDATION_OP", "check_binds")
+    _install_fake_adapter(monkeypatch, FakeWarehouseAdapter())
+    monkeypatch.setattr(runner, "load_candidate_sql", lambda: "select 1 from t")
+
+
+def _setup_check_binds_bind_error(monkeypatch):
+    """Arrange a check_binds run whose bind check raises."""
+    _set_common_env(monkeypatch)
+    monkeypatch.setenv("VALIDATION_OP", "check_binds")
+    fake = FakeWarehouseAdapter()
+    fake.raise_on_binds = {"select missing from t": RuntimeError("boom")}
+    _install_fake_adapter(monkeypatch, fake)
+    monkeypatch.setattr(runner, "load_candidate_sql", lambda: "select missing from t")
+
+
 def _setup_build_from_columns_success(monkeypatch):
     """Arrange a build_from_columns run that reaches the success block."""
     _set_common_env(monkeypatch)
@@ -1016,6 +1094,8 @@ _SENTINEL_SCENARIOS = [
     ("missing_required_env", _setup_missing_required_env, 2),
     ("missing_dbt_target_schema", _setup_missing_dbt_target_schema, 2),
     ("missing_prod_schema", _setup_missing_prod_schema, 2),
+    ("check_binds_success", _setup_check_binds_success, None),
+    ("check_binds_bind_error", _setup_check_binds_bind_error, 1),
     ("build_from_columns_success", _setup_build_from_columns_success, None),
     ("build_from_columns_check_binds_raises", _setup_build_from_columns_check_binds_raises, 1),
     ("build_from_columns_missing_spec_uri", _setup_build_from_columns_missing_spec_uri, 2),
@@ -1055,15 +1135,15 @@ def test_main_emits_exactly_one_sentinel_block_as_last_stdout_line(monkeypatch, 
 
     The contract (see ``result.py``) is: exactly ONE sentinel-framed block, as the
     terminal non-empty stdout line, on every outcome that emits one. Exercises all
-    twenty-one block-emitting paths through ``main()`` — success, ensure_schema,
+    twenty-three block-emitting paths through ``main()`` — success, ensure_schema,
     drop_schema, empty candidate SQL, S3-fetch error, unknown VALIDATION_OP, adapter
     discovery failure, missing required adapter env, missing DBT_TARGET_SCHEMA,
-    missing PROD_SCHEMA, and the eleven build_from_columns paths (success, a failing
-    bind check, missing CANDIDATE_SPEC_URI, empty output_columns, a non-object config,
-    a non-string csv_source, invalid spec JSON, and spec JSON that parses to a
-    list/null/int/str instead of an object) — each in its own isolated monkeypatch
-    context so scenarios cannot leak
-    patches into one another.
+    missing PROD_SCHEMA, check_binds (success and a failing bind check), and the
+    eleven build_from_columns paths (success, a failing bind check, missing
+    CANDIDATE_SPEC_URI, empty output_columns, a non-object config, a non-string
+    csv_source, invalid spec JSON, and spec JSON that parses to a list/null/int/str
+    instead of an object) — each in its own isolated monkeypatch context so
+    scenarios cannot leak patches into one another.
     """
     for name, setup, expected_exit in _SENTINEL_SCENARIOS:
         with monkeypatch.context() as mp:

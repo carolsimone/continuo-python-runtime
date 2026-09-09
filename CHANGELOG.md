@@ -5,12 +5,51 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-09
+
 ### Added
 
-- `VALIDATION_OP=check_binds`: bind-checks a dbt test's compiled SQL
-  (`CANDIDATE_SQL_URI`) against the candidate schema with the engine's
-  EXPLAIN and creates nothing. Continuo's release-controller emits it for
-  every dbt test of a changed model.
+- `check_binds` validation op: EXPLAINs a dbt test's compiled SQL against the
+  candidate schema and creates nothing, so a test that names a dropped or
+  renamed column fails. Reads the SQL from `CANDIDATE_SQL_URI`, like
+  `build_from_sql`.
+
+### Changed
+
+- `continuo-postgres-adapter` and `continuo-trino-adapter` 0.2.0 → 0.2.1.
+
+## [0.4.1] - 2026-08-25
+
+### Added
+
+- Bring-your-own engine adapters: `continuo-postgres-adapter` and
+  `continuo-trino-adapter` are separate installable packages, so an install
+  can supply its own engine adapter independently of the runtime.
+- `scripts/check_version_bumps.py`: fails a release when a package's source
+  changed since the last tag but its version did not.
+
+### Changed
+
+- Deterministic python-node container builds: pinned per-engine
+  image-requirements and hashed template Dockerfiles.
+- `continuo-engine-contract` 0.7.2 → 0.7.3.
+
+## [0.4.0] - 2026-08-21
+
+### Added
+
+- `python-csv` node kind: a contract-only CSV loader (no user script) that
+  materializes the declared table from the contract's CSV URI, with a
+  validation header check.
+
+### Changed
+
+- `continuo-engine-contract` 0.7.1 → 0.7.2.
+
+### Fixed
+
+- `release.yml`'s github-release job now checks out the repository; without the
+  checkout it could not read the tag's files.
 
 ## [0.3.1] - 2026-08-21
 

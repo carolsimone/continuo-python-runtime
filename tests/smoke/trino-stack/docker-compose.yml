@@ -4,8 +4,15 @@
 # (18080/18181/19000) to avoid colliding with other local stacks.
 services:
   minio:
-    image: minio/minio:latest
-    command: server /data
+    # ghcr mirror of Bitnami's minio image (Docker Hub's minio/minio is no
+    # longer anonymously pullable). Its ENTRYPOINT is Bitnami's own setup
+    # script, not the `minio` binary, so it's overridden here to reach
+    # `minio` directly; the data dir is Bitnami's own /bitnami/minio/data
+    # (writable by the image's non-root user) since plain /data doesn't
+    # exist in this image.
+    image: ghcr.io/carolsimone/continuo-minio:2025.7.23
+    entrypoint: minio
+    command: server /bitnami/minio/data
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -18,7 +25,11 @@ services:
       retries: 30
 
   createbuckets:
-    image: minio/mc:latest
+    # ghcr mirror of Bitnami's mc image (Docker Hub's minio/mc is no longer
+    # anonymously pullable). `mc` is on PATH, and the shell entrypoint below
+    # already bypasses this image's own Bitnami entrypoint script, so no
+    # further adaptation is needed beyond the image tag.
+    image: ghcr.io/carolsimone/continuo-mc:2025.7.21
     depends_on:
       minio:
         condition: service_healthy

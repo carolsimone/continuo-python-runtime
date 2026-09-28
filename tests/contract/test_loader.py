@@ -137,7 +137,7 @@ def test_unknown_key_error_names_source_and_node():
         assert "analytics.t" in str(exc)
 
 
-def _model_entry(**over):
+def _node_entry(**over):
     entry = dict(VALID)
     entry.update(over)
     return entry
@@ -155,9 +155,9 @@ def _csv_entry(**over):
     return entry
 
 
-def test_kind_defaults_to_python_model():
-    node = parse_node(_model_entry(), "f.yml")
-    assert node.kind == "python-model"
+def test_kind_defaults_to_python_node():
+    node = parse_node(_node_entry(), "f.yml")
+    assert node.kind == "python-node"
 
 
 def test_csv_node_parses():
@@ -189,8 +189,8 @@ def test_unknown_kind_rejected():
         parse_node(_csv_entry(kind="python-parquet"), "f.yml")
 
 
-def test_model_node_still_requires_script():
-    entry = _model_entry()
+def test_node_still_requires_script():
+    entry = _node_entry()
     del entry["script"]
     with pytest.raises(ContractError, match="script"):
         parse_node(entry, "f.yml")
@@ -526,7 +526,7 @@ def test_parse_node_dialect_reaches_ensure_single_read(monkeypatch):
         calls.append((sql, dialect))
 
     monkeypatch.setattr(
-        "continuo_python_runtime.contract.loader.ensure_single_read",
+        "continuo_python_runtime.contract.kinds.ensure_single_read",
         fake_ensure_single_read,
     )
     parse_node(VALID, "f.yml", dialect="postgres")
@@ -540,7 +540,7 @@ def test_parse_node_dialect_defaults_to_none(monkeypatch):
         calls.append(dialect)
 
     monkeypatch.setattr(
-        "continuo_python_runtime.contract.loader.ensure_single_read",
+        "continuo_python_runtime.contract.kinds.ensure_single_read",
         fake_ensure_single_read,
     )
     parse_node(VALID, "f.yml")
@@ -558,7 +558,7 @@ def test_check_reads_false_skips_ensure_single_read(monkeypatch):
         calls.append((sql, dialect))
 
     monkeypatch.setattr(
-        "continuo_python_runtime.contract.loader.ensure_single_read",
+        "continuo_python_runtime.contract.kinds.ensure_single_read",
         fake_ensure_single_read,
     )
     node = parse_node(VALID, "f.yml", check_reads=False)
@@ -674,7 +674,7 @@ def test_load_dir_config_yaml_anchor_dag_not_a_cycle_still_validates(tmp_path):
 def test_load_contract_dir_threads_check_reads_to_parse_node(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(
-        "continuo_python_runtime.contract.loader.ensure_single_read",
+        "continuo_python_runtime.contract.kinds.ensure_single_read",
         lambda sql, dialect=None: calls.append(sql),
     )
     (tmp_path / "a.yml").write_text(yaml.safe_dump({"nodes": [VALID]}))

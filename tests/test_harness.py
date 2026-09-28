@@ -20,7 +20,7 @@ from tests.conftest import FakeWarehouseAdapter
 
 def _env(repo):
     return {
-        "NODE_ID": "python-model.svc.analytics.t",
+        "NODE_ID": "python-node.svc.analytics.t",
         "TABLE_NAME": "t",
         "TARGET_SCHEMA": "analytics",
         "CONTRACT_DIR": str(repo / "contracts"),
@@ -50,7 +50,7 @@ def test_script_print_cannot_corrupt_stdout(harness_repo, capsys):
 
 
 def test_unknown_node_id_is_contract_error(harness_repo, capsys):
-    env = _env(harness_repo) | {"NODE_ID": "python-model.svc.analytics.nope"}
+    env = _env(harness_repo) | {"NODE_ID": "python-node.svc.analytics.nope"}
     assert run_node(env, adapter=FakeWarehouseAdapter()) == 1
     assert '"message":"ContractError:' in capsys.readouterr().out
 

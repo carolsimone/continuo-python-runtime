@@ -1,5 +1,6 @@
 """Contract v1 merger: wire contract builder."""
 
+from collections.abc import Callable
 from pathlib import Path
 
 import yaml
@@ -110,6 +111,29 @@ def _lint_node_closure(
         )
 
 
+def _script_hash_inputs(node: Node, repo_root: Path) -> tuple[bytes, list[bytes]]:
+    """A script node's source is its script plus its in-repo import closure,
+    every file of which is held to the closure lint."""
+    script_path = resolve_script_path(node.script, repo_root, context=node.relation)
+    script_bytes = script_path.read_bytes()
+    closure = resolve_closure(script_path, repo_root)
+    member_bytes = [member.read_bytes() for member in closure]
+    _lint_node_closure(node, repo_root, script_path, script_bytes, closure, member_bytes)
+    return script_bytes, member_bytes
+
+
+def _csv_hash_inputs(node: Node, repo_root: Path) -> tuple[bytes, list[bytes]]:
+    """A csv node has no script and no import closure: its source is the uri.
+    New file content at the same uri is new data, not a new node version."""
+    return node.reads["csv"].encode(), []
+
+
+_HASH_INPUTS: dict[str, Callable[[Node, Path], tuple[bytes, list[bytes]]]] = {
+    "python-node": _script_hash_inputs,
+    "python-csv": _csv_hash_inputs,
+}
+
+
 def build_wire_contract(
     contract_dir: Path, repo_root: Path, service: str, *, dialect: str | None = None
 ) -> dict:
@@ -129,19 +153,8 @@ def build_wire_contract(
     for node in nodes:
         entry = node_entry(node)
 
-        if node.kind == "python-csv":
-            # A csv node has no script and no import closure: its source IS
-            # the uri -- new file content at the same uri is new data, not a
-            # new node version.
-            uri_bytes = node.reads["csv"].encode()
-            entry.update(hash_parts(entry, uri_bytes, []))
-        else:
-            script_path = resolve_script_path(node.script, repo_root, context=node.relation)
-            script_bytes = script_path.read_bytes()
-            closure = resolve_closure(script_path, repo_root)
-            member_bytes = [member.read_bytes() for member in closure]
-            _lint_node_closure(node, repo_root, script_path, script_bytes, closure, member_bytes)
-            entry.update(hash_parts(entry, script_bytes, member_bytes))
+        primary_bytes, member_bytes = _HASH_INPUTS[node.kind](node, repo_root)
+        entry.update(hash_parts(entry, primary_bytes, member_bytes))
 
         wire_nodes.append(entry)
 

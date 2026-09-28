@@ -289,7 +289,7 @@ def test_main_oserror_backstop_returns_1_no_traceback(tmp_path, caplog):
 def test_run_success_emits_sentinel_block(harness_repo, monkeypatch, capsys):
     """Test that run subcommand calls harness.run_node and returns its exit code."""
     # Set environment variables for run_node
-    monkeypatch.setenv("NODE_ID", "python-model.svc.analytics.t")
+    monkeypatch.setenv("NODE_ID", "python-node.svc.analytics.t")
     monkeypatch.setenv("TABLE_NAME", "t")
     monkeypatch.setenv("TARGET_SCHEMA", "analytics")
     monkeypatch.setenv("CONTRACT_DIR", str(harness_repo / "contracts"))

@@ -143,7 +143,7 @@ Every rule below (`extra_columns`, `output_columns`, "Conform rules") applies
 to both kinds identically — `kind` only changes how the pre-conform table is
 produced, never how it is checked or written.
 
-- **`python-model`** (the default; the field may be omitted) — a script node.
+- **`python-node`** (the default; the field may be omitted) — a script node.
   It requires `script:` and a `reads:` map of one or more named SQL queries,
   as described in "The script API" below.
 - **`python-csv`** — a contract-only node: it has no script and its `reads:`
@@ -255,9 +255,9 @@ A domain repo picks its warehouse engine by which base image it builds
 `FROM`:
 
 ```dockerfile
-FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.5.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.6.0
 # or
-FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.5.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.6.0
 ```
 
 The engine is part of the image **name**; the tag is the bare version, so

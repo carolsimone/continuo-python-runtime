@@ -27,6 +27,11 @@ def test_non_string_kind_raises_contracterror_not_typeerror(bad_kind):
         parse_node(_base_node(kind=bad_kind), "t.yml")
 
 
-def test_valid_string_kind_still_accepted():
-    node = parse_node(_base_node(kind="python-model"), "t.yml")
-    assert node.kind == "python-model"
+def test_explicit_python_node_kind_is_accepted():
+    node = parse_node(_base_node(kind="python-node"), "t.yml")
+    assert node.kind == "python-node"
+
+
+def test_python_model_kind_is_rejected():
+    with pytest.raises(ContractError, match=r"'kind' must be one of \['python-csv', 'python-node'\], got 'python-model'"):
+        parse_node(_base_node(kind="python-model"), "t.yml")

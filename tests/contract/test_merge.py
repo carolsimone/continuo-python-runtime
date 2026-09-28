@@ -435,7 +435,7 @@ def test_write_wire_contract_creates_missing_out_dir(contract_repo, tmp_path):
 def test_wire_entry_carries_kind(contract_repo):
     repo = contract_repo
     doc = build_wire_contract(repo / "contracts", repo, "s")
-    assert doc["nodes"][0]["kind"] == "python-model"
+    assert doc["nodes"][0]["kind"] == "python-node"
 
 
 def test_csv_wire_entry_hashes_the_uri(tmp_path):

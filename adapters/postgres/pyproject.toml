@@ -1,5 +1,5 @@
 [project]
-version = "0.2.1"
+version = "0.2.2"
 name = "continuo-postgres-adapter"
 description = "Postgres warehouse adapter for Continuo: validation and python-node runtime."
 authors = [{ name = "Simone Carolini" }]

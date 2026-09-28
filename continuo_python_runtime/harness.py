@@ -1,6 +1,6 @@
 """Container entrypoint: dispatches a single node's script and writes its output.
 
-``run_node`` is the sole write sink for a python-model node. It resolves the
+``run_node`` is the sole write sink for a python-node node. It resolves the
 node from the contract, loads and executes its script inside a
 :class:`~continuo_python_runtime.context.RunContext`, conforms the result to
 the declared schema, and writes it through the runtime adapter. Exactly one
@@ -16,7 +16,7 @@ import logging
 import os
 import sys
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -208,15 +208,36 @@ def _validate_config_early(adapter: Any, node: Node) -> None:
         ) from exc
 
 
+def _produce_from_script(
+    node: Node, adapter: Any, app_root: Path, reader: CsvSourceReader | None
+) -> Any:
+    """Import the node's script and return its ``run(ctx)`` result as Arrow."""
+    with contextlib.redirect_stdout(sys.stderr):
+        module = load_script(node, app_root)
+    ctx = RunContext(node, adapter)
+    return to_arrow(_execute_script(module, ctx))
+
+
+def _produce_from_csv(
+    node: Node, adapter: Any, app_root: Path, reader: CsvSourceReader | None
+) -> Any:
+    """Load the node's declared csv source."""
+    return produce_csv(node, reader=reader)
+
+
+_PRODUCERS: dict[str, Callable[[Node, Any, Path, CsvSourceReader | None], Any]] = {
+    "python-node": _produce_from_script,
+    "python-csv": _produce_from_csv,
+}
+
+
 def run_node(
     env: Mapping[str, str], adapter: Any = None, reader: CsvSourceReader | None = None
 ) -> int:
     """Run a single node end-to-end and print exactly one sentinel result block.
 
-    ``reader`` mirrors the ``adapter`` injection seam: when given, it is
-    threaded into :func:`produce_csv` for a python-csv node instead of
-    letting that function pick a reader via ``reader_for``. Ignored for a
-    python-model node.
+    ``reader`` is threaded into the python-csv producer instead of letting
+    it pick a reader via ``reader_for``; the script producer ignores it.
 
     Returns 0 on success, 1 on any :class:`HarnessError`.
     """
@@ -255,14 +276,7 @@ def run_node(
 
         _validate_config_early(active_adapter, node)
 
-        if node.kind == "python-csv":
-            table = produce_csv(node, reader=reader)
-        else:
-            with contextlib.redirect_stdout(sys.stderr):
-                module = load_script(node, app_root)
-            ctx = RunContext(node, active_adapter)
-            raw_result = _execute_script(module, ctx)
-            table = to_arrow(raw_result)
+        table = _PRODUCERS[node.kind](node, active_adapter, app_root, reader)
 
         conformed = conform(table, node.output_columns, node.extra_columns)
 

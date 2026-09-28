@@ -29,7 +29,7 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   the author's contract file didn't declare one. "Optional" describes the
   contract *file* an author writes, not the merged wire artifact, where
   every field above is always present.
-- **`kind`** is additive: it defaults to `python-model` (a script-backed
+- **`kind`** is additive: it defaults to `python-node` (a script-backed
   node, everything described above and in §13.4). `python-csv` is the one
   other value — a **contract-only** node with no script: it declares no
   Python to run, and its `reads` must be exactly `{csv: <uri>}` (one key,
@@ -51,7 +51,7 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   instead of bind-checking a SELECT, so a `python-csv` node still fails the
   release gate on a missing declared column exactly as a script node fails
   it on a missing bind. §13.4 below still applies unchanged to
-  `kind: python-model` nodes.
+  `kind: python-node` nodes.
 - **Reads must be single-statement SELECTs with every table reference
   schema-qualified** (`analytics.table_a`, never `table_a`) — the resolver
   raises `UnqualifiedTableReference` and rejects the whole release otherwise
@@ -361,7 +361,7 @@ inject the names below instead:
 
 | Variable | Required? | Meaning |
 | --- | --- | --- |
-| `NODE_ID` | **required** | Any identifier whose trailing two dot-separated segments MUST be `<schema>.<table>` of the declared node (e.g. `python-model.<service>.<schema>.<table>`); the harness splits on `.` and matches the last two segments against the merged contract's nodes. |
+| `NODE_ID` | **required** | Any identifier whose trailing two dot-separated segments MUST be `<schema>.<table>` of the declared node (e.g. `python-node.<service>.<schema>.<table>`); the harness splits on `.` and matches the last two segments against the merged contract's nodes. |
 | `TABLE_NAME` | **required** | The target table name; must match the `table` of the node selected via `NODE_ID`. |
 | `TARGET_SCHEMA` | **required** | The target schema name; must match the `schema` of the node selected via `NODE_ID`. There is no fallback — `SCHEMA` and `DBT_TARGET_SCHEMA` are **not** recognized. |
 | `CONTRACT_DIR` | optional | Path to the directory of merged contract YAML files baked into the image. Defaults to `/app/contracts`. |

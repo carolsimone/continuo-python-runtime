@@ -43,8 +43,18 @@ def minio_container():
                 "-p", "0:9000",
                 "-e", "MINIO_ROOT_USER=minioadmin",
                 "-e", "MINIO_ROOT_PASSWORD=minioadmin",
-                "minio/minio:latest",
-                "server", "/data", "--address", ":9000",
+                # ghcr mirror of Bitnami's minio image (Docker Hub's minio/minio
+                # is no longer anonymously pullable). Its ENTRYPOINT is
+                # Bitnami's own setup script, not the `minio` binary, so it
+                # must be overridden for these args to reach `minio` directly;
+                # its data dir also has to be Bitnami's own
+                # /bitnami/minio/data (world-root-group-writable for the
+                # image's non-root user) since plain /data doesn't exist in
+                # this image and the binary can't create it at the
+                # filesystem root.
+                "--entrypoint", "minio",
+                "ghcr.io/carolsimone/continuo-minio:2025.7.23",
+                "server", "/bitnami/minio/data", "--address", ":9000",
             ],
             check=True, capture_output=True, text=True, timeout=60,
         )

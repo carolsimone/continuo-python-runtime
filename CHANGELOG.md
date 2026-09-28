@@ -5,6 +5,20 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-28
+
+### Breaking
+
+- The script node kind is named `python-node` (the default when `kind` is
+  omitted). A contract declaring `kind: python-model` is rejected at load.
+  Re-running `continuo-runtime merge` changes every python node's
+  `config_hash`, so each node is re-validated once on its next release.
+
+### Changed
+
+- Contract rules, hash inputs and run producers are looked up per kind from
+  registries pinned to `KINDS`.
+
 ## [0.5.0] - 2026-09-09
 
 ### Added

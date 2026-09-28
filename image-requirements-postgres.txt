@@ -1,2 +1,2 @@
-continuo-python-runtime==0.5.0
+continuo-python-runtime==0.6.0
 continuo-postgres-adapter==0.2.1

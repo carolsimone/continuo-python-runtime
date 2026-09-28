@@ -137,7 +137,7 @@ def test_unknown_key_error_names_source_and_node():
         assert "analytics.t" in str(exc)
 
 
-def _model_entry(**over):
+def _node_entry(**over):
     entry = dict(VALID)
     entry.update(over)
     return entry
@@ -155,8 +155,8 @@ def _csv_entry(**over):
     return entry
 
 
-def test_kind_defaults_to_python_model():
-    node = parse_node(_model_entry(), "f.yml")
+def test_kind_defaults_to_python_node():
+    node = parse_node(_node_entry(), "f.yml")
     assert node.kind == "python-node"
 
 
@@ -189,8 +189,8 @@ def test_unknown_kind_rejected():
         parse_node(_csv_entry(kind="python-parquet"), "f.yml")
 
 
-def test_model_node_still_requires_script():
-    entry = _model_entry()
+def test_node_still_requires_script():
+    entry = _node_entry()
     del entry["script"]
     with pytest.raises(ContractError, match="script"):
         parse_node(entry, "f.yml")

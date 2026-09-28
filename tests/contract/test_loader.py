@@ -526,7 +526,7 @@ def test_parse_node_dialect_reaches_ensure_single_read(monkeypatch):
         calls.append((sql, dialect))
 
     monkeypatch.setattr(
-        "continuo_python_runtime.contract.loader.ensure_single_read",
+        "continuo_python_runtime.contract.kinds.ensure_single_read",
         fake_ensure_single_read,
     )
     parse_node(VALID, "f.yml", dialect="postgres")
@@ -540,7 +540,7 @@ def test_parse_node_dialect_defaults_to_none(monkeypatch):
         calls.append(dialect)
 
     monkeypatch.setattr(
-        "continuo_python_runtime.contract.loader.ensure_single_read",
+        "continuo_python_runtime.contract.kinds.ensure_single_read",
         fake_ensure_single_read,
     )
     parse_node(VALID, "f.yml")
@@ -558,7 +558,7 @@ def test_check_reads_false_skips_ensure_single_read(monkeypatch):
         calls.append((sql, dialect))
 
     monkeypatch.setattr(
-        "continuo_python_runtime.contract.loader.ensure_single_read",
+        "continuo_python_runtime.contract.kinds.ensure_single_read",
         fake_ensure_single_read,
     )
     node = parse_node(VALID, "f.yml", check_reads=False)
@@ -674,7 +674,7 @@ def test_load_dir_config_yaml_anchor_dag_not_a_cycle_still_validates(tmp_path):
 def test_load_contract_dir_threads_check_reads_to_parse_node(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(
-        "continuo_python_runtime.contract.loader.ensure_single_read",
+        "continuo_python_runtime.contract.kinds.ensure_single_read",
         lambda sql, dialect=None: calls.append(sql),
     )
     (tmp_path / "a.yml").write_text(yaml.safe_dump({"nodes": [VALID]}))

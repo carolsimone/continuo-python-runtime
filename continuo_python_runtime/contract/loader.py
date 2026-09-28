@@ -11,19 +11,16 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
 from sqlglot import Dialect
-from sqlglot.errors import TokenError
 
+from continuo_python_runtime.contract.kinds import rules_for
 from continuo_python_runtime.contract.model import (
     CRITICALITIES,
     DEFAULT_KIND,
     EXTRA_COLUMNS_POLICIES,
-    KINDS,
     Column,
     Node,
 )
-from continuo_python_runtime.csv_source import parse_csv_uri
 from continuo_python_runtime.errors import ContractError
 from continuo_python_runtime.types import parse_sql_type
 
@@ -175,10 +172,7 @@ def parse_node(
         raise ContractError(f"{label}: unknown key(s) {sorted(unknown)}")
 
     kind = raw.get("kind", DEFAULT_KIND)
-    if not isinstance(kind, str) or kind not in KINDS:
-        raise ContractError(
-            f"{label}: 'kind' must be one of {sorted(KINDS)}, got {kind!r}"
-        )
+    rules = rules_for(kind, label)
 
     for field in _REQUIRED_STRING_FIELDS:
         value = raw.get(field)
@@ -192,20 +186,20 @@ def parse_node(
     owner = raw["owner"]
     schedule = raw["schedule"]
 
-    if kind == "python-csv":
-        if "script" in raw:
-            raise ContractError(
-                f"{label}: 'script' is forbidden for kind python-csv "
-                "(csv nodes are contract-only)"
-            )
-        script = ""
-    else:
+    if rules.script_required:
         raw_script = raw.get("script")
         if not isinstance(raw_script, str) or not raw_script.strip():
             raise ContractError(
                 f"{label}: required field 'script' must be a non-empty string"
             )
         script = raw_script
+    else:
+        if "script" in raw:
+            raise ContractError(
+                f"{label}: 'script' is forbidden for kind {kind} "
+                "(it is a contract-only kind)"
+            )
+        script = ""
 
     criticality = raw.get("criticality")
     if not isinstance(criticality, str) or criticality not in CRITICALITIES:
@@ -223,51 +217,9 @@ def parse_node(
             f"got {extra_columns!r}"
         )
 
-    reads = raw.get("reads")
-    if kind == "python-csv":
-        if not isinstance(reads, dict) or set(reads) != {"csv"}:
-            raise ContractError(
-                f"{label}: a python-csv node's 'reads' must be exactly {{csv: <uri>}}"
-            )
-        try:
-            parse_csv_uri(reads["csv"])
-        except (ValueError, TypeError) as exc:
-            raise ContractError(f"{label}: invalid csv uri: {exc}") from exc
-    else:
-        if not isinstance(reads, dict) or not reads:
-            raise ContractError(
-                f"{label}: 'reads' must be a non-empty mapping of name -> SQL"
-            )
-        for name, sql in reads.items():
-            if not isinstance(name, str) or not name.strip():
-                raise ContractError(
-                    f"{label}: 'reads' name {name!r} must be a non-empty string"
-                )
-            if not isinstance(sql, str) or not sql.strip():
-                raise ContractError(
-                    f"{label}: 'reads.{name}' must be a non-empty SQL string"
-                )
-            if not check_reads:
-                continue
-            try:
-                ensure_single_read(sql, dialect)
-            except (ValueError, TokenError) as exc:
-                # ensure_single_read's own message is phrased for check_binds
-                # (its only other caller today), so it's wrapped rather than
-                # surfaced bare here. TokenError is also caught: an unterminated
-                # string literal or comment fails sqlglot's tokenizer with a
-                # TokenError, a SqlglotError sibling of ParseError and not a
-                # subclass of ValueError -- despite ensure_single_read's
-                # docstring promising every rejection is a ValueError. Only
-                # TokenError, not the broader SqlglotError, is caught here: by
-                # the time control reaches this point `dialect` has already
-                # been validated once in load_contract_dir, so any other
-                # SqlglotError a future sqlglot version might raise from this
-                # call should surface as itself, not get relabeled as a
-                # rejected read.
-                raise ContractError(
-                    f"{label}: 'reads.{name}' must be a single read query ({exc})"
-                ) from exc
+    reads = rules.reads.validate(
+        raw.get("reads"), label, dialect=dialect, check_reads=check_reads
+    )
 
     raw_columns = raw.get("output_columns")
     if not isinstance(raw_columns, list) or not raw_columns:
@@ -326,7 +278,7 @@ def parse_node(
         schedule=schedule,
         criticality=criticality,
         script=script,
-        reads=dict(reads),
+        reads=reads,
         output_columns=tuple(columns),
         description=description,
         extra_columns=extra_columns,

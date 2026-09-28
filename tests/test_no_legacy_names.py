@@ -1,4 +1,4 @@
-"""The merge removed the old validation-package names outright (spec decision 8).
+"""Retired names (old validation packages, the python-model kind) must not creep back in.
 
 This guard keeps them from creeping back in via a copy-paste from an old
 branch, doc snippet, or stale pin.
@@ -19,6 +19,7 @@ LEGACY = [
     "discover_runtime_adapter",
     "ValidationAdapter",
     "RuntimeAdapter",
+    "python-model",
 ]
 
 # docs/superpowers/ holds dated design records (the 2026-07-31 python-runtime
@@ -30,6 +31,13 @@ LEGACY = [
 # rename replaced, because that is what actually shipped in that release.
 EXEMPT_PREFIXES = ("docs/superpowers/", "CHANGELOG.md")
 
+# Tests that assert the retired python-model kind is rejected must name it.
+EXEMPT_FILES = {
+    "tests/test_no_legacy_names.py",
+    "tests/test_contract_loader.py",
+    "tests/contract/test_kinds.py",
+}
+
 
 def test_no_legacy_validation_names_anywhere():
     tracked = subprocess.run(
@@ -37,7 +45,7 @@ def test_no_legacy_validation_names_anywhere():
     ).stdout.splitlines()
     offenders = []
     for rel in tracked:
-        if rel.startswith(EXEMPT_PREFIXES) or rel == "tests/test_no_legacy_names.py":
+        if rel.startswith(EXEMPT_PREFIXES) or rel in EXEMPT_FILES:
             continue
         path = ROOT / rel
         if path.suffix in {".lock"} or not path.is_file():

@@ -143,7 +143,7 @@ Every rule below (`extra_columns`, `output_columns`, "Conform rules") applies
 to both kinds identically — `kind` only changes how the pre-conform table is
 produced, never how it is checked or written.
 
-- **`python-model`** (the default; the field may be omitted) — a script node.
+- **`python-node`** (the default; the field may be omitted) — a script node.
   It requires `script:` and a `reads:` map of one or more named SQL queries,
   as described in "The script API" below.
 - **`python-csv`** — a contract-only node: it has no script and its `reads:`

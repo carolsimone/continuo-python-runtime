@@ -354,7 +354,7 @@ def test_run_node_csv_kind_loads_minio_csv_into_postgres(clean_schema, csv_minio
     doubles here -- the S3CsvSourceReader from csv_readers.reader_for talks
     to the real minio container, and PostgresAdapter writes to the real
     postgres stack), then conform()/ensure_table()/load() proceed exactly as
-    for a python-model node.
+    for a python-node node.
     """
     monkeypatch.setenv("S3_ENDPOINT_URL", csv_minio)
     repo = _csv_contract_dir(tmp_path, clean_schema)

@@ -17,6 +17,7 @@ from sqlglot.errors import TokenError
 
 from continuo_python_runtime.contract.model import (
     CRITICALITIES,
+    DEFAULT_KIND,
     EXTRA_COLUMNS_POLICIES,
     KINDS,
     Column,
@@ -173,7 +174,7 @@ def parse_node(
     if unknown:
         raise ContractError(f"{label}: unknown key(s) {sorted(unknown)}")
 
-    kind = raw.get("kind", "python-model")
+    kind = raw.get("kind", DEFAULT_KIND)
     if not isinstance(kind, str) or kind not in KINDS:
         raise ContractError(
             f"{label}: 'kind' must be one of {sorted(KINDS)}, got {kind!r}"

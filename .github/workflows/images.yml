@@ -83,7 +83,7 @@ jobs:
         run: |
           docker run --rm --network host \
             -v "$PWD/tests/smoke/node_smoke:/app" \
-            -e NODE_ID=python-model.smoke.analytics.smoke \
+            -e NODE_ID=python-node.smoke.analytics.smoke \
             -e TABLE_NAME=smoke \
             -e TARGET_SCHEMA=analytics \
             -e POSTGRES_HOST=localhost \
@@ -134,7 +134,7 @@ jobs:
         run: |
           docker run --rm \
             -v "$PWD/tests/smoke/node_smoke:/app" \
-            -e NODE_ID=python-model.smoke.analytics.smoke \
+            -e NODE_ID=python-node.smoke.analytics.smoke \
             -e TABLE_NAME=smoke \
             -e TARGET_SCHEMA=analytics \
             -e TRINO_HOST=host.docker.internal \

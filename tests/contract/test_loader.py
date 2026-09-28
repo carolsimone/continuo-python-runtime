@@ -157,7 +157,7 @@ def _csv_entry(**over):
 
 def test_kind_defaults_to_python_model():
     node = parse_node(_model_entry(), "f.yml")
-    assert node.kind == "python-model"
+    assert node.kind == "python-node"
 
 
 def test_csv_node_parses():

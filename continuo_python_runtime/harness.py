@@ -1,6 +1,6 @@
 """Container entrypoint: dispatches a single node's script and writes its output.
 
-``run_node`` is the sole write sink for a python-model node. It resolves the
+``run_node`` is the sole write sink for a python-node node. It resolves the
 node from the contract, loads and executes its script inside a
 :class:`~continuo_python_runtime.context.RunContext`, conforms the result to
 the declared schema, and writes it through the runtime adapter. Exactly one
@@ -216,7 +216,7 @@ def run_node(
     ``reader`` mirrors the ``adapter`` injection seam: when given, it is
     threaded into :func:`produce_csv` for a python-csv node instead of
     letting that function pick a reader via ``reader_for``. Ignored for a
-    python-model node.
+    python-node node.
 
     Returns 0 on success, 1 on any :class:`HarnessError`.
     """

@@ -21,7 +21,7 @@ def validate_secret_ref(value: object, label: str) -> str:
     if (
         not isinstance(value, str)
         or len(value) > SECRET_REF_MAX_LEN
-        or not SECRET_REF_PATTERN.match(value)
+        or not SECRET_REF_PATTERN.fullmatch(value)
     ):
         raise ContractError(
             f"{label}: 'secret_ref' must be a Kubernetes Secret name starting with "

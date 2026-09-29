@@ -70,7 +70,7 @@ def test_no_reads_rejects_any_declared_read(reads):
         NoReads().validate(reads, "L", dialect=None, check_reads=True)
 
 
-@pytest.mark.parametrize("name", ["continuo-api-fx", "continuo-api-a", "continuo-api-stripe-2"])
+@pytest.mark.parametrize("name", ["continuo-api-fx", "continuo-api-a", "continuo-api-stripe-2", "continuo-api-" + "a" * 240])
 def test_secret_ref_accepts_valid_names(name):
     assert validate_secret_ref(name, "L") == name
 
@@ -80,7 +80,7 @@ def test_secret_ref_accepts_valid_names(name):
     [
         "", "continuo-api-", "continuo-api-FX", "continuo-api--x-", "api-fx",
         "continuo-app-credentials", "continuo-api-x_y", " continuo-api-fx",
-        "continuo-api-" + "a" * 241, 7, None,
+        "continuo-api-" + "a" * 241, "continuo-api-fx\n", 7, None,
     ],
 )
 def test_secret_ref_rejects_invalid_names(name):

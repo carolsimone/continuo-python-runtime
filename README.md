@@ -159,6 +159,12 @@ produced, never how it is checked or written.
   header but not declared are governed by the same `extra_columns` policy as
   a script node's output — `raise` (default) fails the run, `warn` drops
   them and logs a warning. See `template/contracts/example_csv.yml`.
+- **`python-api`** — a script node that fetches its own data (typically over
+  HTTP) and declares no `reads:`. `ctx.read` has nothing to return. It may name
+  one Kubernetes Secret with `secret_ref: continuo-api-<name>`; continuo
+  attaches that Secret to the node's pod, so each of its keys is an env var the
+  script reads with `os.environ[...]`. The contract never holds a secret value
+  or env var name; the Secret itself is created in the cluster by the operator.
 
 ## The script API
 
@@ -255,9 +261,9 @@ A domain repo picks its warehouse engine by which base image it builds
 `FROM`:
 
 ```dockerfile
-FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.6.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.7.0
 # or
-FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.6.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.7.0
 ```
 
 The engine is part of the image **name**; the tag is the bare version, so

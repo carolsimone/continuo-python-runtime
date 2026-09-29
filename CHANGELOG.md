@@ -5,6 +5,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-29
+
+### Added
+
+- `python-api` node kind: a script node with no declared reads. It may name a
+  Kubernetes Secret with `secret_ref` (must match `continuo-api-*`), which
+  continuo attaches to the node's pod as env vars. `secret_ref` is rejected on
+  every other kind. Existing contracts and their content hashes are unchanged.
+
 ## [0.6.0] - 2026-09-28
 
 ### Breaking

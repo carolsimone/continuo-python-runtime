@@ -21,6 +21,7 @@ from continuo_python_runtime.contract.model import (
     Column,
     Node,
 )
+from continuo_python_runtime.contract.secret_ref import validate_secret_ref
 from continuo_python_runtime.errors import ContractError
 from continuo_python_runtime.types import parse_sql_type
 
@@ -38,6 +39,7 @@ _ALLOWED_KEYS = {
     "output_columns",
     "config",
     "content_hash",
+    "secret_ref",
 }
 
 _REQUIRED_STRING_FIELDS = ("schema", "table", "owner", "schedule")
@@ -221,6 +223,12 @@ def parse_node(
         raw.get("reads"), label, dialect=dialect, check_reads=check_reads
     )
 
+    secret_ref = ""
+    if "secret_ref" in raw:
+        if not rules.secret_allowed:
+            raise ContractError(f"{label}: 'secret_ref' is not allowed for kind {kind}")
+        secret_ref = validate_secret_ref(raw["secret_ref"], label)
+
     raw_columns = raw.get("output_columns")
     if not isinstance(raw_columns, list) or not raw_columns:
         raise ContractError(f"{label}: 'output_columns' must be a non-empty list")
@@ -285,6 +293,7 @@ def parse_node(
         config=config,
         content_hash=content_hash,
         kind=kind,
+        secret_ref=secret_ref,
     )
 
 

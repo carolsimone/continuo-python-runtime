@@ -33,5 +33,5 @@ def test_explicit_python_node_kind_is_accepted():
 
 
 def test_python_model_kind_is_rejected():
-    with pytest.raises(ContractError, match=r"'kind' must be one of \['python-csv', 'python-node'\], got 'python-model'"):
+    with pytest.raises(ContractError, match=r"'kind' must be one of \['python-api', 'python-csv', 'python-node'\], got 'python-model'"):
         parse_node(_base_node(kind="python-model"), "t.yml")

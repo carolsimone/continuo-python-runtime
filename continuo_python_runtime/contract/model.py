@@ -6,7 +6,7 @@ from typing import Any
 # Module-level constants
 CRITICALITIES = frozenset({"REGULATORY", "CORE", "SECONDARY"})
 EXTRA_COLUMNS_POLICIES = frozenset({"raise", "warn"})
-KINDS = frozenset({"python-node", "python-csv"})
+KINDS = frozenset({"python-node", "python-csv", "python-api"})
 DEFAULT_KIND = "python-node"
 CONTRACT_VERSION = 1
 
@@ -37,6 +37,7 @@ class Node:
     config: dict[str, Any] = field(default_factory=dict)
     content_hash: str | None = None
     kind: str = DEFAULT_KIND
+    secret_ref: str = ""
 
     @property
     def relation(self) -> str:

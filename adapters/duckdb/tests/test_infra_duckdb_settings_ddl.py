@@ -7,7 +7,8 @@ from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTabl
 from continuo_duckdb_adapter.domain.layout import PartitionKey, SortKey
 from continuo_duckdb_adapter.infrastructure.ddl import (
     EXTENSIONS, DdlRenderer, attach_statement, install_extension, load_extension,
-    quote_identifier, s3_secret_statement, set_extension_directory, sql_literal, use_catalog,
+    quote_identifier, s3_secret_statement, secret_texts, set_extension_directory, sql_literal,
+    use_catalog,
 )
 from continuo_duckdb_adapter.infrastructure.session import check_offline
 from continuo_duckdb_adapter.infrastructure.settings import REQUIRED_ENV, DuckLakeSettings
@@ -58,6 +59,57 @@ def test_endpoint_defaults_to_path_style_and_overrides_apply():
 def test_invalid_values_name_the_variable(name, value):
     with pytest.raises(ValueError, match=name):
         DuckLakeSettings.from_env({**ENV, name: value})
+
+
+def test_repr_hides_the_credentials():
+    s = DuckLakeSettings.from_env({
+        **ENV, "DUCKDB_CATALOG_PASSWORD": "pw-Hidden-1",
+        "DUCKDB_S3_ACCESS_KEY_ID": "key-id", "DUCKDB_S3_SECRET_ACCESS_KEY": "s3-Hidden-2",
+    })
+    text = repr(s)
+    assert "pw-Hidden-1" not in text and "s3-Hidden-2" not in text
+    assert "catalog_host='localhost'" in text
+
+
+@pytest.mark.parametrize("name", ["DUCKDB_CATALOG_PORT", "DUCKDB_DATA_INLINING_ROW_LIMIT"])
+@pytest.mark.parametrize("value", ["²", "٣", "-1", "1.5"])
+def test_numeric_vars_accept_only_ascii_digits(name, value):
+    with pytest.raises(ValueError, match=name):
+        DuckLakeSettings.from_env({**ENV, name: value})
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("true", True), ("TRUE", True), ("1", True), ("yes", True), ("Yes", True),
+    ("false", False), ("False", False), ("0", False), ("no", False), ("NO", False),
+])
+def test_s3_use_ssl_accepts_boolean_words(value, expected):
+    assert DuckLakeSettings.from_env({**ENV, "DUCKDB_S3_USE_SSL": value}).s3_use_ssl is expected
+
+
+@pytest.mark.parametrize("value", ["flase", "on", "2", "enabled"])
+def test_s3_use_ssl_rejects_anything_else(value):
+    with pytest.raises(ValueError, match="DUCKDB_S3_USE_SSL"):
+        DuckLakeSettings.from_env({**ENV, "DUCKDB_S3_USE_SSL": value})
+
+
+@pytest.mark.parametrize("only", ["DUCKDB_S3_ACCESS_KEY_ID", "DUCKDB_S3_SECRET_ACCESS_KEY"])
+def test_half_configured_static_s3_credentials_are_rejected(only):
+    with pytest.raises(ValueError) as caught:
+        DuckLakeSettings.from_env({**ENV, only: "x"})
+    message = str(caught.value)
+    assert "DUCKDB_S3_ACCESS_KEY_ID" in message and "DUCKDB_S3_SECRET_ACCESS_KEY" in message
+    assert "both or neither" in message
+
+
+def test_secret_texts_cover_every_spelling_of_the_credentials():
+    s = DuckLakeSettings.from_env({
+        **ENV, "DUCKDB_CATALOG_PASSWORD": "p w'd", "DUCKDB_S3_ACCESS_KEY_ID": "k",
+        "DUCKDB_S3_SECRET_ACCESS_KEY": "s3cret",
+    })
+    texts = secret_texts(s)
+    assert {"p w'd", "'p w\\'d'", "p w''d", "s3cret"} <= set(texts)
+    assert list(texts) == sorted(texts, key=len, reverse=True)
+    assert secret_texts(DuckLakeSettings.from_env(ENV)) == ()
 
 
 def test_local_data_path_does_not_use_s3():

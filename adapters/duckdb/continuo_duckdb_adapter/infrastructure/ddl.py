@@ -60,6 +60,22 @@ def _libpq_value(value: str) -> str:
     return f"'{escaped}'"
 
 
+def secret_texts(settings: DuckLakeSettings) -> tuple[str, ...]:
+    """Every spelling of the credentials that can appear in an engine error message.
+
+    The raw value, its libpq-quoted form (as written into the ATTACH conninfo)
+    and the SQL-literal-doubled form of that, longest first so redaction of a
+    longer spelling is not pre-empted by a shorter one.
+    """
+    texts: set[str] = set()
+    for secret in (settings.catalog_password, settings.s3_secret_access_key):
+        if not secret:
+            continue
+        quoted = _libpq_value(secret)
+        texts.update((secret, quoted, quoted.replace("'", "''"), secret.replace("'", "''")))
+    return tuple(sorted(texts, key=len, reverse=True))
+
+
 def attach_statement(settings: DuckLakeSettings, catalog: str) -> str:
     conninfo = " ".join(
         f"{key}={_libpq_value(value)}"

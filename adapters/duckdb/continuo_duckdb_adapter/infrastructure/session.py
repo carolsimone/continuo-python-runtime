@@ -31,6 +31,7 @@ from .ddl import (
     install_extension,
     load_extension,
     s3_secret_statement,
+    secret_texts,
     set_extension_directory,
     use_catalog,
 )
@@ -51,6 +52,16 @@ def _load_extension(con: "duckdb.DuckDBPyConnection", name: str) -> None:
         logger.info("installing duckdb extension %s", name)
         con.execute(install_extension(name))
         con.execute(load_extension(name))
+
+
+def _redacted(exc: duckdb.Error, secrets: Sequence[str]) -> duckdb.Error:
+    message = str(exc)
+    for secret in secrets:
+        message = message.replace(secret, "***")
+    try:
+        return type(exc)(message)
+    except Exception:  # an exception type with a non-standard constructor
+        return duckdb.Error(message)
 
 
 def check_offline(directory: str) -> None:
@@ -84,7 +95,11 @@ class DuckLakeSession(LakeGateway):
                 _load_extension(con, extension)
             if settings.uses_s3:
                 con.execute(s3_secret_statement(settings))
-            con.execute(attach_statement(settings, CATALOG_ALIAS))
+            try:
+                con.execute(attach_statement(settings, CATALOG_ALIAS))
+            except duckdb.Error as exc:
+                # The engine echoes the ATTACH conninfo, password included.
+                raise _redacted(exc, secret_texts(settings)) from None
             con.execute(use_catalog(CATALOG_ALIAS))
         except BaseException:
             con.close()

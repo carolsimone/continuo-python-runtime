@@ -24,3 +24,10 @@ def test_unreachable_catalog_raises_a_clear_error(adapter_factory):
 def test_wrong_catalog_password_raises_a_clear_error(adapter_factory):
     with pytest.raises(duckdb.Error):
         adapter_factory(DUCKDB_CATALOG_PASSWORD="definitely-wrong")
+
+
+def test_failed_attach_does_not_echo_the_password(adapter_factory):
+    wrong = "wrong-pw-Zx81"
+    with pytest.raises(duckdb.Error) as caught:
+        adapter_factory(DUCKDB_CATALOG_PASSWORD=wrong)
+    assert wrong not in str(caught.value)

@@ -5,6 +5,7 @@ __pycache__/
 dist/
 .superpowers/
 docs/superpowers/
+docs/ddd-violations/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

@@ -34,3 +34,9 @@ def test_trino_image_requirements_match_pyproject():
     pins = _pins("image-requirements-trino.txt")
     assert pins["continuo-python-runtime"] == _v("pyproject.toml")
     assert pins["continuo-trino-adapter"] == _v("adapters/trino/pyproject.toml")
+
+
+def test_duckdb_image_requirements_match_pyproject():
+    pins = _pins("image-requirements-duckdb.txt")
+    assert pins["continuo-python-runtime"] == _v("pyproject.toml")
+    assert pins["continuo-duckdb-adapter"] == _v("adapters/duckdb/pyproject.toml")

@@ -6,9 +6,19 @@ module) because two ``tests`` packages cannot both be imported by name under
 importlib mode; tests receive it through the ``gateway`` fixture.
 """
 import contextlib
+import os
+import socket
+import uuid
+from contextlib import suppress
 
+import boto3
+import psycopg2
+import pyarrow as pa
 import pytest
 
+from continuo_duckdb_adapter.adapter import DuckDBAdapter
+from continuo_duckdb_adapter.infrastructure.session import DuckLakeSession
+from continuo_duckdb_adapter.infrastructure.settings import DuckLakeSettings
 from continuo_duckdb_adapter.application.ports import LakeConflictError, LakeGateway
 from continuo_duckdb_adapter.application.warehouse import LakeWarehouse
 
@@ -106,3 +116,146 @@ def gateway() -> FakeLakeGateway:
 @pytest.fixture
 def warehouse(gateway) -> _UnitWarehouse:
     return _UnitWarehouse(gateway, sleep=lambda _seconds: None)
+
+
+CATALOG_PORT = int(os.environ.get("VR_IT_DUCKDB_CATALOG_PORT", "15599"))
+S3_PORT = int(os.environ.get("VR_IT_DUCKDB_S3_PORT", "19100"))
+BUCKET = "warehouse"
+DATA_PATH = f"s3://{BUCKET}/lake/"
+STACK_HINT = "docker compose -f tests/smoke/duckdb-stack/docker-compose.yml up -d --wait"
+
+
+def _require_open(port: int) -> None:
+    """Fail loudly (never skip) when the compose stack is not running."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=2):
+            return
+    except OSError as exc:
+        pytest.fail(f"nothing listening on 127.0.0.1:{port}; start the stack: {STACK_HINT} ({exc})")
+
+
+@pytest.fixture(scope="session")
+def lake_env() -> dict[str, str]:
+    """DUCKDB_* env for the compose stack; initialises the catalog exactly once.
+
+    DuckLake creates its metadata tables on the first ATTACH, so that must not
+    race with the concurrency tests: do it here, once, before any test runs.
+    """
+    _require_open(CATALOG_PORT)
+    _require_open(S3_PORT)
+    env = {
+        "DUCKDB_CATALOG_HOST": "localhost",
+        "DUCKDB_CATALOG_PORT": str(CATALOG_PORT),
+        "DUCKDB_CATALOG_DB": "catalog",
+        "DUCKDB_CATALOG_USER": "continuo",
+        "DUCKDB_CATALOG_PASSWORD": "continuo",
+        "DUCKDB_DATA_PATH": DATA_PATH,
+        "DUCKDB_S3_ENDPOINT": f"localhost:{S3_PORT}",
+        "DUCKDB_S3_ACCESS_KEY_ID": "minioadmin",
+        "DUCKDB_S3_SECRET_ACCESS_KEY": "minioadmin",
+        "DUCKDB_S3_URL_STYLE": "path",
+        "DUCKDB_S3_USE_SSL": "false",
+    }
+    DuckLakeSession.connect(DuckLakeSettings.from_env(env)).close()
+    return env
+
+
+@pytest.fixture
+def adapter_factory(lake_env, monkeypatch):
+    """Build real adapters against the stack; all are closed at teardown."""
+    made: list[DuckDBAdapter] = []
+
+    def make(**extra_env: str) -> DuckDBAdapter:
+        for key, value in {**lake_env, **extra_env}.items():
+            monkeypatch.setenv(key, value)
+        adapter = DuckDBAdapter.from_env()
+        made.append(adapter)
+        return adapter
+
+    yield make
+    for adapter in made:
+        with suppress(Exception):
+            adapter.close()
+
+
+@pytest.fixture
+def adapter(adapter_factory) -> DuckDBAdapter:
+    return adapter_factory()
+
+
+@pytest.fixture
+def parquet_adapter(adapter_factory) -> DuckDBAdapter:
+    """Inlining off: every insert becomes a Parquet file, so layout is observable."""
+    return adapter_factory(DUCKDB_DATA_INLINING_ROW_LIMIT="0")
+
+
+@pytest.fixture
+def schema(adapter) -> str:
+    name = f"it_{uuid.uuid4().hex[:10]}"
+    yield name
+    adapter.drop_schema(name)
+
+
+@pytest.fixture
+def prod_table(adapter):
+    """A seeded ``(schema, 'src_table')`` with two rows, dropped afterwards."""
+    name = f"prod_{uuid.uuid4().hex[:10]}"
+    adapter.ensure_table(
+        name, "src_table",
+        [{"name": "id", "type": "INTEGER", "nullable": True},
+         {"name": "name", "type": "VARCHAR(20)", "nullable": True}],
+        config={},
+    )
+    adapter.load(name, "src_table", pa.table({"id": pa.array([1, 2], pa.int32()), "name": ["a", "b"]}))
+    yield name, "src_table"
+    adapter.drop_schema(name)
+
+
+@pytest.fixture
+def scalar(adapter):
+    def run(sql: str):
+        table = adapter.fetch(sql)
+        return table.to_pylist()[0][table.schema.names[0]]
+    return run
+
+
+@pytest.fixture
+def columns_of(adapter):
+    def run(schema: str, table: str) -> list[tuple[str, str, str]]:
+        rows = adapter.fetch(
+            "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+            f"WHERE table_catalog = 'lake' AND table_schema = '{schema}' "
+            f"AND table_name = '{table}' ORDER BY ordinal_position"
+        ).to_pylist()
+        return [(r["column_name"], r["data_type"], r["is_nullable"]) for r in rows]
+    return run
+
+
+@pytest.fixture
+def tables_in(adapter):
+    def run(schema: str) -> list[str]:
+        rows = adapter.fetch(
+            "SELECT table_name FROM information_schema.tables "
+            f"WHERE table_catalog = 'lake' AND table_schema = '{schema}' ORDER BY table_name"
+        ).to_pylist()
+        return [r["table_name"] for r in rows]
+    return run
+
+
+@pytest.fixture
+def catalog_db():
+    """A read-only-by-convention cursor on the DuckLake catalog (postgres)."""
+    conn = psycopg2.connect(
+        host="localhost", port=CATALOG_PORT, dbname="catalog", user="continuo", password="continuo"
+    )
+    conn.autocommit = True
+    yield conn.cursor()
+    conn.close()
+
+
+@pytest.fixture
+def s3():
+    return boto3.client(
+        "s3", endpoint_url=f"http://localhost:{S3_PORT}",
+        aws_access_key_id="minioadmin", aws_secret_access_key="minioadmin", region_name="us-east-1",
+    )

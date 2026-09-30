@@ -15,9 +15,9 @@ def _entry_points():
     return list(md.entry_points(group=ENTRY_POINT_GROUP))
 
 
-def test_at_least_the_two_known_engines_are_installed():
+def test_the_known_engines_are_installed():
     names = {ep.name for ep in _entry_points()}
-    assert {"postgres", "trino"} <= names, f"missing engines; found {sorted(names)}"
+    assert {"postgres", "trino", "duckdb"} <= names, f"missing engines; found {sorted(names)}"
 
 
 @pytest.mark.parametrize("ep", _entry_points(), ids=lambda ep: ep.name)

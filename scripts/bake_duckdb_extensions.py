@@ -11,11 +11,11 @@ import sys
 
 import duckdb
 from continuo_duckdb_adapter.infrastructure.ddl import (
-    EXTENSIONS,
     install_extension,
     load_extension,
     set_extension_directory,
 )
+from continuo_duckdb_adapter.infrastructure.extensions import EXTENSIONS
 
 logger = logging.getLogger("bake_duckdb_extensions")
 

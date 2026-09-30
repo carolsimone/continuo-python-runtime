@@ -93,3 +93,24 @@ def test_the_password_is_not_visible_in_the_attached_database_path(adapter):
         "SELECT path FROM duckdb_databases() WHERE database_name = 'lake'"
     ).to_pylist()[0]["path"]
     assert "password=" not in path
+
+
+def test_concurrent_first_attach_of_a_fresh_catalog_all_succeed(fresh_catalog):
+    """Eight Jobs starting together against a never-used catalog must all attach."""
+    import concurrent.futures
+
+    from continuo_duckdb_adapter.infrastructure.session import DuckLakeSession
+    from continuo_duckdb_adapter.infrastructure.settings import DuckLakeSettings
+
+    settings = DuckLakeSettings.from_env(fresh_catalog())
+
+    def attach(_: int) -> str:
+        try:
+            DuckLakeSession.connect(settings).close()
+            return "ok"
+        except Exception as exc:  # noqa: BLE001 - report every failure
+            return f"{type(exc).__name__}: {str(exc)[:200]}"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(attach, range(8)))
+    assert results == ["ok"] * 8

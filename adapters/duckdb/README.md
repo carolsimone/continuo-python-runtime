@@ -21,7 +21,7 @@ Job shares one transactional warehouse. Implements
 | `DUCKDB_S3_REGION` | no | `us-east-1` | |
 | `DUCKDB_S3_URL_STYLE` | no | `path` with an endpoint, else `vhost` | `path` or `vhost` |
 | `DUCKDB_S3_USE_SSL` | no | `true` | |
-| `DUCKDB_EXTENSION_DIRECTORY` | no | DuckDB default | Where `ducklake`, `postgres`, `httpfs` are loaded from (set in the image) |
+| `DUCKDB_EXTENSION_DIRECTORY` | no | DuckDB default | Where `ducklake`, `postgres`, `httpfs` and `aws` (the credential chain) are loaded from (set in the image) |
 | `DUCKDB_DATA_INLINING_ROW_LIMIT` | no | DuckLake default | `0` writes every insert as a Parquet file instead of inlining small ones in the catalog |
 
 ## Physical layout (`config`)

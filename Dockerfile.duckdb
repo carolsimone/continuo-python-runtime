@@ -24,7 +24,7 @@ RUN set -eu; \
       pip install --no-cache-dir -r /tmp/req.txt; \
     fi; \
     rm -rf /tmp/req.txt /tmp/wheelhouse
-# The adapter LOADs ducklake/postgres/httpfs from this directory. They are
+# The adapter LOADs ducklake/postgres/httpfs/aws from this directory. They are
 # installed now, as root, because the runtime user below has no home directory
 # and the container may have no network. HOME=/tmp gives DuckDB a writable
 # home for its own bookkeeping.

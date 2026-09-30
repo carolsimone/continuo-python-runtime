@@ -18,11 +18,6 @@ from .settings import DuckLakeSettings
 
 _LIBPQ_BARE = re.compile(r"[A-Za-z0-9_.:/\-]+")
 
-# The one list of DuckDB extensions the adapter needs: the session LOADs them,
-# the image bake script INSTALLs them, the offline image check LOADs them.
-EXTENSIONS: tuple[str, ...] = ("ducklake", "postgres", "httpfs")
-
-
 BEGIN = "BEGIN"
 COMMIT = "COMMIT"
 ROLLBACK = "ROLLBACK"
@@ -46,6 +41,10 @@ def install_extension(name: str) -> str:
 
 def set_extension_directory(directory: str) -> str:
     return f"SET extension_directory = {sql_literal(directory)}"
+
+
+def disable_extension_autoinstall() -> str:
+    return "SET autoinstall_known_extensions = false"
 
 
 def use_catalog(catalog: str) -> str:

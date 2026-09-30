@@ -1,4 +1,7 @@
-"""Settings parsing and SQL rendering: pure string work, no engine."""
+"""Settings parsing, SQL rendering and the extension list.
+
+Mostly pure string work; the one check that opens a (local, in-memory) DuckDB is
+the offline check, which must fail without touching the network."""
 import duckdb
 import pytest
 
@@ -6,11 +9,11 @@ from continuo_duckdb_adapter.domain.columns import ColumnDefinition
 from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
 from continuo_duckdb_adapter.domain.layout import PartitionKey, SortKey
 from continuo_duckdb_adapter.infrastructure.ddl import (
-    EXTENSIONS, DdlRenderer, attach_statement, install_extension, load_extension,
-    quote_identifier, s3_secret_statement, secret_texts, set_extension_directory, sql_literal,
-    use_catalog,
+    DdlRenderer, attach_statement, disable_extension_autoinstall, install_extension,
+    load_extension, quote_identifier, s3_secret_statement, secret_texts,
+    set_extension_directory, sql_literal, use_catalog,
 )
-from continuo_duckdb_adapter.infrastructure.session import check_offline
+from continuo_duckdb_adapter.infrastructure.extensions import EXTENSIONS, check_offline
 from continuo_duckdb_adapter.infrastructure.settings import REQUIRED_ENV, DuckLakeSettings
 
 ENV = {
@@ -180,13 +183,21 @@ def test_use_catalog_quotes_the_alias():
     assert use_catalog('la"ke') == 'USE "la""ke"'
 
 
-def test_extensions_are_the_three_the_adapter_needs():
-    assert EXTENSIONS == ("ducklake", "postgres", "httpfs")
+def test_disable_extension_autoinstall_statement():
+    assert disable_extension_autoinstall() == "SET autoinstall_known_extensions = false"
 
 
-def test_check_offline_fails_when_the_extensions_are_not_in_the_directory(tmp_path):
+def test_extensions_are_the_four_the_adapter_needs():
+    # aws backs the credential_chain S3 secret
+    assert EXTENSIONS == ("ducklake", "postgres", "httpfs", "aws")
+
+
+def test_check_offline_fails_without_installing_anything(tmp_path):
     with pytest.raises(duckdb.Error):
         check_offline(str(tmp_path))
+    # Autoinstall would have downloaded the first extension into the directory
+    # (and let the check pass wherever there is network); nothing may be written.
+    assert list(tmp_path.iterdir()) == []
 
 
 R = DdlRenderer("lake")

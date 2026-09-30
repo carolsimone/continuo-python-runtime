@@ -224,3 +224,97 @@ def test_close_closes_the_connection_and_removes_the_passfile():
     session = DuckLakeSession(connection, DdlRenderer("lake"), passfile=passfile)
     session.close()
     assert connection.closed and not os.path.exists(passfile.path)
+
+
+# --- the first-ATTACH initialisation race -----------------------------------
+
+RACE = (
+    'Failed to initialize DuckLake: Failed to execute query "CREATE TABLE '
+    '"public"."ducklake_metadata"(...)": ERROR:  duplicate key value violates '
+    'unique constraint "pg_type_typname_nsp_index"'
+)
+
+
+class ConnectScript:
+    """duckdb.connect() replacement: hands out fake connections whose ATTACH
+    raises the next scripted error (None = succeed)."""
+
+    def __init__(self, attach_errors):
+        self.attach_errors = list(attach_errors)
+        self.connections: list[FakeConnection] = []
+
+    def __call__(self):
+        connection = FakeConnection()
+        error = self.attach_errors.pop(0) if self.attach_errors else None
+        if error is not None:
+            connection.errors["ATTACH"] = error
+        self.connections.append(connection)
+        return connection
+
+
+@pytest.fixture
+def connect_with(monkeypatch):
+    def run(attach_errors, env=ENV):
+        script = ConnectScript(attach_errors)
+        monkeypatch.setattr("continuo_duckdb_adapter.infrastructure.session.duckdb.connect", script)
+        sleeps: list[float] = []
+        settings = DuckLakeSettings.from_env({**env, "DUCKDB_EXTENSION_DIRECTORY": "/ext"})
+        return script, sleeps, lambda: DuckLakeSession.connect(settings, sleep=sleeps.append)
+
+    return run
+
+
+def test_the_init_race_is_retried_on_a_fresh_connection(connect_with):
+    script, sleeps, connect = connect_with([duckdb.Error(RACE), duckdb.Error(RACE), None])
+    session = connect()
+    assert len(script.connections) == 3
+    assert [c.closed for c in script.connections] == [True, True, False]
+    assert len(sleeps) == 2 and sleeps == sorted(sleeps) and all(s > 0 for s in sleeps)
+    session.close()
+
+
+def test_a_persistent_init_race_surfaces_after_bounded_attempts(connect_with):
+    from continuo_duckdb_adapter.infrastructure import session as session_module
+
+    script, _, connect = connect_with([duckdb.Error(RACE)] * 50)
+    with pytest.raises(duckdb.Error, match="Failed to initialize DuckLake"):
+        connect()
+    assert len(script.connections) == session_module._ATTACH_ATTEMPTS > 1
+    assert all(c.closed for c in script.connections)
+
+
+@pytest.mark.parametrize("error", [
+    duckdb.IOException('Unable to connect to Postgres at "host=h": Connection refused'),
+    duckdb.IOException('Failed to attach DuckLake: FATAL:  password authentication failed'),
+    duckdb.Error("Failed to initialize DuckLake: disk full"),
+    duckdb.CatalogException("something else"),
+])
+def test_every_other_attach_error_is_not_retried(connect_with, error):
+    script, sleeps, connect = connect_with([error])
+    with pytest.raises(type(error)):
+        connect()
+    assert len(script.connections) == 1 and sleeps == []
+
+
+def test_a_retried_race_error_is_still_redacted(connect_with):
+    from continuo_duckdb_adapter.infrastructure import session as session_module
+
+    leaking = duckdb.Error(f"{RACE} password={PASSWORD}")
+    _, _, connect = connect_with([leaking] * session_module._ATTACH_ATTEMPTS)
+    with pytest.raises(duckdb.Error) as caught:
+        connect()
+    assert PASSWORD not in str(caught.value)
+
+
+def test_a_failed_connect_removes_the_passfile(connect_with, monkeypatch):
+    made: list[Passfile] = []
+
+    def recording(password):
+        made.append(Passfile(password))
+        return made[-1]
+
+    monkeypatch.setattr("continuo_duckdb_adapter.infrastructure.session.Passfile", recording)
+    _, _, connect = connect_with([duckdb.IOException("Connection refused")])
+    with pytest.raises(duckdb.IOException):
+        connect()
+    assert made and not any(os.path.exists(p.path) for p in made)

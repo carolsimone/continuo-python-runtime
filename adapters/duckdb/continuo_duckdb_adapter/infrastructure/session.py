@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from typing import TYPE_CHECKING
 
 import duckdb
@@ -26,7 +27,6 @@ from ..domain.layout import TableLayout
 from .ddl import (
     BEGIN,
     COMMIT,
-    EXTENSIONS,
     ROLLBACK,
     DdlRenderer,
     attach_statement,
@@ -37,6 +37,7 @@ from .ddl import (
     set_extension_directory,
     use_catalog,
 )
+from .extensions import EXTENSIONS
 from .passfile import Passfile, can_store
 from .settings import DuckLakeSettings
 
@@ -47,6 +48,21 @@ logger = logging.getLogger("continuo_duckdb_adapter")
 
 CATALOG_ALIAS = "lake"
 
+# DuckLake creates its metadata tables on the first ATTACH of a fresh catalog
+# and does not guard that against a concurrent first ATTACH (several Jobs of one
+# run starting together): all but one fail on the duplicate CREATE. The loser
+# retries on a fresh connection and then finds the catalog initialised. Bounded,
+# and only this failure class is retried.
+_ATTACH_ATTEMPTS = 5
+_ATTACH_BACKOFF_SECONDS = 0.2
+
+
+def _is_first_attach_race(exc: duckdb.Error) -> bool:
+    message = str(exc)
+    return "Failed to initialize DuckLake" in message and (
+        "duplicate" in message.lower() or "already exists" in message.lower()
+    )
+
 
 def _load_extension(con: "duckdb.DuckDBPyConnection", name: str) -> None:
     try:
@@ -55,22 +71,6 @@ def _load_extension(con: "duckdb.DuckDBPyConnection", name: str) -> None:
         logger.info("installing duckdb extension %s", name)
         con.execute(install_extension(name))
         con.execute(load_extension(name))
-
-
-def check_offline(directory: str) -> None:
-    """LOAD every extension from *directory* without ever INSTALLing.
-
-    What a baked, offline, non-root image must be able to do; raises
-    ``duckdb.Error`` naming the first extension that is missing.
-    """
-    con = duckdb.connect()
-    try:
-        con.execute(set_extension_directory(directory))
-        for name in EXTENSIONS:
-            con.execute(load_extension(name))
-            logger.info("loaded %s offline from %s", name, directory)
-    finally:
-        con.close()
 
 
 def _translate(exc: duckdb.Error, secrets: Sequence[str]) -> Exception:
@@ -116,28 +116,45 @@ class DuckLakeSession(LakeGateway):
         self._passfile = passfile
 
     @classmethod
-    def connect(cls, settings: DuckLakeSettings) -> "DuckLakeSession":
+    def connect(
+        cls, settings: DuckLakeSettings, *, sleep: Callable[[float], None] = time.sleep
+    ) -> "DuckLakeSession":
         secrets = secret_texts(settings)
         passfile = Passfile(settings.catalog_password) if can_store(settings.catalog_password) else None
-        con = duckdb.connect()
         try:
-            try:
-                if settings.extension_directory:
-                    con.execute(set_extension_directory(settings.extension_directory))
-                for extension in EXTENSIONS:
-                    _load_extension(con, extension)
-                if settings.uses_s3:
-                    con.execute(s3_secret_statement(settings))
-                con.execute(attach_statement(settings, CATALOG_ALIAS, passfile.path if passfile else None))
-                con.execute(use_catalog(CATALOG_ALIAS))
-            except duckdb.Error as exc:
-                raise _translate(exc, secrets) from None
+            for attempt in range(1, _ATTACH_ATTEMPTS + 1):
+                try:
+                    con = cls._open(settings, passfile)
+                except duckdb.Error as exc:
+                    if attempt < _ATTACH_ATTEMPTS and _is_first_attach_race(exc):
+                        logger.info("first attach of a fresh catalog raced (attempt %d); retrying", attempt)
+                        sleep(_ATTACH_BACKOFF_SECONDS * attempt)
+                        continue
+                    raise _translate(exc, secrets) from None
+                return cls(con, DdlRenderer(CATALOG_ALIAS), secrets=secrets, passfile=passfile)
         except BaseException:
-            con.close()
             if passfile:
                 passfile.close()
             raise
-        return cls(con, DdlRenderer(CATALOG_ALIAS), secrets=secrets, passfile=passfile)
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    @staticmethod
+    def _open(settings: DuckLakeSettings, passfile: Passfile | None) -> "duckdb.DuckDBPyConnection":
+        """One fresh connection, extensions loaded, secret created, catalog attached."""
+        con = duckdb.connect()
+        try:
+            if settings.extension_directory:
+                con.execute(set_extension_directory(settings.extension_directory))
+            for extension in EXTENSIONS:
+                _load_extension(con, extension)
+            if settings.uses_s3:
+                con.execute(s3_secret_statement(settings))
+            con.execute(attach_statement(settings, CATALOG_ALIAS, passfile.path if passfile else None))
+            con.execute(use_catalog(CATALOG_ALIAS))
+        except BaseException:
+            con.close()
+            raise
+        return con
 
     # --- plumbing -----------------------------------------------------------
 

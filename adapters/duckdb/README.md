@@ -25,6 +25,30 @@ Job shares one transactional warehouse. Implements
 | `DUCKDB_TEMP_DIRECTORY` | no | `.tmp` in the working directory | Where DuckDB spills larger-than-memory work; must be writable by the runtime user (the image sets `/tmp/duckdb-tmp`) |
 | `DUCKDB_DATA_INLINING_ROW_LIMIT` | no | DuckLake default | `0` writes every insert as a Parquet file instead of inlining small ones in the catalog |
 
+Settings are parsed strictly and fail fast with the variable named:
+
+- `DUCKDB_S3_USE_SSL` accepts `true`/`false`/`1`/`0`/`yes`/`no` (any case);
+  anything else is an error rather than silently meaning "true".
+- `DUCKDB_S3_ACCESS_KEY_ID` and `DUCKDB_S3_SECRET_ACCESS_KEY` are set together or
+  not at all; one without the other is rejected (it would otherwise fall back to
+  the credential chain without saying so).
+- `DUCKDB_CATALOG_PORT` and `DUCKDB_DATA_INLINING_ROW_LIMIT` take ASCII digits
+  only.
+
+## Credentials and failure modes
+
+The catalog password is handed to libpq through a private (mode 0600) temporary
+passfile, not in the connection string, so it does not appear in DuckDB's error
+text or in `duckdb_databases()`. Every DuckDB error also passes through one
+redaction point that masks the catalog password and the S3 secret (every
+spelling) before the error reaches the result block or the pod logs; host, port
+and database stay visible. A password containing a line break cannot live in a
+passfile and travels inline instead, still redacted from errors.
+
+A first attach to a brand-new catalog from several Jobs at once can race on
+DuckLake's metadata creation; the adapter retries exactly that failure a few
+times, and surfaces every other connection error immediately.
+
 ## Physical layout (`config`)
 
 - `partitioned_by`: non-empty list of a column name, or
@@ -38,6 +62,34 @@ Job shares one transactional warehouse. Implements
 - Layout is applied when `ensure_table` creates the table; changing it on an
   existing table is a no-op. `build_empty_from_columns` (the release gate)
   always rebuilds.
+
+## Engine behaviour to know
+
+- DuckDB drops the length of `VARCHAR(n)` / `CHAR(n)`: the catalog shows plain
+  `VARCHAR`. Length is enforced by `conform()` for python nodes only, not by the
+  table.
+- DuckLake inlines small inserts into the catalog (see
+  `DUCKDB_DATA_INLINING_ROW_LIMIT`), so partitioning and sorting are applied to
+  Parquet files only after a flush; set the limit to `0` when files must be
+  laid out per write.
+- A read is one single query: top-level `PIVOT` / `UNPIVOT` statements are
+  rejected by the single-read gate. Wrap them: `SELECT * FROM (PIVOT ...)`.
+
+## Parity with the postgres and trino adapters
+
+| Behaviour | postgres | trino | duckdb |
+|---|---|---|---|
+| `drop_schema` | `DROP SCHEMA IF EXISTS ... CASCADE` | same | same (tables and views go too) |
+| `ensure_schema` under concurrency | session advisory lock | `IF NOT EXISTS`, tolerating a concurrent creation | `IF NOT EXISTS`, bounded retry on a DuckLake snapshot conflict |
+| `check_binds` | `EXPLAIN` in `BEGIN READ ONLY` | `EXPLAIN (TYPE VALIDATE)` | `EXPLAIN` in `BEGIN TRANSACTION READ ONLY`, always rolled back |
+| `ensure_table` | creates if absent, layout on create | same | same, in one transaction with the existence check |
+| `load` (replace contents) | one transaction | atomic table swap (no multi-statement transactions) | one transaction: `DELETE` then `INSERT` |
+| Physical layout keys | `indexes` | `partitioning`, `sorted_by`, `format`, `format_version` | `partitioned_by`, `sorted_by` |
+
+Not applicable here: postgres `indexes`; trino `format` and `format_version`
+(DuckLake always writes Parquet). The postgres advisory lock has no DuckLake
+counterpart and is replaced by the bounded conflict retry; the trino table swap
+is replaced by the single `DELETE` + `INSERT` transaction.
 
 ## Layout of the code
 

@@ -7,6 +7,7 @@ on:
       - "continuo_python_runtime/**"
       - "contract/**"
       - "adapters/**"
+      - "scripts/**"
       - "pyproject.toml"
       - ".github/workflows/images.yml"
   push:
@@ -191,7 +192,7 @@ jobs:
         run: uv run pytest tests/test_image_smoke_validation.py -m image -v
       - name: Extensions load offline as the non-root user
         run: |
-          docker run --rm --network none --entrypoint python cpr-smoke-duckdb -c \
+          docker run --rm --network none --user 65532:65532 --entrypoint python cpr-smoke-duckdb -c \
             "import os; from continuo_duckdb_adapter.infrastructure.extensions import check_offline; check_offline(os.environ['DUCKDB_EXTENSION_DIRECTORY'])"
       - name: Start duckdb stack
         run: docker compose -f tests/smoke/duckdb-stack/docker-compose.yml up -d --wait
@@ -235,7 +236,7 @@ jobs:
         if: always()
         run: docker compose -f tests/smoke/duckdb-stack/docker-compose.yml down -v
 
-  # Runs on this same tag push, after the smoke jobs above pass. It builds both
+  # Runs on this same tag push, after the smoke jobs above pass. It builds all three
   # engine images for linux/amd64 and linux/arm64 installing the pinned
   # versions FROM PyPI (WHEEL_SOURCE=pypi, the Dockerfile default), then
   # pushes them to ghcr.io/<owner>/continuo-python-runtime-<engine>:<tag>. The
@@ -261,6 +262,8 @@ jobs:
     needs: [smoke-postgres, smoke-trino, smoke-duckdb]
     if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-test')
     strategy:
+      # One engine's failed push must not cancel the other engines' pushes.
+      fail-fast: false
       matrix:
         engine: [postgres, trino, duckdb]
     runs-on: ubuntu-latest

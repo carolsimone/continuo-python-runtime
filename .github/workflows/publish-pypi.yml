@@ -13,7 +13,7 @@ name: publish-pypi
 # ship stale adapter code under an unchanged version number.
 #
 # Tag glob note: `v*` is the repository's single release pattern — the same tag
-# that images.yml builds and pushes both engine images from, so one tag ships
+# that images.yml builds and pushes all three engine images from, so one tag ships
 # the whole release. GitHub Actions tag globs anchor at character 1, so `v*`
 # claims every tag beginning with "v"; no other pattern may be introduced.
 # Tag `v<ver>-test<n>` publishes to TestPyPI; `v<ver>` publishes to real PyPI.

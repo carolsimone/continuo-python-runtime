@@ -3,7 +3,7 @@ name: release
 # Creates a GitHub Release once BOTH tag-triggered publish workflows
 # (publish-pypi.yml, images.yml) have finished successfully for this exact
 # tag. A Release exists here beyond what PyPI already shows because a tag
-# also ships two ghcr.io images that PyPI knows nothing about — the Release
+# also ships three ghcr.io images that PyPI knows nothing about — the Release
 # is the one place that says "this tag = these packages + these images."
 #
 # Triggered by the same tag push as its two siblings, rather than by

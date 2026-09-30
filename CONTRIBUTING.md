@@ -39,7 +39,7 @@ repository; please do not add headers to new files.
 ## Development setup
 
 Prerequisites: Python 3.14+, [uv](https://docs.astral.sh/uv/), and Docker (only needed
-for the Postgres/Trino integration tests and the csv-reader/validation-runner
+for the Postgres/Trino/DuckLake integration tests and the csv-reader/validation-runner
 integration tests, which start a real minio backend via `docker run`).
 
 ```bash
@@ -97,6 +97,15 @@ scripts/security-scan.sh
   reserved exclusively for them.
 - **Exact-pinned dependencies.** `continuo-engine-contract` and other in-repo packages
   are pinned exactly, not with a range — see the comment in `pyproject.toml` for why.
+
+## Before the first release that ships a new adapter
+
+A new adapter package needs a PyPI and a TestPyPI *pending trusted publisher*
+registered **before** its first tag: for `continuo-duckdb-adapter`, workflow file
+`publish-pypi.yml` and the same GitHub environments (`pypi`, `testpypi`) as the
+other packages. `publish-pypi.yml` uploads every package in one call, so a project
+with no publisher registered fails the upload for the whole tag. This is done by
+hand on pypi.org / test.pypi.org; nothing in this repository can do it.
 
 ## Code of conduct
 

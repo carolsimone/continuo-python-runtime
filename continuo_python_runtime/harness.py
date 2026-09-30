@@ -1,6 +1,6 @@
 """Container entrypoint: dispatches a single node's script and writes its output.
 
-``run_node`` is the sole write sink for a python-node node. It resolves the
+``run_node`` is the sole write sink for a python node. It resolves the
 node from the contract, loads and executes its script inside a
 :class:`~continuo_python_runtime.context.RunContext`, conforms the result to
 the declared schema, and writes it through the runtime adapter. Exactly one
@@ -227,6 +227,7 @@ def _produce_from_csv(
 
 _PRODUCERS: dict[str, Callable[[Node, Any, Path, CsvSourceReader | None], Any]] = {
     "python-node": _produce_from_script,
+    "python-api": _produce_from_script,
     "python-csv": _produce_from_csv,
 }
 

@@ -41,5 +41,5 @@ def test_kind_accepts_python_csv():
     assert n.kind == "python-csv"
 
 
-def test_kinds_frozenset_contains_both_kinds():
-    assert KINDS == frozenset({"python-node", "python-csv"})
+def test_kinds_frozenset_contains_every_kind():
+    assert KINDS == frozenset({"python-node", "python-csv", "python-api"})

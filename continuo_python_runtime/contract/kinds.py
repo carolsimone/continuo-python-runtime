@@ -1,8 +1,8 @@
 """Per-kind contract rules: which fields a node of each kind must carry.
 
-Each kind is one ``KindRules`` entry composed of a script policy and a reads
-rule. Adding a kind means adding one entry to ``RULES``; nothing that parses a
-contract branches on the kind's name.
+Each kind is one ``KindRules`` entry composed of a script policy, a reads rule,
+and whether it may name a Secret. Adding a kind means adding one entry to
+``RULES``; nothing that parses a contract branches on the kind's name.
 """
 
 from __future__ import annotations
@@ -88,17 +88,32 @@ class CsvRead(ReadsRule):
         return dict(reads)
 
 
+class NoReads(ReadsRule):
+    """No declared reads: the node's script fetches its own data."""
+
+    def validate(
+        self, reads: Any, label: str, *, dialect: str | None, check_reads: bool
+    ) -> dict[str, str]:
+        if reads is None or (isinstance(reads, dict) and not reads):
+            return {}
+        raise ContractError(
+            f"{label}: a python-api node declares no 'reads' (its script fetches its own data)"
+        )
+
+
 @dataclass(frozen=True)
 class KindRules:
     """What a node of one kind must declare."""
 
     script_required: bool
     reads: ReadsRule
+    secret_allowed: bool = False
 
 
 RULES: dict[str, KindRules] = {
     "python-node": KindRules(script_required=True, reads=SqlReads()),
     "python-csv": KindRules(script_required=False, reads=CsvRead()),
+    "python-api": KindRules(script_required=True, reads=NoReads(), secret_allowed=True),
 }
 
 

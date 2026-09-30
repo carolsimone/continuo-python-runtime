@@ -481,3 +481,52 @@ def test_csv_node_needs_no_script_file_on_disk(tmp_path):
     )
     doc = build_wire_contract(tmp_path / "contracts", tmp_path, "svc")
     assert len(doc["nodes"]) == 1
+
+
+def _api_repo(tmp_path, **extra):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "fx.py").write_text(
+        "import pyarrow as pa\n\ndef run(ctx):\n    return pa.table({'rate': [1.0]})\n"
+    )
+    node = {
+        "schema": "analytics", "table": "fx", "owner": "m", "schedule": "daily",
+        "criticality": "SECONDARY", "kind": "python-api", "script": "scripts/fx.py",
+        "output_columns": [{"name": "rate", "type": "DOUBLE PRECISION"}],
+    }
+    node.update(extra)
+    (tmp_path / "contracts" / "fx.yml").write_text(yaml.safe_dump({"nodes": [node]}))
+    return tmp_path
+
+
+def test_python_api_wire_entry_has_empty_reads_and_no_secret_key_when_unset(tmp_path):
+    repo = _api_repo(tmp_path)
+    (entry,) = build_wire_contract(repo / "contracts", repo, "s")["nodes"]
+    assert set(entry) == WIRE_ENTRY_KEYS
+    assert entry["kind"] == "python-api"
+    assert entry["reads"] == {}
+    assert entry["source_hash"] == sha256((repo / "scripts" / "fx.py").read_bytes()).hexdigest()
+
+
+def test_python_api_wire_entry_carries_secret_ref_when_set(tmp_path):
+    repo = _api_repo(tmp_path, secret_ref="continuo-api-fx")
+    (entry,) = build_wire_contract(repo / "contracts", repo, "s")["nodes"]
+    assert set(entry) == WIRE_ENTRY_KEYS | {"secret_ref"}
+    assert entry["secret_ref"] == "continuo-api-fx"
+
+
+def test_secret_ref_is_part_of_the_config_hash(tmp_path):
+    a = _api_repo(tmp_path / "a", secret_ref="continuo-api-fx")
+    b = _api_repo(tmp_path / "b", secret_ref="continuo-api-other")
+    (ea,) = build_wire_contract(a / "contracts", a, "s")["nodes"]
+    (eb,) = build_wire_contract(b / "contracts", b, "s")["nodes"]
+    assert ea["source_hash"] == eb["source_hash"]
+    assert ea["config_hash"] != eb["config_hash"]
+
+
+def test_python_api_script_is_held_to_the_closure_lint(tmp_path):
+    repo = _api_repo(tmp_path)
+    (repo / "scripts" / "fx.py").write_text("import psycopg2\n\ndef run(ctx):\n    return None\n")
+    with pytest.raises(ContractError, match="lint violations"):
+        build_wire_contract(repo / "contracts", repo, "s")

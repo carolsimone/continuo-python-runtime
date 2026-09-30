@@ -666,3 +666,52 @@ def test_adapter_construction_failure_emits_single_load_error_block(monkeypatch,
     out = capsys.readouterr().out
     assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
     assert '"message":"LoadError:' in out
+
+
+def _api_repo(tmp_path, script_body):
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "fx.py").write_text(script_body)
+    (tmp_path / "contracts" / "fx.yml").write_text(yaml.safe_dump({"nodes": [{
+        "schema": "analytics", "table": "fx", "owner": "m", "schedule": "daily",
+        "criticality": "SECONDARY", "kind": "python-api", "script": "scripts/fx.py",
+        "secret_ref": "continuo-api-fx",
+        "output_columns": [{"name": "rate", "type": "DOUBLE PRECISION"}],
+    }]}))
+    return tmp_path
+
+
+def _api_env(repo):
+    return {
+        "NODE_ID": "analytics.fx", "TABLE_NAME": "fx", "TARGET_SCHEMA": "analytics",
+        "CONTRACT_DIR": str(repo / "contracts"), "APP_ROOT": str(repo),
+    }
+
+
+def _sentinel_body(out):
+    return json.loads(out.split("BEGIN===\n")[1].split("\n===CONTINUO")[0])
+
+
+def test_python_api_node_runs_its_script_and_loads_the_result(tmp_path, capsys):
+    repo = _api_repo(
+        tmp_path,
+        "import pyarrow as pa\n\ndef run(ctx):\n    return pa.table({'rate': [1.08]})\n",
+    )
+    adapter = FakeWarehouseAdapter()
+    assert run_node(_api_env(repo), adapter=adapter) == 0
+    assert adapter.loaded[2].column("rate").to_pylist() == [1.08]
+    assert _sentinel_body(capsys.readouterr().out)["status"] == "success"
+
+
+def test_python_api_ctx_read_is_a_read_error(tmp_path, capsys):
+    repo = _api_repo(tmp_path, "def run(ctx):\n    return ctx.read('anything')\n")
+    assert run_node(_api_env(repo), adapter=FakeWarehouseAdapter()) == 1
+    assert "ReadError" in capsys.readouterr().out
+
+
+def test_python_api_missing_env_key_is_a_script_error_naming_the_key(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("FX_API_KEY", raising=False)
+    repo = _api_repo(tmp_path, "import os\n\ndef run(ctx):\n    return os.environ['FX_API_KEY']\n")
+    assert run_node(_api_env(repo), adapter=FakeWarehouseAdapter()) == 1
+    out = capsys.readouterr().out
+    assert "ScriptError" in out and "FX_API_KEY" in out

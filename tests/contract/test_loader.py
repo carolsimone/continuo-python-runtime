@@ -682,3 +682,48 @@ def test_load_contract_dir_threads_check_reads_to_parse_node(monkeypatch, tmp_pa
     assert calls == []
     load_contract_dir(tmp_path)
     assert calls == [VALID["reads"]["ids"]]
+
+
+def _api_entry(**overrides):
+    entry = {
+        "schema": "analytics", "table": "fx", "owner": "m", "schedule": "daily",
+        "criticality": "SECONDARY", "kind": "python-api", "script": "scripts/fx.py",
+        "output_columns": [{"name": "rate", "type": "DOUBLE PRECISION"}],
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_python_api_without_reads_loads_with_empty_reads():
+    node = parse_node(_api_entry(), "c.yml")
+    assert node.kind == "python-api"
+    assert node.reads == {}
+    assert node.secret_ref == ""
+
+
+def test_python_api_with_secret_ref_keeps_it():
+    node = parse_node(_api_entry(secret_ref="continuo-api-fx"), "c.yml")
+    assert node.secret_ref == "continuo-api-fx"
+
+
+def test_python_api_with_reads_is_rejected():
+    with pytest.raises(ContractError, match="declares no 'reads'"):
+        parse_node(_api_entry(reads={"x": "select 1"}), "c.yml")
+
+
+def test_python_api_still_requires_a_script():
+    entry = _api_entry()
+    del entry["script"]
+    with pytest.raises(ContractError, match="required field 'script'"):
+        parse_node(entry, "c.yml")
+
+
+def test_secret_ref_on_python_node_is_rejected():
+    entry = _api_entry(kind="python-node", reads={"x": "select 1"}, secret_ref="continuo-api-fx")
+    with pytest.raises(ContractError, match="'secret_ref' is not allowed for kind python-node"):
+        parse_node(entry, "c.yml")
+
+
+def test_bad_secret_ref_is_rejected_naming_the_node():
+    with pytest.raises(ContractError, match=r"c\.yml \(analytics\.fx\): 'secret_ref'"):
+        parse_node(_api_entry(secret_ref="continuo-app-credentials"), "c.yml")

@@ -22,7 +22,7 @@ def node_entry(node: Node) -> dict:
     four (source_hash, shared_code_hash, config_hash, content_hash). The
     nullable field is always present in output_columns.
     """
-    return {
+    entry = {
         "schema": node.schema,
         "table": node.table,
         "owner": node.owner,
@@ -43,6 +43,11 @@ def node_entry(node: Node) -> dict:
         "extra_columns": node.extra_columns,
         "config": dict(node.config),
     }
+    # Only a kind that may name a Secret ever carries one; emitting the key
+    # only when set keeps every other node's config_hash unchanged.
+    if node.secret_ref:
+        entry["secret_ref"] = node.secret_ref
+    return entry
 
 
 def _lint_node_closure(
@@ -131,6 +136,7 @@ def _csv_hash_inputs(node: Node, repo_root: Path) -> tuple[bytes, list[bytes]]:
 _HASH_INPUTS: dict[str, Callable[[Node, Path], tuple[bytes, list[bytes]]]] = {
     "python-node": _script_hash_inputs,
     "python-csv": _csv_hash_inputs,
+    "python-api": _script_hash_inputs,
 }
 
 

@@ -52,6 +52,15 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   release gate on a missing declared column exactly as a script node fails
   it on a missing bind. §13.4 below still applies unchanged to
   `kind: python-node` nodes.
+- **`python-api`** is the third `kind`: a script-backed node, like
+  `python-node`, that declares no reads and may name a Kubernetes Secret
+  through an optional `secret_ref` (must match `continuo-api-*`; a trailing
+  newline is rejected). Only this kind may set it. Its script and import closure are hashed and
+  linted exactly as for `python-node`. When `secret_ref` is set, it appears
+  on the merged wire entry as an extra key (absent otherwise, so no other
+  node's wire entry or `config_hash` changes), and it is part of
+  `config_hash`, so `content_hash` changes when the referenced Secret name
+  changes. `source_hash` does not.
 - **Reads must be single-statement SELECTs with every table reference
   schema-qualified** (`analytics.table_a`, never `table_a`) — the resolver
   raises `UnqualifiedTableReference` and rejects the whole release otherwise

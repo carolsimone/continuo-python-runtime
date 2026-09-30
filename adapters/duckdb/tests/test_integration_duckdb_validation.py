@@ -41,6 +41,36 @@ def test_drop_schema_removes_a_schema_containing_tables(adapter, schema, tables_
     assert tables_in(schema) == []
 
 
+def test_drop_schema_removes_a_schema_containing_a_view(adapter, lake_env, schema):
+    # The adapter cannot create a view, so a second session (its private _run,
+    # the only DDL path available to a test) makes one, as a user's own SQL would.
+    from continuo_duckdb_adapter.infrastructure.session import DuckLakeSession
+    from continuo_duckdb_adapter.infrastructure.settings import DuckLakeSettings
+
+    adapter.ensure_table(schema, "a", [{"name": "id", "type": "INTEGER", "nullable": True}], config={})
+    other = DuckLakeSession.connect(DuckLakeSettings.from_env(lake_env))
+    try:
+        other._run(f'CREATE VIEW "lake"."{schema}"."v" AS SELECT id FROM "lake"."{schema}"."a"')
+    finally:
+        other.close()
+    views = f"SELECT count(*) AS n FROM duckdb_views() WHERE database_name = 'lake' AND schema_name = '{schema}'"
+    assert adapter.fetch(views).to_pylist() == [{"n": 1}]
+    adapter.drop_schema(schema)
+    assert not _schema_exists(adapter, schema)
+    assert adapter.fetch(views).to_pylist() == [{"n": 0}]
+
+
+def test_a_rejected_call_leaves_the_connection_usable(adapter, schema, scalar):
+    with pytest.raises(ValueError):
+        adapter.ensure_schema("")  # rejected before any statement
+    adapter.ensure_schema(schema)
+    with pytest.raises(duckdb.Error):
+        # rejected by the engine, inside the build transaction
+        adapter.build_empty_from_sql(schema, "t", "SELECT * FROM no_such_table_anywhere")
+    adapter.ensure_table(schema, "t", [{"name": "id", "type": "INTEGER", "nullable": True}], config={})
+    assert scalar(f'SELECT count(*) FROM "{schema}"."t"') == 0
+
+
 def test_drop_schema_on_an_absent_schema_is_a_noop(adapter, schema):
     adapter.drop_schema(schema)
     adapter.drop_schema(schema)

@@ -56,6 +56,24 @@ def _sort_keys(cur, schema, table):
     return [(row[0].strip('"'), row[1], row[2]) for row in cur.fetchall()]
 
 
+_FILE_PARTITION_VALUES = """
+SELECT df.path, fpv.partition_key_index, fpv.partition_value
+FROM ducklake_data_file df
+JOIN ducklake_file_partition_value fpv
+  ON fpv.data_file_id = df.data_file_id AND fpv.table_id = df.table_id
+JOIN ducklake_table t ON t.table_id = df.table_id
+JOIN ducklake_schema s ON s.schema_id = t.schema_id
+WHERE s.schema_name = %s AND t.table_name = %s
+  AND df.end_snapshot IS NULL AND t.end_snapshot IS NULL
+ORDER BY df.path, fpv.partition_key_index
+"""
+
+
+def _file_partition_values(cur, schema, table) -> list[tuple[str, int, str]]:
+    cur.execute(_FILE_PARTITION_VALUES, (schema, table))
+    return [(row[0], row[1], row[2]) for row in cur.fetchall()]
+
+
 def _parquet_files(s3, schema, table) -> dict[str, pa.Table]:
     """Every Parquet data file DuckLake wrote for the table, read back from MinIO."""
     listing = s3.list_objects_v2(Bucket="warehouse", Prefix=f"lake/{schema}/{table}/")
@@ -104,7 +122,7 @@ def test_time_transforms_work_on_a_date_column(adapter, schema, catalog_db):
 # --- partitioned_by: physical files -----------------------------------------
 
 
-def test_partitioned_data_lands_in_one_directory_per_value(parquet_adapter, schema, s3):
+def test_partitioned_data_lands_in_one_directory_per_value(parquet_adapter, schema, s3, catalog_db):
     parquet_adapter.ensure_table(schema, "events", COLS, config={"partitioned_by": ["name"]})
     parquet_adapter.load(schema, "events", pa.table({
         "id": pa.array([1, 2, 3, 4, 5], pa.int32()),
@@ -117,6 +135,15 @@ def test_partitioned_data_lands_in_one_directory_per_value(parquet_adapter, sche
         directory = key.split("/")[-2]
         rows_per_directory[directory] = rows_per_directory.get(directory, 0) + table.num_rows
     assert rows_per_directory == {"name=a": 3, "name=b": 2}
+    # The catalog's own file metadata agrees: exactly one partition value per
+    # live data file, and it is the value of the directory the file sits in.
+    recorded = _file_partition_values(catalog_db, schema, "events")
+    assert len(recorded) == len(files)
+    assert all(any(key.endswith(path) for key in files) for path, _, _ in recorded)
+    assert {index for _, index, _ in recorded} == {0}
+    assert sorted(value for _, _, value in recorded) == ["a", "b"]
+    for path, _, value in recorded:
+        assert f"name={value}/" in path
 
 
 # --- sorted_by: catalog metadata --------------------------------------------

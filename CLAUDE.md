@@ -3,7 +3,7 @@
 The validation/execution runtime that continuo's executor runs as a Kubernetes
 Job. Python 3.12, uv workspace: the runtime (`continuo_python_runtime`), the
 engine contract (`contract/`), and the engine adapters (`adapters/postgres`,
-`adapters/trino`).
+`adapters/trino`, `adapters/duckdb`).
 
 ## CHANGELOG is not optional
 
@@ -26,7 +26,7 @@ merged PRs before adding anything new.
 A release is one `chore(release):` commit that bumps versions and updates the
 changelog, then a `vX.Y.Z` tag on it. Bump the version of every package whose
 source changed since the last tag — `scripts/check_version_bumps.py` fails the
-PyPI publish otherwise. The tag builds and publishes the `-postgres` / `-trino`
+PyPI publish otherwise. The tag builds and publishes the `-postgres` / `-trino` / `-duckdb`
 images and the PyPI packages. See `CONTRIBUTING.md` for the full steps.
 
 ## Conventions

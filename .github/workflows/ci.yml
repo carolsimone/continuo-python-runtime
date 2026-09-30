@@ -22,6 +22,8 @@ jobs:
         run: uv run --package continuo-postgres-adapter mypy adapters/postgres/continuo_postgres_adapter
       - name: Types (trino adapter)
         run: uv run --package continuo-trino-adapter mypy adapters/trino/continuo_trino_adapter
+      - name: Types (duckdb adapter)
+        run: uv run --package continuo-duckdb-adapter mypy adapters/duckdb/continuo_duckdb_adapter
       # `-m "not image"` deselects tests/test_image_smoke_validation.py, which
       # needs a built engine image and the env naming it. Those tests run in
       # images.yml's smoke jobs, where an image actually exists. `and not
@@ -37,6 +39,8 @@ jobs:
         run: uv run pytest contract/tests -v
       - name: Tests (adapter units)
         run: uv run pytest adapters/postgres/tests adapters/trino/tests -m "not integration" -v
+      - name: Tests (duckdb adapter units)
+        run: uv run pytest adapters/duckdb/tests -m "not integration" -v
 
   integration-postgres:
     runs-on: ubuntu-latest
@@ -65,3 +69,17 @@ jobs:
       - name: Tear down trino stack
         if: always()
         run: docker compose -f tests/smoke/trino-stack/docker-compose.yml down -v
+
+  integration-duckdb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --all-packages --all-groups
+      - name: Start duckdb stack
+        run: docker compose -f tests/smoke/duckdb-stack/docker-compose.yml up -d --wait
+      - name: Tests (duckdb integration)
+        run: uv run pytest adapters/duckdb/tests -m integration -v
+      - name: Tear down duckdb stack
+        if: always()
+        run: docker compose -f tests/smoke/duckdb-stack/docker-compose.yml down -v

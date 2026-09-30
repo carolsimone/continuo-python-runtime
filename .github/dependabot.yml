@@ -16,6 +16,7 @@ updates:
       - /contract
       - /adapters/postgres
       - /adapters/trino
+      - /adapters/duckdb
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -46,7 +47,7 @@ updates:
     commit-message:
       prefix: chore(ci)
 
-  # Dockerfile.postgres and Dockerfile.trino, the published engine images. Most
+  # Dockerfile.postgres, Dockerfile.trino and Dockerfile.duckdb, the published engine images. Most
   # base-image CVEs are fixed by moving to a newer tag.
   - package-ecosystem: docker
     directory: /

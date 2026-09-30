@@ -72,7 +72,7 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   own dialect — a read that's valid against postgres can fail
   `InvalidCompiledSql` on an install whose warehouse is Trino, and vice
   versa. `continuo-runtime validate|merge|hash` accept an optional
-  `--dialect <name>` flag (e.g. `postgres`, `trino`) so a domain repo can
+  `--dialect <name>` flag (e.g. `postgres`, `trino`, `duckdb`) so a domain repo can
   check its reads against that dialect locally, catching the failure in its
   own CI instead of at Continuo's parser. Reads are always parsed (via
   `continuo_engine_contract.sql.ensure_single_read`, sqlglot-backed) even
@@ -126,6 +126,15 @@ parse time.
     non-empty list of non-empty strings — column names or Iceberg
     partition transforms like `day(event_ts)`), and `format` (one of
     `PARQUET`/`ORC`/`AVRO`, case-insensitive).
+  - **duckdb (DuckLake)** → `partitioned_by` and `sorted_by`.
+    `partitioned_by` is a non-empty list whose entries are a declared column
+    name (identity partitioning) or `{column, transform, buckets}` with
+    `transform` one of `identity`, `bucket` (needs `buckets`, a positive
+    integer), `year`, `month`, `day`, `hour` (these four need a `DATE` or
+    `TIMESTAMP` column). `sorted_by` is a non-empty list of declared column
+    names or `{column, direction: asc|desc, nulls: first|last}`; free-form
+    expressions are rejected. DuckLake has no indexes, so postgres's `indexes`
+    is an unrecognized key on this engine.
 - Worked example (from `template/contracts/example.yml`):
   ```yaml
   config:
@@ -142,7 +151,7 @@ parse time.
   `name`, since that changes the derived default name. Iceberg's
   properties instead all ride on a single `WITH (...)` clause attached to
   the `CREATE TABLE`'s own `IF NOT EXISTS`, so once the table exists
-  nothing in `config` is applied at all. Neither engine is a migration
+  nothing in `config` is applied at all. DuckLake behaves like Iceberg here: `partitioned_by` and `sorted_by` are applied only when `ensure_table` creates the table, so changing them on an existing table is a silent no-op; the release gate's `build_empty_from_columns` always rebuilds with the new layout. Neither engine is a migration
   mechanism for an index/property that already exists under the same
   name: flipping `unique: false → true` under a fixed index `name` is a
   **silent no-op** on postgres (the name already resolves, so `IF NOT

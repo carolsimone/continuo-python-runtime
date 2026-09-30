@@ -21,8 +21,8 @@ Five artifacts come out of this repository:
 - **The `continuo-engine-contract` PyPI package** — the `WarehouseAdapter`
   port, the contract schema, the shared SQL/type/config guards, and the
   sentinel result-block format. Adapter authors outside this repo pin it.
-- **The two engine-adapter PyPI packages** (`continuo-postgres-adapter`,
-  `continuo-trino-adapter`) — one `WarehouseAdapter` implementation per
+- **The three engine-adapter PyPI packages** (`continuo-postgres-adapter`,
+  `continuo-trino-adapter`, `continuo-duckdb-adapter`) — one `WarehouseAdapter` implementation per
   warehouse engine, each published independently under the same tag. A
   domain repo normally never installs these directly (the engine image
   already has the matching one baked in); they exist as standalone PyPI
@@ -60,12 +60,13 @@ validation-side port, adapter class, entry-point group, or image. One
 | `continuo-engine-contract` | `continuo_engine_contract` | this repo, `contract/` | The `WarehouseAdapter` port, contract schema, the SQL/type/config guards adapters must run, and the result-block format. Published to PyPI. |
 | `continuo-postgres-adapter` | `continuo_postgres_adapter` | this repo, `adapters/postgres/` | `PostgresAdapter` — one class, both roles. Published to PyPI. |
 | `continuo-trino-adapter` | `continuo_trino_adapter` | this repo, `adapters/trino/` | `TrinoAdapter` — one class, both roles, for Trino/Iceberg. Published to PyPI. |
+| `continuo-duckdb-adapter` | `continuo_duckdb_adapter` | this repo, `adapters/duckdb/` | `DuckDBAdapter` — one class, both roles, for DuckDB on a DuckLake (Postgres catalog, Parquet on S3). Published to PyPI. |
 
-All four are uv workspace members (`[tool.uv.workspace]` in the root
+All five are uv workspace members (`[tool.uv.workspace]` in the root
 `pyproject.toml`), so `uv sync --all-packages --all-groups` at the repo root
 installs everything for local development.
 
-**All four packages in the table above are published to PyPI**, under the
+**All five packages in the table above are published to PyPI**, under the
 same `vX.Y.Z` tag. The two engine images then **install the matching pinned
 adapter version from PyPI** — `Dockerfile.postgres` installs
 `continuo-postgres-adapter==X.Y.Z`, `Dockerfile.trino` installs
@@ -129,7 +130,7 @@ the pre-flight check once before your next release; it reports every affected
 read at once:
 
 ```bash
-continuo-runtime validate contracts/ --dialect postgres   # or trino
+continuo-runtime validate contracts/ --dialect postgres   # or trino, duckdb
 ```
 
 The runtime image does not re-run this gate, so a read that passes here is
@@ -274,7 +275,7 @@ pinned PyPI version of the `continuo-postgres-adapter` or
 `continuo-trino-adapter` package built from this repo's `adapters/postgres/`
 or `adapters/trino/` source (see the table above) — registered under the
 `continuo_engine.adapters` entry-point group (entry names `postgres` /
-`trino`). The runtime discovers it via `discover_adapter()` at run time, so a
+`trino` / `duckdb`). The runtime discovers it via `discover_adapter()` at run time, so a
 single image serves every node in the service and the release-time
 validation Job for it. The executor injects the warehouse connection as
 environment variables (engine-native, e.g.

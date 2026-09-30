@@ -192,7 +192,7 @@ jobs:
       - name: Extensions load offline as the non-root user
         run: |
           docker run --rm --network none --entrypoint python cpr-smoke-duckdb -c \
-            "import os, duckdb; c = duckdb.connect(); c.execute('SET extension_directory = ' + repr(os.environ['DUCKDB_EXTENSION_DIRECTORY'])); [c.execute('LOAD ' + e) for e in ('ducklake', 'postgres', 'httpfs')]"
+            "import os; from continuo_duckdb_adapter.infrastructure.session import check_offline; check_offline(os.environ['DUCKDB_EXTENSION_DIRECTORY'])"
       - name: Start duckdb stack
         run: docker compose -f tests/smoke/duckdb-stack/docker-compose.yml up -d --wait
       - name: Seed source table

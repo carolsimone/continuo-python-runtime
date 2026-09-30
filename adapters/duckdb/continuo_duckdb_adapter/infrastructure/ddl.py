@@ -18,6 +18,15 @@ from .settings import DuckLakeSettings
 
 _LIBPQ_BARE = re.compile(r"[A-Za-z0-9_.:/\-]+")
 
+# The one list of DuckDB extensions the adapter needs: the session LOADs them,
+# the image bake script INSTALLs them, the offline image check LOADs them.
+EXTENSIONS: tuple[str, ...] = ("ducklake", "postgres", "httpfs")
+
+
+BEGIN = "BEGIN"
+COMMIT = "COMMIT"
+ROLLBACK = "ROLLBACK"
+
 
 def quote_identifier(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
@@ -25,6 +34,22 @@ def quote_identifier(name: str) -> str:
 
 def sql_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
+
+
+def load_extension(name: str) -> str:
+    return f"LOAD {quote_identifier(name)}"
+
+
+def install_extension(name: str) -> str:
+    return f"INSTALL {quote_identifier(name)}"
+
+
+def set_extension_directory(directory: str) -> str:
+    return f"SET extension_directory = {sql_literal(directory)}"
+
+
+def use_catalog(catalog: str) -> str:
+    return f"USE {quote_identifier(catalog)}"
 
 
 def _libpq_value(value: str) -> str:

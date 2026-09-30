@@ -21,7 +21,19 @@ from ..application.ports import LakeConflictError, LakeGateway
 from ..domain.columns import ColumnDefinition
 from ..domain.identifiers import Identifier, QualifiedTable
 from ..domain.layout import TableLayout
-from .ddl import DdlRenderer, attach_statement, quote_identifier, s3_secret_statement, sql_literal
+from .ddl import (
+    BEGIN,
+    COMMIT,
+    EXTENSIONS,
+    ROLLBACK,
+    DdlRenderer,
+    attach_statement,
+    install_extension,
+    load_extension,
+    s3_secret_statement,
+    set_extension_directory,
+    use_catalog,
+)
 from .settings import DuckLakeSettings
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -30,16 +42,31 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = logging.getLogger("continuo_duckdb_adapter")
 
 CATALOG_ALIAS = "lake"
-_EXTENSIONS = ("ducklake", "postgres", "httpfs")
 
 
 def _load_extension(con: "duckdb.DuckDBPyConnection", name: str) -> None:
     try:
-        con.execute(f"LOAD {name}")
+        con.execute(load_extension(name))
     except duckdb.Error:
         logger.info("installing duckdb extension %s", name)
-        con.execute(f"INSTALL {name}")
-        con.execute(f"LOAD {name}")
+        con.execute(install_extension(name))
+        con.execute(load_extension(name))
+
+
+def check_offline(directory: str) -> None:
+    """LOAD every extension from *directory* without ever INSTALLing.
+
+    What a baked, offline, non-root image must be able to do; raises
+    ``duckdb.Error`` naming the first extension that is missing.
+    """
+    con = duckdb.connect()
+    try:
+        con.execute(set_extension_directory(directory))
+        for name in EXTENSIONS:
+            con.execute(load_extension(name))
+            logger.info("loaded %s offline from %s", name, directory)
+    finally:
+        con.close()
 
 
 class DuckLakeSession(LakeGateway):
@@ -52,13 +79,13 @@ class DuckLakeSession(LakeGateway):
         con = duckdb.connect()
         try:
             if settings.extension_directory:
-                con.execute(f"SET extension_directory = {sql_literal(settings.extension_directory)}")
-            for extension in _EXTENSIONS:
+                con.execute(set_extension_directory(settings.extension_directory))
+            for extension in EXTENSIONS:
                 _load_extension(con, extension)
             if settings.uses_s3:
                 con.execute(s3_secret_statement(settings))
             con.execute(attach_statement(settings, CATALOG_ALIAS))
-            con.execute(f"USE {quote_identifier(CATALOG_ALIAS)}")
+            con.execute(use_catalog(CATALOG_ALIAS))
         except BaseException:
             con.close()
             raise
@@ -76,17 +103,17 @@ class DuckLakeSession(LakeGateway):
 
     def _rollback(self) -> None:
         try:
-            self._con.execute("ROLLBACK")
+            self._con.execute(ROLLBACK)
         except duckdb.Error as exc:
             # Never mask the failure that got us here.
             logger.warning("rollback failed: %s", exc)
 
     @contextlib.contextmanager
     def transaction(self) -> Iterator[None]:
-        self._con.execute("BEGIN")
+        self._con.execute(BEGIN)
         try:
             yield
-            self._run("COMMIT")
+            self._run(COMMIT)
         except BaseException:
             self._rollback()
             raise
@@ -134,7 +161,7 @@ class DuckLakeSession(LakeGateway):
 
     def explain_read(self, sql: str) -> None:
         # EXPLAIN binds without scanning; the transaction is always rolled back.
-        self._con.execute("BEGIN")
+        self._con.execute(BEGIN)
         try:
             self._run(self._renderer.explain_read(sql))
         finally:

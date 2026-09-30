@@ -1,12 +1,15 @@
 """Settings parsing and SQL rendering: pure string work, no engine."""
+import duckdb
 import pytest
 
 from continuo_duckdb_adapter.domain.columns import ColumnDefinition
 from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
 from continuo_duckdb_adapter.domain.layout import PartitionKey, SortKey
 from continuo_duckdb_adapter.infrastructure.ddl import (
-    DdlRenderer, attach_statement, quote_identifier, s3_secret_statement, sql_literal,
+    EXTENSIONS, DdlRenderer, attach_statement, install_extension, load_extension,
+    quote_identifier, s3_secret_statement, set_extension_directory, sql_literal, use_catalog,
 )
+from continuo_duckdb_adapter.infrastructure.session import check_offline
 from continuo_duckdb_adapter.infrastructure.settings import REQUIRED_ENV, DuckLakeSettings
 
 ENV = {
@@ -107,6 +110,31 @@ def test_s3_secret_falls_back_to_the_credential_chain():
         "CREATE OR REPLACE SECRET continuo_s3 (TYPE S3, PROVIDER credential_chain, "
         "REGION 'us-east-1', URL_STYLE 'vhost', USE_SSL true)"
     )
+
+
+def test_extension_statements_quote_the_name():
+    assert load_extension("ducklake") == 'LOAD "ducklake"'
+    assert install_extension("ducklake") == 'INSTALL "ducklake"'
+    assert load_extension('we"ird') == 'LOAD "we""ird"'
+
+
+def test_set_extension_directory_escapes_the_path():
+    assert set_extension_directory("/opt/duckdb") == "SET extension_directory = '/opt/duckdb'"
+    assert set_extension_directory("/o'pt") == "SET extension_directory = '/o''pt'"
+
+
+def test_use_catalog_quotes_the_alias():
+    assert use_catalog("lake") == 'USE "lake"'
+    assert use_catalog('la"ke') == 'USE "la""ke"'
+
+
+def test_extensions_are_the_three_the_adapter_needs():
+    assert EXTENSIONS == ("ducklake", "postgres", "httpfs")
+
+
+def test_check_offline_fails_when_the_extensions_are_not_in_the_directory(tmp_path):
+    with pytest.raises(duckdb.Error):
+        check_offline(str(tmp_path))
 
 
 R = DdlRenderer("lake")

@@ -24,6 +24,8 @@ def test_ensure_schema_creates_and_is_idempotent(adapter, schema):
 
 
 def test_ensure_schema_race_all_callers_succeed(adapter_factory, adapter, schema):
+    assert not _schema_exists(adapter, schema)
+
     def call(_):
         adapter_factory().ensure_schema(schema)
 
@@ -93,11 +95,12 @@ def test_build_empty_from_columns_creates_a_typed_empty_table(adapter, schema, c
     assert scalar(f'SELECT count(*) AS n FROM "{schema}"."typed"') == 0
 
 
-def test_not_null_is_enforced_on_load(adapter, schema):
+def test_not_null_is_enforced_on_load(adapter, schema, scalar):
     adapter.ensure_schema(schema)
     adapter.build_empty_from_columns(schema, "t", [{"name": "id", "type": "INTEGER", "nullable": False}], {})
-    with pytest.raises(duckdb.Error):
+    with pytest.raises(duckdb.Error, match="(?i)not null"):
         adapter.load(schema, "t", pa.table({"id": pa.array([None], pa.int32())}))
+    assert scalar(f'SELECT count(*) AS n FROM "{schema}"."t"') == 0
 
 
 def test_build_empty_from_columns_rebuilds_on_rerun(adapter, schema, columns_of):
@@ -146,21 +149,28 @@ def test_check_binds_raises_on_a_missing_table(adapter, prod_table):
 
 def test_check_binds_scans_no_data(adapter, prod_table, scalar):
     prod, src = prod_table
-    adapter.check_binds(f'SELECT id FROM "{prod}"."{src}"')
+    # error() fires only if a row is evaluated (id is 1 and 2, so the branch is taken at
+    # runtime); EXPLAIN binds the expression without running it.
+    adapter.check_binds(f'SELECT CASE WHEN id > 0 THEN error(\'scanned\') ELSE 0 END AS v FROM "{prod}"."{src}"')
     assert scalar(f'SELECT count(*) AS n FROM "{prod}"."{src}"') == 2  # untouched
 
 
 @pytest.mark.parametrize("attack", [
     'SELECT 1; DROP TABLE "{s}"."victim"',
+    'SELECT \';\'; DROP TABLE "{s}"."victim"',
     'SELECT 1) AS x; DROP TABLE "{s}"."victim"; SELECT * FROM (SELECT 1',
     'DELETE FROM "{s}"."victim"',
     'DROP TABLE "{s}"."victim"',
 ])
-def test_check_binds_rejects_stacked_and_non_read_statements_and_executes_nothing(adapter, schema, tables_in, attack):
+def test_check_binds_rejects_stacked_and_non_read_statements_and_executes_nothing(
+    adapter, schema, tables_in, scalar, attack
+):
     adapter.ensure_table(schema, "victim", [{"name": "id", "type": "INTEGER", "nullable": True}], config={})
+    adapter.load(schema, "victim", pa.table({"id": pa.array([1, 2, 3], pa.int32())}))
     with pytest.raises(ValueError):
         adapter.check_binds(attack.format(s=schema))
     assert tables_in(schema) == ["victim"]
+    assert scalar(f'SELECT count(*) AS n FROM "{schema}"."victim"') == 3  # no row deleted
 
 
 def test_check_binds_leaves_the_connection_usable_after_a_failed_read(adapter, prod_table):

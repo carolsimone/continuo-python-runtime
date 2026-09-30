@@ -10,17 +10,19 @@ import os
 import socket
 import uuid
 from contextlib import suppress
+from typing import TYPE_CHECKING
 
-import boto3
-import psycopg2
 import pyarrow as pa
 import pytest
 
-from continuo_duckdb_adapter.adapter import DuckDBAdapter
-from continuo_duckdb_adapter.infrastructure.session import DuckLakeSession
-from continuo_duckdb_adapter.infrastructure.settings import DuckLakeSettings
 from continuo_duckdb_adapter.application.ports import LakeConflictError, LakeGateway
 from continuo_duckdb_adapter.application.warehouse import LakeWarehouse
+
+if TYPE_CHECKING:  # pragma: no cover
+    from continuo_duckdb_adapter.adapter import DuckDBAdapter
+
+# Infrastructure, boto3 and psycopg2 are imported inside the integration
+# fixtures below, so the pure domain/application unit tests never load them.
 
 
 class FakeLakeGateway(LakeGateway):
@@ -143,6 +145,9 @@ def lake_env() -> dict[str, str]:
     """
     _require_open(CATALOG_PORT)
     _require_open(S3_PORT)
+    from continuo_duckdb_adapter.infrastructure.session import DuckLakeSession
+    from continuo_duckdb_adapter.infrastructure.settings import DuckLakeSettings
+
     env = {
         "DUCKDB_CATALOG_HOST": "localhost",
         "DUCKDB_CATALOG_PORT": str(CATALOG_PORT),
@@ -163,6 +168,8 @@ def lake_env() -> dict[str, str]:
 @pytest.fixture
 def adapter_factory(lake_env, monkeypatch):
     """Build real adapters against the stack; all are closed at teardown."""
+    from continuo_duckdb_adapter.adapter import DuckDBAdapter
+
     made: list[DuckDBAdapter] = []
 
     def make(**extra_env: str) -> DuckDBAdapter:
@@ -179,12 +186,12 @@ def adapter_factory(lake_env, monkeypatch):
 
 
 @pytest.fixture
-def adapter(adapter_factory) -> DuckDBAdapter:
+def adapter(adapter_factory) -> "DuckDBAdapter":
     return adapter_factory()
 
 
 @pytest.fixture
-def parquet_adapter(adapter_factory) -> DuckDBAdapter:
+def parquet_adapter(adapter_factory) -> "DuckDBAdapter":
     """Inlining off: every insert becomes a Parquet file, so layout is observable."""
     return adapter_factory(DUCKDB_DATA_INLINING_ROW_LIMIT="0")
 
@@ -243,8 +250,10 @@ def tables_in(adapter):
 
 
 @pytest.fixture
-def catalog_db():
+def catalog_db(lake_env):
     """A read-only-by-convention cursor on the DuckLake catalog (postgres)."""
+    import psycopg2
+
     conn = psycopg2.connect(
         host="localhost", port=CATALOG_PORT, dbname="catalog", user="continuo", password="continuo"
     )
@@ -254,7 +263,9 @@ def catalog_db():
 
 
 @pytest.fixture
-def s3():
+def s3(lake_env):
+    import boto3
+
     return boto3.client(
         "s3", endpoint_url=f"http://localhost:{S3_PORT}",
         aws_access_key_id="minioadmin", aws_secret_access_key="minioadmin", region_name="us-east-1",

@@ -114,3 +114,22 @@ def test_both_keys_together():
     layout = _layout({"partitioned_by": ["name"], "sorted_by": ["id"]})
     assert not layout.is_empty
     assert len(layout.partition_keys) == 1 and len(layout.sort_keys) == 1
+
+
+def test_partition_key_defaults_are_valid():
+    assert PartitionKey(Identifier("c")).transform == "identity"
+
+
+@pytest.mark.parametrize("transform,buckets", [
+    ("drop table", None),
+    ("x); DROP TABLE t; --", None),
+    ("bucket", None),
+    ("bucket", 0),
+    ("bucket", True),
+    ("bucket", "4"),
+    ("identity", 4),
+    ("month", 4),
+])
+def test_partition_key_rejects_invalid_construction(transform, buckets):
+    with pytest.raises(ValueError):
+        PartitionKey(Identifier("c"), transform, buckets)

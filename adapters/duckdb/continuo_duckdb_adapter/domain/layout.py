@@ -32,6 +32,25 @@ class PartitionKey:
     transform: str = "identity"
     buckets: int | None = None
 
+    def __post_init__(self) -> None:
+        if self.transform not in _TRANSFORMS:
+            raise ValueError(
+                f"unsupported partition 'transform' {self.transform!r}; "
+                f"supported: {', '.join(_TRANSFORMS)}"
+            )
+        if self.transform == "bucket":
+            if (
+                isinstance(self.buckets, bool)
+                or not isinstance(self.buckets, int)
+                or self.buckets < 1
+            ):
+                raise ValueError(
+                    "partition transform 'bucket' requires 'buckets' as a positive integer, "
+                    f"got {self.buckets!r}"
+                )
+        elif self.buckets is not None:
+            raise ValueError("'buckets' is only valid with partition transform 'bucket'")
+
 
 @dataclass(frozen=True)
 class SortKey:
@@ -105,18 +124,7 @@ def _partition_key(entry: Any, column_types: Mapping[str, str | None]) -> Partit
     ensure_known_keys(entry, _PARTITION_ENTRY_KEYS, ENGINE, where=where)
     column = _declared_column(entry.get("column"), column_types, where)
     transform = entry.get("transform", "identity")
-    if transform not in _TRANSFORMS:
-        raise ValueError(
-            f"unsupported partition 'transform' {transform!r}; supported: {', '.join(_TRANSFORMS)}"
-        )
-    buckets = entry.get("buckets")
-    if transform == "bucket":
-        if isinstance(buckets, bool) or not isinstance(buckets, int) or buckets < 1:
-            raise ValueError(
-                f"partition transform 'bucket' requires 'buckets' as a positive integer, got {buckets!r}"
-            )
-    elif buckets is not None:
-        raise ValueError("'buckets' is only valid with partition transform 'bucket'")
+    key = PartitionKey(Identifier(column), transform, entry.get("buckets"))  # validates itself
     if transform in _TEMPORAL_TRANSFORMS:
         column_type = column_types[column]
         if column_type is not None and not is_temporal_type(column_type):
@@ -124,7 +132,7 @@ def _partition_key(entry: Any, column_types: Mapping[str, str | None]) -> Partit
                 f"partition transform {transform!r} needs a DATE or TIMESTAMP column, "
                 f"but {column!r} is {column_type}"
             )
-    return PartitionKey(Identifier(column), transform, buckets)
+    return key
 
 
 def _sort_keys(raw: Any, column_types: Mapping[str, str | None]) -> tuple[SortKey, ...]:

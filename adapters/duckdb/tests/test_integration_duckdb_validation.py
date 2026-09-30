@@ -179,3 +179,18 @@ def test_check_binds_leaves_the_connection_usable_after_a_failed_read(adapter, p
         adapter.check_binds(f'SELECT nope FROM "{prod}".src_table')
     assert adapter.fetch("SELECT 1 AS ok").to_pylist() == [{"ok": 1}]
     adapter.check_binds(f'SELECT id FROM "{prod}".src_table')
+
+
+@pytest.mark.parametrize("attack", [
+    'SELECT 1; DROP TABLE "{s}"."victim"',
+    'SELECT 1) AS x; DROP TABLE "{s}"."victim"; SELECT * FROM (SELECT 1',
+])
+def test_build_empty_from_sql_rejects_stacked_statements_and_executes_nothing(
+    adapter, schema, tables_in, scalar, attack
+):
+    adapter.ensure_table(schema, "victim", [{"name": "id", "type": "INTEGER", "nullable": True}], config={})
+    adapter.load(schema, "victim", pa.table({"id": pa.array([1, 2, 3], pa.int32())}))
+    with pytest.raises(ValueError):
+        adapter.build_empty_from_sql(schema, "built", attack.format(s=schema))
+    assert tables_in(schema) == ["victim"]
+    assert scalar(f'SELECT count(*) AS n FROM "{schema}"."victim"') == 3

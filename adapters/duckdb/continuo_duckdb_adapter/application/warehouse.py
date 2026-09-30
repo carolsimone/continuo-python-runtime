@@ -33,6 +33,11 @@ _CONFLICT_ATTEMPTS = 5
 _CONFLICT_BACKOFF_SECONDS = 0.05
 
 
+def _bare_read(sql: str) -> str:
+    """*sql* without surrounding whitespace or one trailing terminator."""
+    return sql.strip().rstrip(";").strip()
+
+
 def _columns(raw: list[dict]) -> list[ColumnDefinition]:
     return [ColumnDefinition.from_mapping(entry) for entry in raw]
 
@@ -73,8 +78,13 @@ class LakeWarehouse(WarehouseAdapter):
     # --- Validation builds --------------------------------------------------
 
     def build_empty_from_sql(self, schema: str, table: str, compiled_sql: str) -> None:
-        """Create ``schema.table`` empty, shaped by the compiled SELECT."""
-        inner = compiled_sql.strip().rstrip(";").strip()
+        """Create ``schema.table`` empty, shaped by the compiled SELECT.
+
+        The parse gate runs first: DuckDB executes every ``;``-separated
+        statement handed to it, so a stacked statement would run for real.
+        """
+        ensure_single_read(compiled_sql, dialect="duckdb")
+        inner = _bare_read(compiled_sql)
         target = QualifiedTable.of(schema, table)
         with self._gateway.transaction():
             self._gateway.drop_table_if_exists(target)
@@ -83,9 +93,10 @@ class LakeWarehouse(WarehouseAdapter):
     def clone_empty_from_prod(self, candidate_schema: str, prod_schema: str, table: str) -> None:
         """Create ``candidate_schema.table`` empty, shaped like ``prod_schema.table``."""
         target = QualifiedTable.of(candidate_schema, table)
+        source = QualifiedTable.of(prod_schema, table)
         with self._gateway.transaction():
             self._gateway.drop_table_if_exists(target)
-            self._gateway.create_empty_clone(target, QualifiedTable.of(prod_schema, table))
+            self._gateway.create_empty_clone(target, source)
 
     def build_empty_from_columns(
         self, schema: str, table: str, columns: list[dict], config: dict
@@ -111,14 +122,17 @@ class LakeWarehouse(WarehouseAdapter):
         statement handed to it, so a stacked statement would run for real.
         """
         ensure_single_read(sql, dialect="duckdb")
-        inner = sql.strip().rstrip(";").strip()
+        inner = _bare_read(sql)
         logger.info("bind-checking read via EXPLAIN")
         self._gateway.explain_read(inner)
 
     # --- Python-node data plane ---------------------------------------------
 
     def fetch(self, sql: str) -> "pa.Table":
-        """Execute one declared read and return the result as an Arrow table."""
+        """Execute one declared read and return the result as an Arrow table.
+
+        Not re-gated here: reads are single-read checked earlier, at contract load.
+        """
         data = self._gateway.fetch_arrow(sql)
         seen: set[str] = set()
         duplicates: set[str] = set()

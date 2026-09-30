@@ -126,3 +126,25 @@ def test_check_binds_passes_a_single_read_to_explain(warehouse, gateway, sql, in
 def test_close_closes_the_gateway(warehouse, gateway):
     warehouse.close()
     assert gateway.calls == [("close",)]
+
+
+def test_build_empty_from_sql_runs_the_gate_before_touching_the_gateway(warehouse, gateway):
+    for bad in ("SELECT 1; DROP TABLE t", "DELETE FROM t", "SELECT 1) AS x; DROP TABLE t; SELECT * FROM (SELECT 1"):
+        with pytest.raises(ValueError):
+            warehouse.build_empty_from_sql("s", "t", bad)
+    assert gateway.calls == []
+
+
+@pytest.mark.parametrize("sql,inner", [
+    ("SELECT 1 AS a;", "SELECT 1 AS a"),
+    ("SELECT 1 AS a -- trailing comment", "SELECT 1 AS a -- trailing comment"),
+])
+def test_build_empty_from_sql_still_accepts_single_reads(warehouse, gateway, sql, inner):
+    warehouse.build_empty_from_sql("s", "t", sql)
+    assert ("create_empty_table_as", T, inner) in gateway.calls
+
+
+def test_clone_empty_from_prod_validates_both_tables_before_any_call(warehouse, gateway):
+    with pytest.raises(ValueError):
+        warehouse.clone_empty_from_prod("cand", "", "t")
+    assert gateway.calls == []

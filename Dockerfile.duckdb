@@ -32,6 +32,11 @@ ENV DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions HOME=/tmp
 COPY scripts/bake_duckdb_extensions.py /tmp/bake_duckdb_extensions.py
 RUN python /tmp/bake_duckdb_extensions.py && rm /tmp/bake_duckdb_extensions.py \
     && chmod -R a+rX /opt/duckdb
+# In-memory DuckDB spills larger-than-memory sorts/joins to temp_directory,
+# which defaults to ./.tmp under the root-owned /app: point it at a directory
+# the non-root runtime user can write.
+ENV DUCKDB_TEMP_DIRECTORY=/tmp/duckdb-tmp
+RUN mkdir -p "$DUCKDB_TEMP_DIRECTORY" && chmod 1777 "$DUCKDB_TEMP_DIRECTORY"
 ENV CONTRACT_DIR=/app/contracts APP_ROOT=/app PYTHONPATH=/app
 WORKDIR /app
 # uid 65532 matches continuo's executor securityContext expectation.

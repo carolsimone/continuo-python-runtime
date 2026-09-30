@@ -19,6 +19,7 @@ from .settings import DuckLakeSettings
 _LIBPQ_BARE = re.compile(r"[A-Za-z0-9_.:/\-]+")
 
 BEGIN = "BEGIN"
+BEGIN_READ_ONLY = "BEGIN TRANSACTION READ ONLY"
 COMMIT = "COMMIT"
 ROLLBACK = "ROLLBACK"
 
@@ -41,6 +42,10 @@ def install_extension(name: str) -> str:
 
 def set_extension_directory(directory: str) -> str:
     return f"SET extension_directory = {sql_literal(directory)}"
+
+
+def set_temp_directory(directory: str) -> str:
+    return f"SET temp_directory = {sql_literal(directory)}"
 
 
 def disable_extension_autoinstall() -> str:

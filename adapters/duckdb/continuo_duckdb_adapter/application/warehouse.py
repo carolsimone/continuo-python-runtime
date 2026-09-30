@@ -131,7 +131,9 @@ class LakeWarehouse(WarehouseAdapter):
     def fetch(self, sql: str) -> "pa.Table":
         """Execute one declared read and return the result as an Arrow table.
 
-        Not re-gated here: reads are single-read checked earlier, at contract load.
+        Not re-gated here, matching the postgres adapter: the harness loads the
+        contract with ``check_reads=False``, so ``check_binds`` is the gated path
+        (single-read parse gate, then a bind check).
         """
         data = self._gateway.fetch_arrow(sql)
         seen: set[str] = set()

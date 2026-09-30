@@ -26,6 +26,7 @@ from ..domain.identifiers import Identifier, QualifiedTable
 from ..domain.layout import TableLayout
 from .ddl import (
     BEGIN,
+    BEGIN_READ_ONLY,
     COMMIT,
     ROLLBACK,
     DdlRenderer,
@@ -35,6 +36,7 @@ from .ddl import (
     s3_secret_statement,
     secret_texts,
     set_extension_directory,
+    set_temp_directory,
     use_catalog,
 )
 from .extensions import EXTENSIONS
@@ -145,6 +147,10 @@ class DuckLakeSession(LakeGateway):
         try:
             if settings.extension_directory:
                 con.execute(set_extension_directory(settings.extension_directory))
+            if settings.temp_directory:
+                # In-memory DuckDB spills here; its default is under the
+                # (root-owned) working directory, which a non-root uid cannot use.
+                con.execute(set_temp_directory(settings.temp_directory))
             for extension in EXTENSIONS:
                 _load_extension(con, extension)
             if settings.uses_s3:
@@ -233,8 +239,9 @@ class DuckLakeSession(LakeGateway):
             self._run(self._renderer.set_sorted_by(table, layout.sort_keys))
 
     def explain_read(self, sql: str) -> None:
-        # EXPLAIN binds without scanning; the transaction is always rolled back.
-        self._run(BEGIN)
+        # EXPLAIN binds without scanning; the transaction is read-only (a backstop,
+        # as in the postgres adapter) and always rolled back.
+        self._run(BEGIN_READ_ONLY)
         try:
             self._run(self._renderer.explain_read(sql))
         finally:

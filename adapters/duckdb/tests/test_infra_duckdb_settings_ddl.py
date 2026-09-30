@@ -9,9 +9,9 @@ from continuo_duckdb_adapter.domain.columns import ColumnDefinition
 from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
 from continuo_duckdb_adapter.domain.layout import PartitionKey, SortKey
 from continuo_duckdb_adapter.infrastructure.ddl import (
-    DdlRenderer, attach_statement, disable_extension_autoinstall, install_extension,
+    BEGIN_READ_ONLY, DdlRenderer, attach_statement, disable_extension_autoinstall, install_extension,
     load_extension, quote_identifier, s3_secret_statement, secret_texts,
-    set_extension_directory, sql_literal, use_catalog,
+    set_extension_directory, set_temp_directory, sql_literal, use_catalog,
 )
 from continuo_duckdb_adapter.infrastructure.extensions import EXTENSIONS, check_offline
 from continuo_duckdb_adapter.infrastructure.settings import REQUIRED_ENV, DuckLakeSettings
@@ -41,6 +41,7 @@ def test_defaults():
     assert (s.s3_region, s.s3_use_ssl, s.s3_url_style) == ("us-east-1", True, "vhost")
     assert s.s3_endpoint is None and s.s3_access_key_id is None
     assert s.extension_directory is None and s.data_inlining_row_limit is None
+    assert s.temp_directory is None
     assert s.uses_s3
 
 
@@ -173,6 +174,18 @@ def test_extension_statements_quote_the_name():
     assert load_extension('we"ird') == 'LOAD "we""ird"'
 
 
+def test_temp_directory_is_optional_and_read_from_env():
+    assert DuckLakeSettings.from_env(ENV).temp_directory is None
+    assert DuckLakeSettings.from_env({**ENV, "DUCKDB_TEMP_DIRECTORY": ""}).temp_directory is None
+    s = DuckLakeSettings.from_env({**ENV, "DUCKDB_TEMP_DIRECTORY": "/tmp/duckdb-tmp"})
+    assert s.temp_directory == "/tmp/duckdb-tmp"
+
+
+def test_set_temp_directory_escapes_the_path():
+    assert set_temp_directory("/tmp/duckdb-tmp") == "SET temp_directory = '/tmp/duckdb-tmp'"
+    assert set_temp_directory("/t'mp") == "SET temp_directory = '/t''mp'"
+
+
 def test_set_extension_directory_escapes_the_path():
     assert set_extension_directory("/opt/duckdb") == "SET extension_directory = '/opt/duckdb'"
     assert set_extension_directory("/o'pt") == "SET extension_directory = '/o''pt'"
@@ -247,6 +260,7 @@ def test_layout_ddl():
 
 
 def test_read_and_write_statements():
+    assert BEGIN_READ_ONLY == "BEGIN TRANSACTION READ ONLY"
     assert R.explain_read("SELECT 1 -- c") == "EXPLAIN SELECT * FROM (\nSELECT 1 -- c\n) AS __check_binds__"
     assert R.delete_all(T) == 'DELETE FROM "lake"."s"."t"'
     assert R.insert_select(T, ["a", "b%"], "src") == (

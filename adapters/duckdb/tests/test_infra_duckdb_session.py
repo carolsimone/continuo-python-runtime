@@ -189,8 +189,18 @@ def test_explain_read_rolls_back_even_when_the_bind_fails():
     connection.errors["EXPLAIN"] = duckdb.BinderException("no such column")
     with pytest.raises(duckdb.BinderException):
         session.explain_read("SELECT nope")
-    assert connection.statements[0] == "BEGIN"
+    # read-only: the bind check can never write, whatever the read contains
+    assert connection.statements[0] == "BEGIN TRANSACTION READ ONLY"
     assert connection.statements[-1] == "ROLLBACK"
+
+
+def test_connect_applies_the_temp_directory_only_when_set(connect_with):
+    script, _, connect = connect_with([None], env={**ENV, "DUCKDB_TEMP_DIRECTORY": "/tmp/spill"})
+    connect().close()
+    assert "SET temp_directory = '/tmp/spill'" in script.connections[0].statements
+    script, _, connect = connect_with([None])
+    connect().close()
+    assert not any("temp_directory" in s for s in script.connections[0].statements)
 
 
 def test_attach_statement_with_a_passfile_carries_no_password():

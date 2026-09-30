@@ -36,6 +36,7 @@ class DuckLakeSettings:
     s3_url_style: str
     s3_use_ssl: bool
     extension_directory: str | None
+    temp_directory: str | None
     data_inlining_row_limit: int | None
 
     @property
@@ -95,5 +96,6 @@ class DuckLakeSettings:
             s3_url_style=url_style,
             s3_use_ssl=use_ssl,
             extension_directory=optional("DUCKDB_EXTENSION_DIRECTORY"),
+            temp_directory=optional("DUCKDB_TEMP_DIRECTORY"),
             data_inlining_row_limit=None if limit_raw is None else int(limit_raw),
         )

@@ -95,6 +95,12 @@ def test_the_password_is_not_visible_in_the_attached_database_path(adapter):
     assert "password=" not in path
 
 
+def test_temp_directory_setting_reaches_the_engine(adapter_factory, tmp_path):
+    adapter = adapter_factory(DUCKDB_TEMP_DIRECTORY=str(tmp_path))
+    setting = adapter.fetch("SELECT current_setting('temp_directory') AS d").to_pylist()[0]["d"]
+    assert setting == str(tmp_path)
+
+
 def test_concurrent_first_attach_of_a_fresh_catalog_all_succeed(fresh_catalog):
     """Eight Jobs starting together against a never-used catalog must all attach."""
     import concurrent.futures

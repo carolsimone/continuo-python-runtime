@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from continuo_engine_contract.port import WarehouseAdapter  # type: ignore[import-untyped]
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
@@ -19,6 +20,9 @@ from ..domain.columns import ColumnDefinition, column_types
 from ..domain.identifiers import Identifier, QualifiedTable
 from ..domain.layout import TableLayout
 from .ports import LakeConflictError, LakeGateway
+
+if TYPE_CHECKING:  # pragma: no cover
+    import pyarrow as pa  # type: ignore[import-untyped]
 
 logger = logging.getLogger("continuo_duckdb_adapter")
 
@@ -111,16 +115,74 @@ class LakeWarehouse(WarehouseAdapter):
         logger.info("bind-checking read via EXPLAIN")
         self._gateway.explain_read(inner)
 
-    # --- Python-node data plane: implemented in task 5 -----------------------
+    # --- Python-node data plane ---------------------------------------------
 
-    def fetch(self, sql: str):
-        raise NotImplementedError("implemented in task 5")
+    def fetch(self, sql: str) -> "pa.Table":
+        """Execute one declared read and return the result as an Arrow table."""
+        data = self._gateway.fetch_arrow(sql)
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for name in data.schema.names:
+            if name in seen:
+                duplicates.add(name)
+            seen.add(name)
+        if duplicates:
+            raise ValueError(f"duplicate column name(s) in SELECT result: {sorted(duplicates)!r}")
+        return data
 
-    def ensure_table(self, schema: str, table: str, columns: list[dict], *, config: dict) -> None:
-        raise NotImplementedError("implemented in task 5")
+    @classmethod
+    def validate_config(cls, config: dict[str, Any] | None, column_names: list[str]) -> None:
+        """Validate *config* against this engine's vocabulary, without connecting.
 
-    def load(self, schema: str, table: str, data) -> None:
-        raise NotImplementedError("implemented in task 5")
+        The harness calls this right after selecting the node so a malformed
+        ``config`` fails in the first second, not after the script has run. It
+        only knows column names, so the DATE/TIMESTAMP check for time transforms
+        is deferred; ``ensure_table`` runs the complete check and remains the
+        enforcement point (the harness skips adapters without this method; see
+        docs/boundary-contract.md section 13.4).
+        """
+        TableLayout.from_config(config, {name: None for name in column_names})
+
+    def ensure_table(
+        self,
+        schema: str,
+        table: str,
+        columns: list[dict[str, Any]],
+        *,
+        config: dict[str, Any],
+    ) -> None:
+        """Create the table if absent; layout is applied only when this call creates it.
+
+        Validation comes first, so a bad config or type emits no statement. The
+        existence check and the create share one transaction; a concurrent
+        creator makes one side fail with a conflict, and the retry then finds
+        the table and returns.
+        """
+        defs = _columns(columns)
+        layout = TableLayout.from_config(config, column_types(defs))
+        self.ensure_schema(schema)
+        target = QualifiedTable.of(schema, table)
+        self._retrying(lambda: self._create_if_absent(target, defs, layout))
+
+    def _create_if_absent(
+        self, target: QualifiedTable, defs: list[ColumnDefinition], layout: TableLayout
+    ) -> None:
+        with self._gateway.transaction():
+            if self._gateway.table_exists(target):
+                return
+            logger.info("creating table %s.%s", target.schema.name, target.table.name)
+            self._gateway.create_table(target, defs)
+            if not layout.is_empty:
+                self._gateway.apply_layout(target, layout)
+
+    def load(self, schema: str, table: str, data: "pa.Table") -> None:
+        """Atomically replace the table's contents with *data* (one transaction)."""
+        target = QualifiedTable.of(schema, table)
+        with self._gateway.transaction():
+            self._gateway.delete_all(target)
+            if data.num_rows:
+                logger.info("loading %d row(s) into %s.%s", data.num_rows, schema, table)
+                self._gateway.insert_arrow(target, data)
 
     def close(self) -> None:
         """Release the underlying connection."""

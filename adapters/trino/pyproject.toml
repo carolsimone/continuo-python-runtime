@@ -27,7 +27,7 @@ trino = "continuo_trino_adapter.adapter:TrinoAdapter"
 
 [dependency-groups]
 dev = [
-    "ruff==0.16.5",
+    "ruff==0.16.9",
     "mypy==2.3.1",
 ]
 test = [

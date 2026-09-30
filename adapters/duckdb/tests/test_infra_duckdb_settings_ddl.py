@@ -1,0 +1,163 @@
+"""Settings parsing and SQL rendering: pure string work, no engine."""
+import pytest
+
+from continuo_duckdb_adapter.domain.columns import ColumnDefinition
+from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
+from continuo_duckdb_adapter.domain.layout import PartitionKey, SortKey
+from continuo_duckdb_adapter.infrastructure.ddl import (
+    DdlRenderer, attach_statement, quote_identifier, s3_secret_statement, sql_literal,
+)
+from continuo_duckdb_adapter.infrastructure.settings import REQUIRED_ENV, DuckLakeSettings
+
+ENV = {
+    "DUCKDB_CATALOG_HOST": "localhost", "DUCKDB_CATALOG_DB": "catalog",
+    "DUCKDB_CATALOG_USER": "continuo", "DUCKDB_DATA_PATH": "s3://warehouse/lake/",
+}
+
+
+def test_required_env_lists_the_four_mandatory_vars():
+    assert list(REQUIRED_ENV) == [
+        "DUCKDB_CATALOG_HOST", "DUCKDB_CATALOG_DB", "DUCKDB_CATALOG_USER", "DUCKDB_DATA_PATH",
+    ]
+
+
+@pytest.mark.parametrize("missing", REQUIRED_ENV)
+def test_missing_required_var_is_named(missing):
+    env = {k: v for k, v in ENV.items() if k != missing}
+    with pytest.raises(ValueError, match=missing):
+        DuckLakeSettings.from_env(env)
+
+
+def test_defaults():
+    s = DuckLakeSettings.from_env(ENV)
+    assert (s.catalog_port, s.catalog_password) == ("5432", "")
+    assert (s.s3_region, s.s3_use_ssl, s.s3_url_style) == ("us-east-1", True, "vhost")
+    assert s.s3_endpoint is None and s.s3_access_key_id is None
+    assert s.extension_directory is None and s.data_inlining_row_limit is None
+    assert s.uses_s3
+
+
+def test_endpoint_defaults_to_path_style_and_overrides_apply():
+    s = DuckLakeSettings.from_env({
+        **ENV, "DUCKDB_S3_ENDPOINT": "localhost:19100", "DUCKDB_S3_USE_SSL": "false",
+        "DUCKDB_S3_ACCESS_KEY_ID": "k", "DUCKDB_S3_SECRET_ACCESS_KEY": "s",
+        "DUCKDB_EXTENSION_DIRECTORY": "/opt/x", "DUCKDB_DATA_INLINING_ROW_LIMIT": "0",
+        "DUCKDB_CATALOG_PORT": "15599", "DUCKDB_CATALOG_PASSWORD": "pw",
+    })
+    assert (s.s3_url_style, s.s3_use_ssl, s.data_inlining_row_limit) == ("path", False, 0)
+    assert (s.catalog_port, s.catalog_password, s.extension_directory) == ("15599", "pw", "/opt/x")
+
+
+@pytest.mark.parametrize("name,value", [
+    ("DUCKDB_DATA_INLINING_ROW_LIMIT", "many"), ("DUCKDB_S3_URL_STYLE", "sideways"),
+    ("DUCKDB_CATALOG_PORT", "five"),
+])
+def test_invalid_values_name_the_variable(name, value):
+    with pytest.raises(ValueError, match=name):
+        DuckLakeSettings.from_env({**ENV, name: value})
+
+
+def test_local_data_path_does_not_use_s3():
+    assert not DuckLakeSettings.from_env({**ENV, "DUCKDB_DATA_PATH": "/data/lake/"}).uses_s3
+
+
+def test_quoting_helpers():
+    assert quote_identifier('we"ird') == '"we""ird"'
+    assert quote_identifier("50%") == '"50%"'
+    assert sql_literal("it's") == "'it''s'"
+
+
+def test_attach_statement_plain():
+    s = DuckLakeSettings.from_env({**ENV, "DUCKDB_CATALOG_PORT": "15599", "DUCKDB_CATALOG_PASSWORD": "continuo"})
+    assert attach_statement(s, "lake") == (
+        "ATTACH 'ducklake:postgres:host=localhost port=15599 dbname=catalog user=continuo "
+        "password=continuo' AS \"lake\" (DATA_PATH 's3://warehouse/lake/')"
+    )
+
+
+def test_attach_statement_with_inlining_limit():
+    s = DuckLakeSettings.from_env({**ENV, "DUCKDB_DATA_INLINING_ROW_LIMIT": "0"})
+    assert attach_statement(s, "lake").endswith("(DATA_PATH 's3://warehouse/lake/', DATA_INLINING_ROW_LIMIT 0)")
+
+
+def test_attach_statement_escapes_awkward_passwords():
+    s = DuckLakeSettings.from_env({**ENV, "DUCKDB_CATALOG_PASSWORD": "p w'd\\x"})
+    statement = attach_statement(s, "lake")
+    # undo the SQL-literal doubling, then the libpq quoting must be intact
+    assert "password='p w\\'d\\\\x'" in statement.replace("''", "'")
+    # an empty password renders as libpq '' which the SQL literal doubles to ''''
+    empty = DuckLakeSettings.from_env({**ENV, "DUCKDB_CATALOG_PASSWORD": ""})
+    assert "password=''''" in attach_statement(empty, "lake")
+
+
+def test_s3_secret_with_static_credentials():
+    s = DuckLakeSettings.from_env({
+        **ENV, "DUCKDB_S3_ENDPOINT": "localhost:19100", "DUCKDB_S3_USE_SSL": "false",
+        "DUCKDB_S3_ACCESS_KEY_ID": "k'1", "DUCKDB_S3_SECRET_ACCESS_KEY": "s",
+    })
+    assert s3_secret_statement(s) == (
+        "CREATE OR REPLACE SECRET continuo_s3 (TYPE S3, KEY_ID 'k''1', SECRET 's', "
+        "ENDPOINT 'localhost:19100', REGION 'us-east-1', URL_STYLE 'path', USE_SSL false)"
+    )
+
+
+def test_s3_secret_falls_back_to_the_credential_chain():
+    statement = s3_secret_statement(DuckLakeSettings.from_env(ENV))
+    assert statement == (
+        "CREATE OR REPLACE SECRET continuo_s3 (TYPE S3, PROVIDER credential_chain, "
+        "REGION 'us-east-1', URL_STYLE 'vhost', USE_SSL true)"
+    )
+
+
+R = DdlRenderer("lake")
+T = QualifiedTable.of("s", "t")
+
+
+def test_references_are_catalog_qualified_and_quoted():
+    assert R.schema_ref(Identifier("s")) == '"lake"."s"'
+    assert R.table_ref(T) == '"lake"."s"."t"'
+    # a schema or table named like the catalog alias must not be ambiguous
+    assert R.table_ref(QualifiedTable.of("lake", "lake")) == '"lake"."lake"."lake"'
+    assert R.table_ref(QualifiedTable.of('we"ird', "50%")) == '"lake"."we""ird"."50%"'
+    assert R.catalog_name == "lake"
+
+
+def test_schema_and_table_ddl():
+    assert R.create_schema_if_not_exists(Identifier("s")) == 'CREATE SCHEMA IF NOT EXISTS "lake"."s"'
+    assert R.drop_schema_cascade(Identifier("s")) == 'DROP SCHEMA IF EXISTS "lake"."s" CASCADE'
+    assert R.drop_table_if_exists(T) == 'DROP TABLE IF EXISTS "lake"."s"."t"'
+
+
+def test_create_table_renders_types_and_not_null():
+    cols = [ColumnDefinition(Identifier("id"), "INTEGER", False), ColumnDefinition(Identifier("ts"), "TIMESTAMP")]
+    assert R.create_table(T, cols) == 'CREATE TABLE "lake"."s"."t" ("id" INTEGER NOT NULL, "ts" TIMESTAMP)'
+    assert R.create_table(T, cols, if_not_exists=True).startswith('CREATE TABLE IF NOT EXISTS "lake"."s"."t" (')
+
+
+def test_empty_builds():
+    assert R.create_empty_table_as(T, "SELECT 1 AS a -- c") == (
+        'CREATE TABLE "lake"."s"."t" AS (\nSELECT 1 AS a -- c\n) WITH NO DATA'
+    )
+    assert R.create_empty_clone(T, QualifiedTable.of("p", "t")) == (
+        'CREATE TABLE "lake"."s"."t" AS SELECT * FROM "lake"."p"."t" WHERE false'
+    )
+
+
+def test_layout_ddl():
+    keys = (PartitionKey(Identifier("name")), PartitionKey(Identifier("id"), "bucket", 4),
+            PartitionKey(Identifier("ts"), "month"))
+    assert R.set_partitioned_by(T, keys) == (
+        'ALTER TABLE "lake"."s"."t" SET PARTITIONED BY ("name", bucket(4, "id"), month("ts"))'
+    )
+    sort = (SortKey(Identifier("id"), True, False), SortKey(Identifier("name")), SortKey(Identifier("ts"), False, True))
+    assert R.set_sorted_by(T, sort) == (
+        'ALTER TABLE "lake"."s"."t" SET SORTED BY ("id" DESC NULLS LAST, "name" ASC, "ts" ASC NULLS FIRST)'
+    )
+
+
+def test_read_and_write_statements():
+    assert R.explain_read("SELECT 1 -- c") == "EXPLAIN SELECT * FROM (\nSELECT 1 -- c\n) AS __check_binds__"
+    assert R.delete_all(T) == 'DELETE FROM "lake"."s"."t"'
+    assert R.insert_select(T, ["a", "b%"], "src") == (
+        'INSERT INTO "lake"."s"."t" ("a", "b%") SELECT "a", "b%" FROM "src"'
+    )

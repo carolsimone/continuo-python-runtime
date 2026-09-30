@@ -10,6 +10,7 @@ import logging
 
 import duckdb
 
+from .settings import DuckLakeSettings
 from .ddl import (
     disable_extension_autoinstall,
     load_extension,
@@ -20,6 +21,16 @@ logger = logging.getLogger("continuo_duckdb_adapter")
 
 # ``aws`` backs ``CREATE SECRET ... PROVIDER credential_chain``.
 EXTENSIONS: tuple[str, ...] = ("ducklake", "postgres", "httpfs", "aws")
+
+
+def extensions_to_load(settings: DuckLakeSettings) -> tuple[str, ...]:
+    """The extensions a session needs: ``aws`` only for the credential-chain S3 path.
+
+    With static S3 credentials (or local data) ``aws`` is not needed, so a
+    setup that baked only the other extensions never tries to install it.
+    """
+    chain = settings.uses_s3 and not (settings.s3_access_key_id and settings.s3_secret_access_key)
+    return tuple(name for name in EXTENSIONS if name != "aws" or chain)
 
 
 def check_offline(directory: str) -> None:

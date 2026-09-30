@@ -88,6 +88,17 @@ def test_redaction_alone_covers_a_password_a_passfile_cannot_hold(
     _assert_outage_is_clean(adapter, catalog_proxy, caplog, "Zx-leak-9", bare=True)
 
 
+def test_a_pgpassword_in_the_environment_does_not_break_the_catalog_attach(
+    adapter_factory, catalog_proxy, caplog, monkeypatch
+):
+    """libpq prefers PGPASSWORD to a passfile, so the password must go inline then."""
+    monkeypatch.setenv("PGPASSWORD", "some-other-db-password")
+    adapter = adapter_factory(DUCKDB_CATALOG_HOST="127.0.0.1", DUCKDB_CATALOG_PORT=str(catalog_proxy.port))
+    assert adapter._gateway._passfile is None  # inline mode: no passfile was made
+    assert adapter.fetch("SELECT 41 + 1 AS answer").to_pylist() == [{"answer": 42}]
+    _assert_outage_is_clean(adapter, catalog_proxy, caplog, "continuo", bare=False)
+
+
 def test_the_password_is_not_visible_in_the_attached_database_path(adapter):
     path = adapter.fetch(
         "SELECT path FROM duckdb_databases() WHERE database_name = 'lake'"

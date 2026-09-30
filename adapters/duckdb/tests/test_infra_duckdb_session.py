@@ -317,14 +317,98 @@ def test_a_retried_race_error_is_still_redacted(connect_with):
 
 
 def test_a_failed_connect_removes_the_passfile(connect_with, monkeypatch):
+    monkeypatch.delenv("PGPASSWORD", raising=False)
     made: list[Passfile] = []
+    original = Passfile
 
     def recording(password):
-        made.append(Passfile(password))
+        made.append(original(password))
         return made[-1]
 
-    monkeypatch.setattr("continuo_duckdb_adapter.infrastructure.session.Passfile", recording)
+    monkeypatch.setattr("continuo_duckdb_adapter.infrastructure.passfile.Passfile", recording)
     _, _, connect = connect_with([duckdb.IOException("Connection refused")])
     with pytest.raises(duckdb.IOException):
         connect()
     assert made and not any(os.path.exists(p.path) for p in made)
+
+
+# --- passfile vs PGPASSWORD, fallbacks, exception types, aws on demand -------
+
+
+def _attach_of(script):
+    return next(s for s in script.connections[0].statements if s.startswith("ATTACH"))
+
+
+def test_passfile_is_used_when_pgpassword_is_not_set(connect_with, monkeypatch):
+    monkeypatch.delenv("PGPASSWORD", raising=False)
+    script, _, connect = connect_with([None])
+    session = connect()
+    attach = _attach_of(script)
+    assert "passfile=" in attach and "password=" not in attach
+    assert session._passfile is not None
+    session.close()
+
+
+def test_inline_password_is_used_when_pgpassword_is_set(connect_with, monkeypatch):
+    # libpq fills the password from PGPASSWORD before it ever reads a passfile,
+    # so the passfile would be ignored and authentication would fail.
+    monkeypatch.setenv("PGPASSWORD", "some-other-db-password")
+    script, _, connect = connect_with([None])
+    session = connect()
+    attach = _attach_of(script)
+    assert "password=" in attach and "passfile=" not in attach
+    assert session._passfile is None
+    session.close()
+
+
+def test_inline_password_is_used_when_the_passfile_cannot_be_created(connect_with, monkeypatch, caplog):
+    monkeypatch.delenv("PGPASSWORD", raising=False)
+
+    def unwritable(*args, **kwargs):
+        raise FileNotFoundError("no writable temp directory")
+
+    monkeypatch.setattr("continuo_duckdb_adapter.infrastructure.passfile.tempfile.mkstemp", unwritable)
+    script, _, connect = connect_with([None])
+    with caplog.at_level(logging.INFO, logger="continuo_duckdb_adapter"):
+        session = connect()
+    assert "password=" in _attach_of(script) and session._passfile is None
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("passfile" in m for m in messages)
+    assert all(PASSWORD not in m for m in messages)
+    session.close()
+
+
+def test_connect_and_fetch_keep_the_engine_exception_type(connect_with):
+    _, _, connect = connect_with([leaky(duckdb.TransactionException, PASSWORD)])
+    with pytest.raises(duckdb.TransactionException) as caught:
+        connect()
+    assert not isinstance(caught.value, LakeConflictError) and PASSWORD not in str(caught.value)
+    session, connection = make_session()
+    connection.errors["SELECT 1"] = leaky(duckdb.TransactionException, PASSWORD)
+    with pytest.raises(duckdb.TransactionException) as caught:
+        session.fetch_arrow("SELECT 1")
+    assert not isinstance(caught.value, LakeConflictError) and PASSWORD not in str(caught.value)
+
+
+def test_ddl_and_dml_paths_still_map_to_a_conflict():
+    session, connection = make_session()
+    connection.errors["DELETE"] = leaky(duckdb.TransactionException, PASSWORD)
+    with pytest.raises(LakeConflictError):
+        session.delete_all(T)
+
+
+def _loaded(script):
+    return [s for s in script.connections[0].statements if s.startswith("LOAD")]
+
+
+def test_aws_is_loaded_only_for_the_credential_chain(connect_with):
+    chain_env = {k: v for k, v in ENV.items() if "S3_" not in k}
+    script, _, connect = connect_with([None], env=chain_env)
+    connect().close()
+    assert 'LOAD "aws"' in _loaded(script)
+    script, _, connect = connect_with([None])  # static key/secret pair
+    connect().close()
+    assert 'LOAD "aws"' not in _loaded(script) and 'LOAD "httpfs"' in _loaded(script)
+    script, _, connect = connect_with([None], env={**chain_env, "DUCKDB_DATA_PATH": "/data/lake/"})
+    connect().close()
+    assert 'LOAD "aws"' not in _loaded(script)

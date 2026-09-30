@@ -39,8 +39,8 @@ from .ddl import (
     set_temp_directory,
     use_catalog,
 )
-from .extensions import EXTENSIONS
-from .passfile import Passfile, can_store
+from .extensions import extensions_to_load
+from .passfile import Passfile, open_passfile
 from .settings import DuckLakeSettings
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -75,18 +75,19 @@ def _load_extension(con: "duckdb.DuckDBPyConnection", name: str) -> None:
         con.execute(load_extension(name))
 
 
-def _translate(exc: duckdb.Error, secrets: Sequence[str]) -> Exception:
-    """*exc* with every spelling of *secrets* masked; type and conflict mapping kept.
+def _translate(exc: duckdb.Error, secrets: Sequence[str], *, conflicts: bool = False) -> Exception:
+    """*exc* with every spelling of *secrets* masked, keeping its type.
 
-    A ``TransactionException`` becomes a ``LakeConflictError``; any other engine
-    error keeps its type, or falls back to ``duckdb.Error`` when its constructor
-    does not take a single message.
+    With *conflicts* a ``TransactionException`` becomes a ``LakeConflictError``
+    (only the DDL/DML paths mean "retry" by it). Otherwise the type is kept, or
+    falls back to ``duckdb.Error`` when the constructor does not take a single
+    message.
     """
     message = str(exc)
     for secret in secrets:
         if secret:
             message = message.replace(secret, "***")
-    if isinstance(exc, duckdb.TransactionException):
+    if conflicts and isinstance(exc, duckdb.TransactionException):
         return LakeConflictError(message)
     try:
         return type(exc)(message)
@@ -122,7 +123,7 @@ class DuckLakeSession(LakeGateway):
         cls, settings: DuckLakeSettings, *, sleep: Callable[[float], None] = time.sleep
     ) -> "DuckLakeSession":
         secrets = secret_texts(settings)
-        passfile = Passfile(settings.catalog_password) if can_store(settings.catalog_password) else None
+        passfile = open_passfile(settings.catalog_password)
         try:
             for attempt in range(1, _ATTACH_ATTEMPTS + 1):
                 try:
@@ -151,7 +152,7 @@ class DuckLakeSession(LakeGateway):
                 # In-memory DuckDB spills here; its default is under the
                 # (root-owned) working directory, which a non-root uid cannot use.
                 con.execute(set_temp_directory(settings.temp_directory))
-            for extension in EXTENSIONS:
+            for extension in extensions_to_load(settings):
                 _load_extension(con, extension)
             if settings.uses_s3:
                 con.execute(s3_secret_statement(settings))
@@ -165,17 +166,20 @@ class DuckLakeSession(LakeGateway):
     # --- plumbing -----------------------------------------------------------
 
     @contextlib.contextmanager
-    def _guarded(self) -> Iterator[None]:
+    def _guarded(self, *, conflicts: bool = True) -> Iterator[None]:
         try:
             yield
         except duckdb.Error as exc:
-            raise _translate(exc, self._secrets) from None
+            raise _translate(exc, self._secrets, conflicts=conflicts) from None
+
+    def _raw(self, sql: str, parameters: list | None = None) -> "duckdb.DuckDBPyConnection":
+        if parameters is None:
+            return self._con.execute(sql)
+        return self._con.execute(sql, parameters)
 
     def _run(self, sql: str, parameters: list | None = None) -> "duckdb.DuckDBPyConnection":
         with self._guarded():
-            if parameters is None:
-                return self._con.execute(sql)
-            return self._con.execute(sql, parameters)
+            return self._raw(sql, parameters)
 
     def _rollback(self) -> None:
         try:
@@ -248,8 +252,9 @@ class DuckLakeSession(LakeGateway):
             self._rollback()
 
     def fetch_arrow(self, sql: str) -> "pa.Table":
-        with self._guarded():
-            return self._run(sql).to_arrow_table()
+        # A read: a TransactionException keeps its type instead of meaning "retry".
+        with self._guarded(conflicts=False):
+            return self._raw(sql).to_arrow_table()
 
     def delete_all(self, table: QualifiedTable) -> None:
         self._run(self._renderer.delete_all(table))

@@ -42,8 +42,10 @@ passfile, not in the connection string, so it does not appear in DuckDB's error
 text or in `duckdb_databases()`. Every DuckDB error also passes through one
 redaction point that masks the catalog password and the S3 secret (every
 spelling) before the error reaches the result block or the pod logs; host, port
-and database stay visible. A password containing a line break cannot live in a
-passfile and travels inline instead, still redacted from errors.
+and database stay visible. The password travels inline instead (still redacted from errors) when it
+contains a line break, when `PGPASSWORD` is set in the environment (libpq would
+prefer it to any passfile), or when no temp file can be created. The `aws`
+extension is only loaded for the AWS credential-chain S3 path.
 
 A first attach to a brand-new catalog from several Jobs at once can race on
 DuckLake's metadata creation; the adapter retries exactly that failure a few

@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import logging
 import os
 import tempfile
+
+logger = logging.getLogger("continuo_duckdb_adapter")
 
 
 def _escape(field: str) -> str:
@@ -42,3 +45,23 @@ class Passfile:
         atexit.unregister(self.close)
         with contextlib.suppress(FileNotFoundError):
             os.unlink(self.path)
+
+
+def open_passfile(password: str) -> Passfile | None:
+    """A passfile for *password*, or None when the password must go inline.
+
+    Inline is the fallback when the password cannot be stored (empty, or with a
+    line break), when ``PGPASSWORD`` is set (libpq fills the password from it
+    before it reads any passfile, so the passfile would be ignored), or when no
+    temp file can be created (for example a read-only root filesystem).
+    """
+    if not can_store(password):
+        return None
+    if "PGPASSWORD" in os.environ:
+        logger.info("PGPASSWORD is set; passing the catalog password inline instead of a passfile")
+        return None
+    try:
+        return Passfile(password)
+    except OSError as exc:
+        logger.info("could not create a passfile (%s); passing the catalog password inline", type(exc).__name__)
+        return None

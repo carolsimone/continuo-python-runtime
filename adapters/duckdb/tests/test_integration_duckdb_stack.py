@@ -1,4 +1,8 @@
 """The adapter connects to the real DuckLake stack, and fails cleanly when it cannot."""
+import logging
+import traceback
+import uuid
+
 import duckdb
 import pytest
 
@@ -31,3 +35,61 @@ def test_failed_attach_does_not_echo_the_password(adapter_factory):
     with pytest.raises(duckdb.Error) as caught:
         adapter_factory(DUCKDB_CATALOG_PASSWORD=wrong)
     assert wrong not in str(caught.value)
+
+
+def _outage_operations():
+    import pyarrow as pa
+
+    return {
+        "ensure_schema": lambda a: a.ensure_schema(f"outage_{uuid.uuid4().hex[:8]}"),
+        "fetch": lambda a: a.fetch("SELECT count(*) FROM information_schema.tables"),
+        "load": lambda a: a.load("no_such_schema", "t", pa.table({"a": [1]})),
+        "check_binds": lambda a: a.check_binds("SELECT * FROM information_schema.tables"),
+    }
+
+
+def _assert_outage_is_clean(adapter, catalog_proxy, caplog, password, *, bare):
+    """Cut the catalog mid-session; no error text and no log record may carry *password*.
+
+    *bare* also forbids the password token on its own (only sound for a password
+    distinctive enough not to occur in paths or in the user name).
+    """
+    adapter.fetch("SELECT count(*) FROM information_schema.schemata")
+    catalog_proxy.cut()
+    texts: list[str] = []
+    with caplog.at_level(logging.DEBUG):
+        for operation in _outage_operations().values():
+            try:
+                operation(adapter)
+            except Exception as exc:  # noqa: BLE001 - any error type must be clean
+                texts.append(f"{type(exc).__name__}: {exc}")
+                texts.append("".join(traceback.format_exception(exc)))
+    texts.extend(record.getMessage() for record in caplog.records)
+    assert any("Unable to connect to Postgres" in text for text in texts), texts
+    for text in texts:
+        assert f"password={password}" not in text, text
+        if bare:
+            assert password not in text, text
+
+
+def test_catalog_outage_mid_session_does_not_leak_the_password(adapter_factory, catalog_proxy, caplog):
+    adapter = adapter_factory(DUCKDB_CATALOG_HOST="127.0.0.1", DUCKDB_CATALOG_PORT=str(catalog_proxy.port))
+    _assert_outage_is_clean(adapter, catalog_proxy, caplog, "continuo", bare=False)
+
+
+def test_redaction_alone_covers_a_password_a_passfile_cannot_hold(
+    fresh_catalog, adapter_factory, catalog_proxy, caplog
+):
+    """A newline cannot live in a passfile, so this password travels inline in the DSN."""
+    env = fresh_catalog(password="Zx-leak-9\nprobe'q")
+    adapter = adapter_factory(
+        **{**env, "DUCKDB_CATALOG_HOST": "127.0.0.1", "DUCKDB_CATALOG_PORT": str(catalog_proxy.port)}
+    )
+    _assert_outage_is_clean(adapter, catalog_proxy, caplog, "Zx-leak-9", bare=True)
+
+
+def test_the_password_is_not_visible_in_the_attached_database_path(adapter):
+    path = adapter.fetch(
+        "SELECT path FROM duckdb_databases() WHERE database_name = 'lake'"
+    ).to_pylist()[0]["path"]
+    assert "password=" not in path

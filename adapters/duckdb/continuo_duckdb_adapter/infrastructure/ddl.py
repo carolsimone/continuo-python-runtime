@@ -76,7 +76,15 @@ def secret_texts(settings: DuckLakeSettings) -> tuple[str, ...]:
     return tuple(sorted(texts, key=len, reverse=True))
 
 
-def attach_statement(settings: DuckLakeSettings, catalog: str) -> str:
+def attach_statement(
+    settings: DuckLakeSettings, catalog: str, passfile: str | None = None
+) -> str:
+    """The ATTACH for the DuckLake catalog.
+
+    With *passfile* the conninfo names that libpq passfile and carries no
+    password at all; without it the password is written inline.
+    """
+    credential = ("passfile", passfile) if passfile else ("password", settings.catalog_password)
     conninfo = " ".join(
         f"{key}={_libpq_value(value)}"
         for key, value in (
@@ -84,7 +92,7 @@ def attach_statement(settings: DuckLakeSettings, catalog: str) -> str:
             ("port", settings.catalog_port),
             ("dbname", settings.catalog_db),
             ("user", settings.catalog_user),
-            ("password", settings.catalog_password),
+            credential,
         )
     )
     options = [f"DATA_PATH {sql_literal(settings.data_path)}"]

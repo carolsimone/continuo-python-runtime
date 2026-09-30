@@ -5,7 +5,9 @@ The local DuckDB instance is in-memory and holds nothing durable: the catalog
 LOADed first and only INSTALLed when missing, so an image that baked them in at
 build time starts offline and as a non-root user.
 
-SQL is never logged: the ATTACH and secret statements carry credentials.
+SQL is never logged: the secret statement carries credentials. The catalog
+password is kept out of the ATTACH conninfo in a private libpq passfile, and
+every engine error is redacted on its way out of the session.
 """
 from __future__ import annotations
 
@@ -35,6 +37,7 @@ from .ddl import (
     set_extension_directory,
     use_catalog,
 )
+from .passfile import Passfile, can_store
 from .settings import DuckLakeSettings
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -54,16 +57,6 @@ def _load_extension(con: "duckdb.DuckDBPyConnection", name: str) -> None:
         con.execute(load_extension(name))
 
 
-def _redacted(exc: duckdb.Error, secrets: Sequence[str]) -> duckdb.Error:
-    message = str(exc)
-    for secret in secrets:
-        message = message.replace(secret, "***")
-    try:
-        return type(exc)(message)
-    except Exception:  # an exception type with a non-standard constructor
-        return duckdb.Error(message)
-
-
 def check_offline(directory: str) -> None:
     """LOAD every extension from *directory* without ever INSTALLing.
 
@@ -80,58 +73,105 @@ def check_offline(directory: str) -> None:
         con.close()
 
 
+def _translate(exc: duckdb.Error, secrets: Sequence[str]) -> Exception:
+    """*exc* with every spelling of *secrets* masked; type and conflict mapping kept.
+
+    A ``TransactionException`` becomes a ``LakeConflictError``; any other engine
+    error keeps its type, or falls back to ``duckdb.Error`` when its constructor
+    does not take a single message.
+    """
+    message = str(exc)
+    for secret in secrets:
+        if secret:
+            message = message.replace(secret, "***")
+    if isinstance(exc, duckdb.TransactionException):
+        return LakeConflictError(message)
+    try:
+        return type(exc)(message)
+    except Exception:  # an exception type with a non-standard constructor
+        return duckdb.Error(message)
+
+
+def _redact(exc: BaseException, secrets: Sequence[str]) -> str:
+    """The text of *exc* with *secrets* masked, for log lines."""
+    return str(_translate(exc, secrets)) if isinstance(exc, duckdb.Error) else str(exc)
+
+
 class DuckLakeSession(LakeGateway):
-    def __init__(self, connection: "duckdb.DuckDBPyConnection", renderer: DdlRenderer) -> None:
+    """Every DuckDB error leaves this class through ``_guarded``: DuckDB echoes
+    the catalog conninfo (and so the password) in connection errors, and the
+    runner and harness write ``str(exc)`` to the result block and the pod logs."""
+
+    def __init__(
+        self,
+        connection: "duckdb.DuckDBPyConnection",
+        renderer: DdlRenderer,
+        *,
+        secrets: Sequence[str] = (),
+        passfile: Passfile | None = None,
+    ) -> None:
         self._con = connection
         self._renderer = renderer
+        self._secrets = tuple(secrets)
+        self._passfile = passfile
 
     @classmethod
     def connect(cls, settings: DuckLakeSettings) -> "DuckLakeSession":
+        secrets = secret_texts(settings)
+        passfile = Passfile(settings.catalog_password) if can_store(settings.catalog_password) else None
         con = duckdb.connect()
         try:
-            if settings.extension_directory:
-                con.execute(set_extension_directory(settings.extension_directory))
-            for extension in EXTENSIONS:
-                _load_extension(con, extension)
-            if settings.uses_s3:
-                con.execute(s3_secret_statement(settings))
             try:
-                con.execute(attach_statement(settings, CATALOG_ALIAS))
+                if settings.extension_directory:
+                    con.execute(set_extension_directory(settings.extension_directory))
+                for extension in EXTENSIONS:
+                    _load_extension(con, extension)
+                if settings.uses_s3:
+                    con.execute(s3_secret_statement(settings))
+                con.execute(attach_statement(settings, CATALOG_ALIAS, passfile.path if passfile else None))
+                con.execute(use_catalog(CATALOG_ALIAS))
             except duckdb.Error as exc:
-                # The engine echoes the ATTACH conninfo, password included.
-                raise _redacted(exc, secret_texts(settings)) from None
-            con.execute(use_catalog(CATALOG_ALIAS))
+                raise _translate(exc, secrets) from None
         except BaseException:
             con.close()
+            if passfile:
+                passfile.close()
             raise
-        return cls(con, DdlRenderer(CATALOG_ALIAS))
+        return cls(con, DdlRenderer(CATALOG_ALIAS), secrets=secrets, passfile=passfile)
 
     # --- plumbing -----------------------------------------------------------
 
-    def _run(self, sql: str, parameters: list | None = None) -> "duckdb.DuckDBPyConnection":
+    @contextlib.contextmanager
+    def _guarded(self) -> Iterator[None]:
         try:
+            yield
+        except duckdb.Error as exc:
+            raise _translate(exc, self._secrets) from None
+
+    def _run(self, sql: str, parameters: list | None = None) -> "duckdb.DuckDBPyConnection":
+        with self._guarded():
             if parameters is None:
                 return self._con.execute(sql)
             return self._con.execute(sql, parameters)
-        except duckdb.TransactionException as exc:
-            raise LakeConflictError(str(exc)) from exc
 
     def _rollback(self) -> None:
         try:
             self._con.execute(ROLLBACK)
         except duckdb.Error as exc:
             # Never mask the failure that got us here.
-            logger.warning("rollback failed: %s", exc)
+            logger.warning("rollback failed: %s", _redact(exc, self._secrets))
 
     @contextlib.contextmanager
     def transaction(self) -> Iterator[None]:
-        self._con.execute(BEGIN)
+        self._run(BEGIN)
         try:
             yield
-            self._run(COMMIT)
         except BaseException:
             self._rollback()
             raise
+        # Outside the try: a COMMIT that fails has already ended the transaction
+        # in DuckDB, so there is nothing to roll back.
+        self._run(COMMIT)
 
     # --- LakeGateway --------------------------------------------------------
 
@@ -142,10 +182,11 @@ class DuckLakeSession(LakeGateway):
         self._run(self._renderer.drop_schema_cascade(schema))
 
     def table_exists(self, table: QualifiedTable) -> bool:
-        row = self._run(
-            DdlRenderer.TABLE_EXISTS_QUERY,
-            [self._renderer.catalog_name, table.schema.name, table.table.name],
-        ).fetchone()
+        with self._guarded():
+            row = self._run(
+                DdlRenderer.TABLE_EXISTS_QUERY,
+                [self._renderer.catalog_name, table.schema.name, table.table.name],
+            ).fetchone()
         return bool(row and row[0])
 
     def drop_table_if_exists(self, table: QualifiedTable) -> None:
@@ -176,25 +217,32 @@ class DuckLakeSession(LakeGateway):
 
     def explain_read(self, sql: str) -> None:
         # EXPLAIN binds without scanning; the transaction is always rolled back.
-        self._con.execute(BEGIN)
+        self._run(BEGIN)
         try:
             self._run(self._renderer.explain_read(sql))
         finally:
             self._rollback()
 
     def fetch_arrow(self, sql: str) -> "pa.Table":
-        return self._run(sql).to_arrow_table()
+        with self._guarded():
+            return self._run(sql).to_arrow_table()
 
     def delete_all(self, table: QualifiedTable) -> None:
         self._run(self._renderer.delete_all(table))
 
     def insert_arrow(self, table: QualifiedTable, data: "pa.Table") -> None:
         view = f"__continuo_load_{uuid.uuid4().hex}"
-        self._con.register(view, data)
+        with self._guarded():
+            self._con.register(view, data)
         try:
             self._run(self._renderer.insert_select(table, data.schema.names, view))
         finally:
-            self._con.unregister(view)
+            with contextlib.suppress(duckdb.Error):
+                self._con.unregister(view)
 
     def close(self) -> None:
-        self._con.close()
+        try:
+            self._con.close()
+        finally:
+            if self._passfile:
+                self._passfile.close()

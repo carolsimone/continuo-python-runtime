@@ -8,6 +8,7 @@ importlib mode; tests receive it through the ``gateway`` fixture.
 import contextlib
 import os
 import socket
+import threading
 import uuid
 from contextlib import suppress
 from typing import TYPE_CHECKING
@@ -270,3 +271,112 @@ def s3(lake_env):
         "s3", endpoint_url=f"http://localhost:{S3_PORT}",
         aws_access_key_id="minioadmin", aws_secret_access_key="minioadmin", region_name="us-east-1",
     )
+
+
+def _admin_connection():
+    import psycopg2
+
+    conn = psycopg2.connect(
+        host="localhost", port=CATALOG_PORT, dbname="catalog", user="continuo", password="continuo"
+    )
+    conn.autocommit = True
+    return conn
+
+
+@pytest.fixture
+def fresh_catalog(lake_env):
+    """Factory for a brand-new catalog database (optionally owned by its own role).
+
+    Returns the DUCKDB_* env for it. Each gets a private ``DATA_PATH`` prefix, so
+    it never touches the shared lake. Databases and roles are dropped at teardown.
+    """
+    created: list[tuple[str, str | None]] = []
+
+    def make(password: str | None = None) -> dict[str, str]:
+        suffix = uuid.uuid4().hex[:10]
+        database, role = f"fresh_{suffix}", None
+        user, secret = lake_env["DUCKDB_CATALOG_USER"], lake_env["DUCKDB_CATALOG_PASSWORD"]
+        conn = _admin_connection()
+        try:
+            with conn.cursor() as cur:
+                if password is not None:
+                    role = f"cpr_role_{suffix}"
+                    cur.execute(f'CREATE ROLE "{role}" LOGIN PASSWORD %s', (password,))
+                    user, secret = role, password
+                owner = f' OWNER "{role}"' if role else ""
+                cur.execute(f'CREATE DATABASE "{database}"{owner}')
+        finally:
+            conn.close()
+        created.append((database, role))
+        return {
+            **lake_env,
+            "DUCKDB_CATALOG_DB": database,
+            "DUCKDB_CATALOG_USER": user,
+            "DUCKDB_CATALOG_PASSWORD": secret,
+            "DUCKDB_DATA_PATH": f"s3://{BUCKET}/fresh-{suffix}/",
+        }
+
+    yield make
+    conn = _admin_connection()
+    try:
+        with conn.cursor() as cur:
+            for database, role in created:
+                cur.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+                if role:
+                    cur.execute(f'DROP ROLE IF EXISTS "{role}"')
+    finally:
+        conn.close()
+
+
+class CatalogProxy:
+    """A TCP proxy in front of the catalog whose connections can be cut on demand."""
+
+    def __init__(self) -> None:
+        self._listener = socket.socket()
+        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._listener.bind(("127.0.0.1", 0))
+        self._listener.listen(16)
+        self.port: int = self._listener.getsockname()[1]
+        self._stopped = threading.Event()
+        self._sockets: list[socket.socket] = []
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self) -> None:
+        while not self._stopped.is_set():
+            try:
+                client, _ = self._listener.accept()
+                upstream = socket.create_connection(("127.0.0.1", CATALOG_PORT))
+            except OSError:
+                return
+            self._sockets.extend([client, upstream])
+            threading.Thread(target=self._pipe, args=(client, upstream), daemon=True).start()
+            threading.Thread(target=self._pipe, args=(upstream, client), daemon=True).start()
+
+    @staticmethod
+    def _pipe(source: socket.socket, sink: socket.socket) -> None:
+        try:
+            while data := source.recv(65536):
+                sink.sendall(data)
+        except OSError:
+            pass
+        finally:
+            for sock in (source, sink):
+                with suppress(OSError):
+                    sock.close()
+
+    def cut(self) -> None:
+        """Stop accepting and drop every open connection: a catalog outage."""
+        self._stopped.set()
+        self._listener.close()
+        for sock in self._sockets:
+            with suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
+            with suppress(OSError):
+                sock.close()
+
+
+@pytest.fixture
+def catalog_proxy():
+    proxy = CatalogProxy()
+    yield proxy
+    proxy.cut()

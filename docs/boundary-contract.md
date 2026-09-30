@@ -151,13 +151,13 @@ parse time.
   `name`, since that changes the derived default name. Iceberg's
   properties instead all ride on a single `WITH (...)` clause attached to
   the `CREATE TABLE`'s own `IF NOT EXISTS`, so once the table exists
-  nothing in `config` is applied at all. DuckLake behaves like Iceberg here: `partitioned_by` and `sorted_by` are applied only when `ensure_table` creates the table, so changing them on an existing table is a silent no-op; the release gate's `build_empty_from_columns` always rebuilds with the new layout. Neither engine is a migration
+  nothing in `config` is applied at all. DuckLake behaves like Iceberg here: `partitioned_by` and `sorted_by` are applied only when `ensure_table` creates the table, so changing them on an existing table is a silent no-op; the release gate's `build_empty_from_columns` always rebuilds with the new layout. None of the three engines is a migration
   mechanism for an index/property that already exists under the same
-  name: flipping `unique: false → true` under a fixed index `name` is a
+  name (on DuckLake, see above): flipping `unique: false → true` under a fixed index `name` is a
   **silent no-op** on postgres (the name already resolves, so `IF NOT
   EXISTS` skips it), and changing `partitioning` on a trino table that
   already exists is a silent no-op for the reason above — not an applied
-  change and not an error in either case. The same vocabulary is checked
+  change and not an error in any of these cases. The same vocabulary is checked
   ahead of runtime by `build_empty_from_columns`, so a malformed config fails
   the release gate rather than surfacing in production.
 - Trino's `format` is case-normalized to uppercase in the emitted DDL, so

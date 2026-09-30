@@ -7,8 +7,8 @@
 version: 2
 
 updates:
-  # The uv workspace: this package (root), contract/, and the two adapters. All
-  # four share one lockfile, but Dependabot still needs one entry per pyproject.toml
+  # The uv workspace: this package (root), contract/, and the three adapters. All
+  # five share one lockfile, but Dependabot still needs one entry per pyproject.toml
   # directory to see each package's own dependency declarations.
   - package-ecosystem: uv
     directories:

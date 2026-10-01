@@ -7,6 +7,12 @@ FROM python:3.14-slim
 #                           digest-pinned, so no hash lock is needed here.
 #   WHEEL_SOURCE=wheelhouse (CI/PR)   installs the same pins from ./wheelhouse
 #                           (built by CI) so an unreleased change is testable.
+#   WHEEL_SOURCE=testpypi   (-test tag rehearsal) installs ONLY the pinned
+#                           first-party packages from TestPyPI (--no-deps),
+#                           then every third-party dependency from real
+#                           PyPI: TestPyPI hosts junk copies of real
+#                           package names, so it is never an extra index.
+#                           Any other value fails the build.
 # The wheelhouse holds only this repo's own first-party wheels (built via
 # `uv build --all-packages`); third-party dependencies always resolve from
 # PyPI in both branches, so the wheelhouse branch never passes --no-index to
@@ -41,8 +47,14 @@ RUN set -eu; \
         /tmp/wheelhouse/continuo_python_runtime-*.whl \
         /tmp/wheelhouse/continuo_trino_adapter-*.whl; \
       pip install --no-cache-dir -r /tmp/req.txt; \
-    else \
+    elif [ "$WHEEL_SOURCE" = "testpypi" ]; then \
+      pip install --no-cache-dir --no-deps --index-url https://test.pypi.org/simple/ \
+        -r /tmp/req.txt; \
       pip install --no-cache-dir -r /tmp/req.txt; \
+    elif [ "$WHEEL_SOURCE" = "pypi" ]; then \
+      pip install --no-cache-dir -r /tmp/req.txt; \
+    else \
+      echo "unknown WHEEL_SOURCE=$WHEEL_SOURCE (pypi|testpypi|wheelhouse)" >&2; exit 1; \
     fi; \
     rm -rf /tmp/req.txt /tmp/wheelhouse
 # PYTHONPATH is belt-and-braces: the harness also inserts APP_ROOT and the

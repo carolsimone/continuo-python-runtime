@@ -5,6 +5,12 @@ FROM python:3.14-slim
 #   WHEEL_SOURCE=pypi       (release) installs the pins from PyPI.
 #   WHEEL_SOURCE=wheelhouse (CI/PR)   installs the same pins from ./wheelhouse
 #                           (built by CI) so an unreleased change is testable.
+#   WHEEL_SOURCE=testpypi   (-test tag rehearsal) installs ONLY the pinned
+#                           first-party packages from TestPyPI (--no-deps),
+#                           then every third-party dependency from real
+#                           PyPI: TestPyPI hosts junk copies of real
+#                           package names, so it is never an extra index.
+#                           Any other value fails the build.
 # The pinned versions live in image-requirements-duckdb.txt, kept equal to the
 # repo's pyproject versions by tests/test_image_requirements_sync.py. See
 # Dockerfile.postgres for the full reasoning behind the two-step wheelhouse
@@ -20,8 +26,14 @@ RUN set -eu; \
         /tmp/wheelhouse/continuo_python_runtime-*.whl \
         /tmp/wheelhouse/continuo_duckdb_adapter-*.whl; \
       pip install --no-cache-dir -r /tmp/req.txt; \
-    else \
+    elif [ "$WHEEL_SOURCE" = "testpypi" ]; then \
+      pip install --no-cache-dir --no-deps --index-url https://test.pypi.org/simple/ \
+        -r /tmp/req.txt; \
       pip install --no-cache-dir -r /tmp/req.txt; \
+    elif [ "$WHEEL_SOURCE" = "pypi" ]; then \
+      pip install --no-cache-dir -r /tmp/req.txt; \
+    else \
+      echo "unknown WHEEL_SOURCE=$WHEEL_SOURCE (pypi|testpypi|wheelhouse)" >&2; exit 1; \
     fi; \
     rm -rf /tmp/req.txt /tmp/wheelhouse
 # The adapter LOADs ducklake/postgres/httpfs/aws from this directory. They are

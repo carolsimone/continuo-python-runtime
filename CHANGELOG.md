@@ -5,6 +5,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-01
+
+Packages in this release: `continuo-python-runtime` 0.8.0 (no runtime code
+change; the version carries the new image set), `continuo-duckdb-adapter` 0.1.0
+(new), `continuo-engine-contract` 0.7.3, `continuo-postgres-adapter` 0.2.2 and
+`continuo-trino-adapter` 0.2.1 (both unchanged). Images:
+`continuo-python-runtime-{postgres,trino,duckdb}:v0.8.0`, each linux/amd64 and
+linux/arm64.
+
 ### Added
 
 - `continuo-duckdb-adapter` 0.1.0: a DuckDB engine adapter on a DuckLake

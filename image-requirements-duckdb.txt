@@ -1,3 +1,3 @@
-continuo-python-runtime==0.7.0
+continuo-python-runtime==0.8.0
 continuo-duckdb-adapter==0.1.0
 continuo-engine-contract==0.7.3

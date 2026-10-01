@@ -4,6 +4,8 @@ on:
     paths:
       - "Dockerfile.*"
       - "tests/smoke/**"
+      - "tests/test_image_smoke_validation.py"
+      - "image-requirements-*.txt"
       - "continuo_python_runtime/**"
       - "contract/**"
       - "adapters/**"

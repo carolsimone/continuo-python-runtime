@@ -61,7 +61,7 @@ uv run --package continuo-postgres-adapter mypy adapters/postgres/continuo_postg
 uv run --package continuo-trino-adapter mypy adapters/trino/continuo_trino_adapter
 uv run --package continuo-duckdb-adapter mypy adapters/duckdb/continuo_duckdb_adapter
 uv run pytest --cov=continuo_python_runtime -m "not image and not integration" -v
-uv run pytest tests/test_csv_readers_integration.py tests/test_validation_runner.py -m integration -v
+uv run pytest tests -m integration -v
 uv run pytest contract/tests -v
 uv run pytest adapters/postgres/tests adapters/trino/tests -m "not integration" -v
 uv run pytest adapters/duckdb/tests -m "not integration" -v

@@ -117,6 +117,17 @@ def test_rehearsals_build_images_from_testpypi_and_real_tags_from_pypi():
         assert "--extra-index-url" not in dockerfile
 
 
+def test_the_index_probe_never_reuses_a_cached_index_page():
+    """pip caches the simple index for the 600s the index asks for: a stale first
+    fetch would be replayed for the whole 10 minute polling budget."""
+    run = next(
+        s["run"] for s in _load("image-build.yml")["jobs"]["build"]["steps"]
+        if "Wait until the pinned versions" in s.get("name", "")
+    )
+    pulls = [line for line in run.splitlines() if "pip download" in line]
+    assert len(pulls) == 2 and all("--no-cache-dir" in line for line in pulls)
+
+
 def test_tags_trigger_the_release_pipeline_but_not_the_pr_workflow():
     assert "tags" in _triggers("publish-pypi.yml")["push"]
     assert "workflow_dispatch" in _triggers("publish-pypi.yml")

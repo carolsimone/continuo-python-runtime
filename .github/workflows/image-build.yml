@@ -89,17 +89,21 @@ jobs:
           # once published. (The image build itself runs inside python:3.14-slim.)
           python-version: "3.14"
       # Ordering between the upload and this build is a `needs:` edge in
-      # publish-pypi.yml, but an index can lag its own upload, so poll.
+      # publish-pypi.yml, but an index can lag its own upload, so poll. The
+      # probe runs with --no-cache-dir: the simple index is served with
+      # `Cache-Control: max-age=600`, which pip's HTTP cache honours, so one
+      # early stale fetch would otherwise be replayed for 10 minutes, exactly
+      # this loop's whole budget (seen in the first TestPyPI rehearsal).
       - name: Wait until the pinned versions are installable
         if: inputs.wheel_source != 'wheelhouse'
         run: |
           set -eu
           if [ "${{ inputs.wheel_source }}" = "testpypi" ]; then
             # First-party only, from TestPyPI: it hosts junk copies of real names.
-            pull() { python -m pip download --no-deps --only-binary=:all: --index-url https://test.pypi.org/simple/ \
+            pull() { python -m pip download --no-cache-dir --no-deps --only-binary=:all: --index-url https://test.pypi.org/simple/ \
                        --dest /tmp/probe -r "$REQ"; }
           else
-            pull() { python -m pip download --dest /tmp/probe -r "$REQ"; }
+            pull() { python -m pip download --no-cache-dir --dest /tmp/probe -r "$REQ"; }
           fi
           for i in $(seq 1 30); do
             if pull >/tmp/probe.log 2>&1; then

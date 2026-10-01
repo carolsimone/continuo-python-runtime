@@ -17,6 +17,7 @@ PACKAGES = {
     "continuo-engine-contract": ("contract/pyproject.toml", ["contract"]),
     "continuo-postgres-adapter": ("adapters/postgres/pyproject.toml", ["adapters/postgres"]),
     "continuo-trino-adapter": ("adapters/trino/pyproject.toml", ["adapters/trino"]),
+    "continuo-duckdb-adapter": ("adapters/duckdb/pyproject.toml", ["adapters/duckdb"]),
 }
 
 

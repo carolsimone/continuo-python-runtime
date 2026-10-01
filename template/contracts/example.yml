@@ -18,7 +18,7 @@ nodes:
     # like psycopg2's `%(name)s`) now fails validate, where it previously did
     # not. `ctx.read(name)` never takes params, so such a read was already
     # broken at run time; this only moves the failure earlier, to CI. Add
-    # --dialect <engine> (e.g. postgres, trino) to check against the
+    # --dialect <engine> (e.g. postgres, trino, duckdb) to check against the
     # warehouse dialect Continuo will actually use, instead of only
     # sqlglot's dialect-neutral default.
     reads:
@@ -32,6 +32,7 @@ nodes:
     # engine's adapter rejects any key it does not recognize.
     #   postgres: indexes
     #   trino (iceberg): partitioning, sorted_by, format
+    #   duckdb (ducklake): partitioned_by, sorted_by
     # config:
     #   indexes:
     #     - columns: [order_id]

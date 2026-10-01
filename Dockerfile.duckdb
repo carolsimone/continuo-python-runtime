@@ -1,0 +1,46 @@
+FROM python:3.14-slim
+# One dual-role image per engine: the python-node runtime harness (default
+# command `run`) and the blue/green validation runner (`validation-op`). It
+# installs the PUBLISHED, versioned libraries, never the repo source:
+#   WHEEL_SOURCE=pypi       (release) installs the pins from PyPI.
+#   WHEEL_SOURCE=wheelhouse (CI/PR)   installs the same pins from ./wheelhouse
+#                           (built by CI) so an unreleased change is testable.
+# The pinned versions live in image-requirements-duckdb.txt, kept equal to the
+# repo's pyproject versions by tests/test_image_requirements_sync.py. See
+# Dockerfile.postgres for the full reasoning behind the two-step wheelhouse
+# install (exact local files first, --no-index --no-deps, then PyPI for the
+# third-party dependencies).
+ARG WHEEL_SOURCE=pypi
+COPY image-requirements-duckdb.txt /tmp/req.txt
+COPY wheelhous[e] /tmp/wheelhouse
+RUN set -eu; \
+    if [ "$WHEEL_SOURCE" = "wheelhouse" ]; then \
+      pip install --no-cache-dir --no-index --no-deps \
+        /tmp/wheelhouse/continuo_engine_contract-*.whl \
+        /tmp/wheelhouse/continuo_python_runtime-*.whl \
+        /tmp/wheelhouse/continuo_duckdb_adapter-*.whl; \
+      pip install --no-cache-dir -r /tmp/req.txt; \
+    else \
+      pip install --no-cache-dir -r /tmp/req.txt; \
+    fi; \
+    rm -rf /tmp/req.txt /tmp/wheelhouse
+# The adapter LOADs ducklake/postgres/httpfs/aws from this directory. They are
+# installed now, as root, because the runtime user below has no home directory
+# and the container may have no network. HOME=/tmp gives DuckDB a writable
+# home for its own bookkeeping.
+ENV DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions HOME=/tmp
+COPY scripts/bake_duckdb_extensions.py /tmp/bake_duckdb_extensions.py
+RUN python /tmp/bake_duckdb_extensions.py && rm /tmp/bake_duckdb_extensions.py \
+    && chmod -R a+rX /opt/duckdb
+# In-memory DuckDB spills larger-than-memory sorts/joins to temp_directory,
+# which defaults to ./.tmp under the root-owned /app: point it at a directory
+# the non-root runtime user can write.
+ENV DUCKDB_TEMP_DIRECTORY=/tmp/duckdb-tmp
+RUN mkdir -p "$DUCKDB_TEMP_DIRECTORY" && chmod 1777 "$DUCKDB_TEMP_DIRECTORY"
+ENV CONTRACT_DIR=/app/contracts APP_ROOT=/app PYTHONPATH=/app
+WORKDIR /app
+# uid 65532 matches continuo's executor securityContext expectation.
+RUN useradd --uid 65532 --no-create-home --shell /usr/sbin/nologin nonroot
+USER 65532:65532
+ENTRYPOINT ["continuo-runtime"]
+CMD ["run"]

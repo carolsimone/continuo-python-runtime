@@ -20,6 +20,7 @@ PIN_SITES = [
     "pyproject.toml",
     "adapters/postgres/pyproject.toml",
     "adapters/trino/pyproject.toml",
+    "adapters/duckdb/pyproject.toml",
 ]
 
 _PIN = re.compile(r"continuo-engine-contract==([0-9][0-9a-z.]*)")

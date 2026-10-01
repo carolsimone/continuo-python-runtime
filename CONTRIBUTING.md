@@ -39,7 +39,7 @@ repository; please do not add headers to new files.
 ## Development setup
 
 Prerequisites: Python 3.14+, [uv](https://docs.astral.sh/uv/), and Docker (only needed
-for the Postgres/Trino integration tests and the csv-reader/validation-runner
+for the Postgres/Trino/DuckLake integration tests and the csv-reader/validation-runner
 integration tests, which start a real minio backend via `docker run`).
 
 ```bash
@@ -47,7 +47,7 @@ uv sync --all-packages --all-groups
 ```
 
 This is a uv workspace: the root package (`continuo_python_runtime/`, the harness), the
-port (`contract/`), and the two engine adapters (`adapters/postgres/`, `adapters/trino/`)
+port (`contract/`), and the three engine adapters (`adapters/postgres/`, `adapters/trino/`, `adapters/duckdb/`)
 are separate packages sharing one lockfile.
 
 ## Before you open a pull request
@@ -59,16 +59,22 @@ uv run mypy continuo_python_runtime
 uv run mypy contract/continuo_engine_contract
 uv run --package continuo-postgres-adapter mypy adapters/postgres/continuo_postgres_adapter
 uv run --package continuo-trino-adapter mypy adapters/trino/continuo_trino_adapter
+uv run --package continuo-duckdb-adapter mypy adapters/duckdb/continuo_duckdb_adapter
 uv run pytest --cov=continuo_python_runtime -m "not image and not integration" -v
-uv run pytest tests/test_csv_readers_integration.py tests/test_validation_runner.py -m integration -v
+uv run pytest tests -m integration -v
 uv run pytest contract/tests -v
 uv run pytest adapters/postgres/tests adapters/trino/tests -m "not integration" -v
+uv run pytest adapters/duckdb/tests -m "not integration" -v
 ```
 
 These are exactly what `.github/workflows/ci.yml` runs. Integration tests against a real
-Postgres/Trino stack, or against the csv-reader/validation-runner minio backend, need
+Postgres/Trino/DuckLake stack, or against the csv-reader/validation-runner minio backend, need
 Docker and are not required for most changes — see `.github/workflows/ci.yml` for how CI
-stands them up if you want to run them locally.
+stands them up if you want to run them locally. The duckdb suite, for example, runs
+against `tests/smoke/duckdb-stack/docker-compose.yml`:
+`docker compose -f tests/smoke/duckdb-stack/docker-compose.yml up -d --wait`, then
+`uv run pytest adapters/duckdb/tests -m integration -v`, then the same compose file with
+`down -v`.
 
 Also run the security scan before opening a pull request that touches dependencies or
 anything that could carry a credential:
@@ -91,6 +97,15 @@ scripts/security-scan.sh
   reserved exclusively for them.
 - **Exact-pinned dependencies.** `continuo-engine-contract` and other in-repo packages
   are pinned exactly, not with a range — see the comment in `pyproject.toml` for why.
+
+## Before the first release that ships a new adapter
+
+A new adapter package needs a PyPI and a TestPyPI *pending trusted publisher*
+registered **before** its first tag: for `continuo-duckdb-adapter`, workflow file
+`publish-pypi.yml` and the same GitHub environments (`pypi`, `testpypi`) as the
+other packages. `publish-pypi.yml` uploads every package in one call, so a project
+with no publisher registered fails the upload for the whole tag. This is done by
+hand on pypi.org / test.pypi.org; nothing in this repository can do it.
 
 ## Code of conduct
 

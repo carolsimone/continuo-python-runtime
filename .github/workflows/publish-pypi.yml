@@ -1,9 +1,9 @@
 name: publish-pypi
 
-# Publishes all four PyPI distributions this repo owns — continuo-python-runtime
+# Publishes all five PyPI distributions this repo owns — continuo-python-runtime
 # (the harness), continuo-engine-contract (the port, result-block format, and
-# shared guards), and the two engine adapters (continuo-postgres-adapter,
-# continuo-trino-adapter) — via PyPI Trusted Publishing (OIDC, no stored
+# shared guards), and the three engine adapters (continuo-postgres-adapter,
+# continuo-trino-adapter, continuo-duckdb-adapter) — via PyPI Trusted Publishing (OIDC, no stored
 # token). They publish together on a single v* tag, each at its own
 # pyproject version, so a tag that only bumps the runtime still carries an
 # unchanged adapter version along for the ride; skip-existing (below) makes
@@ -13,14 +13,14 @@ name: publish-pypi
 # ship stale adapter code under an unchanged version number.
 #
 # Tag glob note: `v*` is the repository's single release pattern — the same tag
-# that images.yml builds and pushes both engine images from, so one tag ships
+# that images.yml builds and pushes all three engine images from, so one tag ships
 # the whole release. GitHub Actions tag globs anchor at character 1, so `v*`
 # claims every tag beginning with "v"; no other pattern may be introduced.
 # Tag `v<ver>-test<n>` publishes to TestPyPI; `v<ver>` publishes to real PyPI.
 # The GitHub environment name is what the PyPI "pending publisher" is
-# registered against — all four project names need one on each index.
+# registered against — all five project names need one on each index.
 #
-# All four distributions are built into a single `dist/` and uploaded in one
+# All five distributions are built into a single `dist/` and uploaded in one
 # publish call, so there is no ordering constraint between them. The runtime
 # wheel declares continuo-engine-contract as a dependency and resolves it from
 # the index at install time ([tool.uv.sources] is dev-only and is not embedded
@@ -48,7 +48,7 @@ jobs:
       - name: Refuse a tag that changed a package without bumping its version
         run: python scripts/check_version_bumps.py
       - name: Test before publishing
-        # Gate all four published projects, including both adapter suites — an
+        # Gate all five published projects, including every adapter suite — an
         # adapter regression must block its own immutable PyPI upload, and
         # images.yml runs in parallel so its smoke failure cannot. Each suite is
         # a SEPARATE pytest invocation: every workspace member's tests/ is its
@@ -63,6 +63,7 @@ jobs:
           uv run pytest tests contract/tests -m "not image and not integration" -q
           uv run pytest adapters/postgres/tests -m "not image and not integration" -q
           uv run pytest adapters/trino/tests -m "not image and not integration" -q
+          uv run pytest adapters/duckdb/tests -m "not image and not integration" -q
       - name: Build the contract sdist + wheel
         run: uv build --package continuo-engine-contract -o dist
       - name: Build the runtime sdist + wheel
@@ -71,6 +72,8 @@ jobs:
         run: uv build --package continuo-postgres-adapter -o dist
       - name: Build the trino adapter sdist + wheel
         run: uv build --package continuo-trino-adapter -o dist
+      - name: Build the duckdb adapter sdist + wheel
+        run: uv build --package continuo-duckdb-adapter -o dist
       # Adapters change rarely, so most v* tags carry an unchanged adapter
       # version alongside a bumped runtime/contract version. Without
       # skip-existing, re-uploading that unchanged version 400s and fails the

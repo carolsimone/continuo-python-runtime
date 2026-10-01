@@ -5,6 +5,25 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `continuo-duckdb-adapter` 0.1.0: a DuckDB engine adapter on a DuckLake
+  (Postgres catalog, Parquet data on S3/MinIO) with the same behaviour as the
+  postgres and trino adapters: validation DDL, `check_binds`, and the
+  python-node `fetch` / `ensure_table` / `load`. Physical layout `config`
+  accepts `partitioned_by` (identity, `bucket`, `year`/`month`/`day`/`hour`)
+  and `sorted_by`; any other key is rejected. Configured with `DUCKDB_*`
+  environment variables (catalog, data path, S3).
+  The catalog password is kept out of the connection string (private libpq
+  passfile) and redacted, with the S3 secret, from every engine error; a first
+  attach of a fresh catalog from concurrent Jobs is retried; `check_binds` runs
+  in a read-only transaction; `DUCKDB_TEMP_DIRECTORY` (set in the image) gives
+  DuckDB a writable spill directory; the `aws` extension is baked for the
+  credential-chain S3 path.
+- `Dockerfile.duckdb` (engine image, DuckDB extensions baked in for offline,
+  non-root start), the `tests/smoke/duckdb-stack` compose stack, and CI jobs
+  that run the adapter's integration suite and the image smoke test against it.
+
 ## [0.7.0] - 2026-09-29
 
 ### Added

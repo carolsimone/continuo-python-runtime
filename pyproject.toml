@@ -72,7 +72,7 @@ python_version = "3.14"
 strict = false
 
 [tool.uv.workspace]
-members = ["contract", "adapters/postgres", "adapters/trino"]
+members = ["contract", "adapters/postgres", "adapters/trino", "adapters/duckdb"]
 
 [tool.uv.sources]
 continuo-engine-contract = { workspace = true }

@@ -4,9 +4,12 @@ on:
     paths:
       - "Dockerfile.*"
       - "tests/smoke/**"
+      - "tests/test_image_smoke_validation.py"
+      - "image-requirements-*.txt"
       - "continuo_python_runtime/**"
       - "contract/**"
       - "adapters/**"
+      - "scripts/**"
       - "pyproject.toml"
       - ".github/workflows/images.yml"
   push:
@@ -17,7 +20,7 @@ jobs:
   build:
     strategy:
       matrix:
-        engine: [postgres, trino]
+        engine: [postgres, trino, duckdb]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -156,7 +159,86 @@ jobs:
         if: always()
         run: docker compose -f tests/smoke/trino-stack/docker-compose.yml down -v
 
-  # Runs on this same tag push, after the smoke jobs above pass. It builds both
+  smoke-duckdb:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      DUCKDB_CATALOG_HOST: localhost
+      DUCKDB_CATALOG_PORT: "15599"
+      DUCKDB_CATALOG_DB: catalog
+      DUCKDB_CATALOG_USER: continuo
+      DUCKDB_CATALOG_PASSWORD: continuo
+      DUCKDB_DATA_PATH: s3://warehouse/lake/
+      DUCKDB_S3_ENDPOINT: localhost:19100
+      DUCKDB_S3_ACCESS_KEY_ID: minioadmin
+      DUCKDB_S3_SECRET_ACCESS_KEY: minioadmin
+      DUCKDB_S3_URL_STYLE: path
+      DUCKDB_S3_USE_SSL: "false"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: cpr-smoke-duckdb-image
+          path: /tmp
+      - name: Load image
+        run: docker load -i /tmp/cpr-smoke-duckdb.tar
+      - uses: astral-sh/setup-uv@v7
+      - name: Sync
+        run: uv sync --all-packages --all-groups
+      - name: Image smoke tests (duckdb)
+        env:
+          VALIDATION_IMAGE_UNDER_TEST: cpr-smoke-duckdb
+          VALIDATION_IMAGE_ENGINE: duckdb
+          # DuckDBAdapter.required_env()[0]
+          VALIDATION_IMAGE_REQUIRED_ENV: DUCKDB_CATALOG_HOST
+        run: uv run pytest tests/test_image_smoke_validation.py -m image -v
+      - name: Extensions load offline as the non-root user
+        run: |
+          docker run --rm --network none --user 65532:65532 --entrypoint python cpr-smoke-duckdb -c \
+            "import os; from continuo_duckdb_adapter.infrastructure.extensions import check_offline; check_offline(os.environ['DUCKDB_EXTENSION_DIRECTORY'])"
+      - name: Start duckdb stack
+        run: docker compose -f tests/smoke/duckdb-stack/docker-compose.yml up -d --wait
+      - name: Seed source table
+        run: |
+          uv run python - <<'PY'
+          import pyarrow as pa
+          from continuo_duckdb_adapter.adapter import DuckDBAdapter
+
+          a = DuckDBAdapter.from_env()
+          a.ensure_table("analytics", "src", [{"name": "id", "type": "INTEGER", "nullable": True}], config={})
+          a.load("analytics", "src", pa.table({"id": pa.array([1, 2, 3], pa.int32())}))
+          a.close()
+          PY
+      - name: Run smoke node
+        run: |
+          docker run --rm --network host \
+            -v "$PWD/tests/smoke/node_smoke:/app" \
+            -e NODE_ID=python-node.smoke.analytics.smoke \
+            -e TABLE_NAME=smoke \
+            -e TARGET_SCHEMA=analytics \
+            -e DUCKDB_CATALOG_HOST -e DUCKDB_CATALOG_PORT -e DUCKDB_CATALOG_DB \
+            -e DUCKDB_CATALOG_USER -e DUCKDB_CATALOG_PASSWORD -e DUCKDB_DATA_PATH \
+            -e DUCKDB_S3_ENDPOINT -e DUCKDB_S3_ACCESS_KEY_ID -e DUCKDB_S3_SECRET_ACCESS_KEY \
+            -e DUCKDB_S3_URL_STYLE -e DUCKDB_S3_USE_SSL \
+            cpr-smoke-duckdb | tee /tmp/smoke-duckdb.out
+          test "${PIPESTATUS[0]}" -eq 0
+        shell: bash
+      - name: Assert success sentinel
+        run: grep -q '"status":"success"' /tmp/smoke-duckdb.out
+      - name: Assert row count
+        run: |
+          uv run python - <<'PY'
+          from continuo_duckdb_adapter.adapter import DuckDBAdapter
+
+          a = DuckDBAdapter.from_env()
+          assert a.fetch("SELECT count(*) AS n FROM analytics.smoke").to_pylist() == [{"n": 3}]
+          a.close()
+          PY
+      - name: Tear down duckdb stack
+        if: always()
+        run: docker compose -f tests/smoke/duckdb-stack/docker-compose.yml down -v
+
+  # Runs on this same tag push, after the smoke jobs above pass. It builds all three
   # engine images for linux/amd64 and linux/arm64 installing the pinned
   # versions FROM PyPI (WHEEL_SOURCE=pypi, the Dockerfile default), then
   # pushes them to ghcr.io/<owner>/continuo-python-runtime-<engine>:<tag>. The
@@ -179,11 +261,13 @@ jobs:
   # skips them: there is no real-PyPI installable version to build an image
   # from for those.
   publish:
-    needs: [smoke-postgres, smoke-trino]
+    needs: [smoke-postgres, smoke-trino, smoke-duckdb]
     if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-test')
     strategy:
+      # One engine's failed push must not cancel the other engines' pushes.
+      fail-fast: false
       matrix:
-        engine: [postgres, trino]
+        engine: [postgres, trino, duckdb]
     runs-on: ubuntu-latest
     permissions:
       contents: read

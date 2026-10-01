@@ -1,0 +1,2 @@
+continuo-python-runtime==0.7.0
+continuo-duckdb-adapter==0.1.0

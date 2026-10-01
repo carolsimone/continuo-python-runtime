@@ -21,15 +21,16 @@ Five artifacts come out of this repository:
 - **The `continuo-engine-contract` PyPI package** — the `WarehouseAdapter`
   port, the contract schema, the shared SQL/type/config guards, and the
   sentinel result-block format. Adapter authors outside this repo pin it.
-- **The two engine-adapter PyPI packages** (`continuo-postgres-adapter`,
-  `continuo-trino-adapter`) — one `WarehouseAdapter` implementation per
+- **The three engine-adapter PyPI packages** (`continuo-postgres-adapter`,
+  `continuo-trino-adapter`, `continuo-duckdb-adapter`) — one `WarehouseAdapter` implementation per
   warehouse engine, each published independently under the same tag. A
   domain repo normally never installs these directly (the engine image
   already has the matching one baked in); they exist as standalone PyPI
   packages for the "build your own container" shape (see below) and for
   third-party adapter authors to reference.
 - **Per-engine base images**, one per warehouse engine
-  (`continuo-python-runtime-postgres`, `continuo-python-runtime-trino`), that
+  (`continuo-python-runtime-postgres`, `continuo-python-runtime-trino`,
+  `continuo-python-runtime-duckdb`), that
   domain repos build `FROM`. Each image bakes in the runtime and a single
   `WarehouseAdapter` for that engine, and serves both roles that adapter has:
   the node harness (`ENTRYPOINT ["continuo-runtime"]`, `CMD ["run"]`) and the
@@ -37,15 +38,15 @@ Five artifacts come out of this repository:
 - **`template/`** — a copy-ready domain repo: `Dockerfile`, `contracts/`,
   `scripts/`, and the `release.yml` CI/CD workflow.
 
-One `vX.Y.Z` git tag releases all of it: `publish-pypi.yml` builds all four
+One `vX.Y.Z` git tag releases all of it: `publish-pypi.yml` builds all five
 PyPI distributions into a single `dist/` and publishes them together, and
-`images.yml` builds and pushes both engine images — each installing its
+`images.yml` builds and pushes all three engine images — each installing its
 matching pinned adapter version from that same release — multi-arch under
 the same tag.
 
 ### What this repo owns
 
-This repository owns the entire python-node surface: the engine contract, both
+This repository owns the entire python-node surface: the engine contract, the three
 engine adapters, the validation runner, and the node harness. The former
 `continuo-validation` repository was merged in — there is no longer a separate
 validation-side port, adapter class, entry-point group, or image. One
@@ -60,16 +61,18 @@ validation-side port, adapter class, entry-point group, or image. One
 | `continuo-engine-contract` | `continuo_engine_contract` | this repo, `contract/` | The `WarehouseAdapter` port, contract schema, the SQL/type/config guards adapters must run, and the result-block format. Published to PyPI. |
 | `continuo-postgres-adapter` | `continuo_postgres_adapter` | this repo, `adapters/postgres/` | `PostgresAdapter` — one class, both roles. Published to PyPI. |
 | `continuo-trino-adapter` | `continuo_trino_adapter` | this repo, `adapters/trino/` | `TrinoAdapter` — one class, both roles, for Trino/Iceberg. Published to PyPI. |
+| `continuo-duckdb-adapter` | `continuo_duckdb_adapter` | this repo, `adapters/duckdb/` | `DuckDBAdapter` — one class, both roles, for DuckDB on a DuckLake (Postgres catalog, Parquet on S3). Published to PyPI. |
 
-All four are uv workspace members (`[tool.uv.workspace]` in the root
+All five are uv workspace members (`[tool.uv.workspace]` in the root
 `pyproject.toml`), so `uv sync --all-packages --all-groups` at the repo root
 installs everything for local development.
 
-**All four packages in the table above are published to PyPI**, under the
-same `vX.Y.Z` tag. The two engine images then **install the matching pinned
+**All five packages in the table above are published to PyPI**, under the
+same `vX.Y.Z` tag. The three engine images then **install the matching pinned
 adapter version from PyPI** — `Dockerfile.postgres` installs
 `continuo-postgres-adapter==X.Y.Z`, `Dockerfile.trino` installs
-`continuo-trino-adapter==X.Y.Z` — rather than building it from this repo's
+`continuo-trino-adapter==X.Y.Z` and `Dockerfile.duckdb` installs
+`continuo-duckdb-adapter==X.Y.Z` — rather than building it from this repo's
 source tree, so each image still ships exactly one adapter and the runtime
 still discovers it through the `continuo_engine.adapters` entry-point group
 at run time. The image **name** (`continuo-python-runtime-<engine>`) and the
@@ -77,7 +80,7 @@ adapter's pip **distribution** name (`continuo-<engine>-adapter`) are two
 different artifacts of the same adapter — same engine, same version, same
 runtime behavior, different packaging; see "Build your own container" below
 for a build shape that installs the pip package directly instead of `FROM`
-the image. All four packages are still built, type-checked, and tested by CI
+the image. All five packages are still built, type-checked, and tested by CI
 on every change.
 
 ### The result block is a frozen wire contract
@@ -129,7 +132,7 @@ the pre-flight check once before your next release; it reports every affected
 read at once:
 
 ```bash
-continuo-runtime validate contracts/ --dialect postgres   # or trino
+continuo-runtime validate contracts/ --dialect postgres   # or trino, duckdb
 ```
 
 The runtime image does not re-run this gate, so a read that passes here is
@@ -274,7 +277,7 @@ pinned PyPI version of the `continuo-postgres-adapter` or
 `continuo-trino-adapter` package built from this repo's `adapters/postgres/`
 or `adapters/trino/` source (see the table above) — registered under the
 `continuo_engine.adapters` entry-point group (entry names `postgres` /
-`trino`). The runtime discovers it via `discover_adapter()` at run time, so a
+`trino` / `duckdb`). The runtime discovers it via `discover_adapter()` at run time, so a
 single image serves every node in the service and the release-time
 validation Job for it. The executor injects the warehouse connection as
 environment variables (engine-native, e.g.

@@ -333,12 +333,18 @@ jobs:
       - name: Assemble the multi-arch tag from the two verified digests
         run: |
           set -eu
-          amd="$(cat "digests/candidate-${ENGINE}-amd64/digest")"
-          arm="$(cat "digests/candidate-${ENGINE}-arm64/digest")"
           if [ "$PUSH" != "true" ]; then
-            echo "dry run: would tag ${IMAGE_NAME}:<tag> = amd64 ${amd} + arm64 ${arm}" | tee -a "$GITHUB_STEP_SUMMARY"
+            # A dry run built tarballs, not digests: just prove both verified
+            # cells exist, and say what a real run would do.
+            for arch in amd64 arm64; do
+              test -f "digests/candidate-${ENGINE}-${arch}/image.tar" \
+                || { echo "::error::no verified ${ENGINE} ${arch} image"; exit 1; }
+            done
+            echo "dry run: would tag ${IMAGE_NAME}:<tag> from the verified amd64 + arm64 digests" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          amd="$(cat "digests/candidate-${ENGINE}-amd64/digest")"
+          arm="$(cat "digests/candidate-${ENGINE}-arm64/digest")"
           # Images are immutable: if the tag already exists it must already be
           # exactly these two digests (a re-run after a successful promote).
           if existing="$(docker buildx imagetools inspect --raw "${IMAGE_NAME}:${TAG}" 2>/dev/null)"; then

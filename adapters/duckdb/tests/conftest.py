@@ -338,6 +338,7 @@ class CatalogProxy:
         self._listener.listen(16)
         self.port: int = self._listener.getsockname()[1]
         self._stopped = threading.Event()
+        self._lock = threading.Lock()
         self._sockets: list[socket.socket] = []
         threading.Thread(target=self._accept, daemon=True).start()
 
@@ -345,10 +346,21 @@ class CatalogProxy:
         while not self._stopped.is_set():
             try:
                 client, _ = self._listener.accept()
-                upstream = socket.create_connection(("127.0.0.1", CATALOG_PORT))
             except OSError:
                 return
-            self._sockets.extend([client, upstream])
+            # A connection accepted in the instant between the cut and the
+            # listener closing must not be served: that would be a reconnect
+            # through an outage that is supposed to be total.
+            if self._stopped.is_set():
+                client.close()
+                return
+            try:
+                upstream = socket.create_connection(("127.0.0.1", CATALOG_PORT))
+            except OSError:
+                client.close()
+                return
+            with self._lock:
+                self._sockets.extend([client, upstream])
             threading.Thread(target=self._pipe, args=(client, upstream), daemon=True).start()
             threading.Thread(target=self._pipe, args=(upstream, client), daemon=True).start()
 
@@ -367,8 +379,17 @@ class CatalogProxy:
     def cut(self) -> None:
         """Stop accepting and drop every open connection: a catalog outage."""
         self._stopped.set()
+        # shutdown() before close(): on Linux, close() alone does not release a
+        # listening socket another thread is blocked in accept() on, so the
+        # kernel kept accepting (and the accept loop kept serving) new
+        # connections after the "cut". shutdown() wakes accept() and makes the
+        # port refuse connections on every platform.
+        with suppress(OSError):
+            self._listener.shutdown(socket.SHUT_RDWR)
         self._listener.close()
-        for sock in self._sockets:
+        with self._lock:
+            sockets = list(self._sockets)
+        for sock in sockets:
             with suppress(OSError):
                 sock.shutdown(socket.SHUT_RDWR)
             with suppress(OSError):

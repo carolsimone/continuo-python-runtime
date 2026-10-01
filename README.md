@@ -39,10 +39,12 @@ Five artifacts come out of this repository:
   `scripts/`, and the `release.yml` CI/CD workflow.
 
 One `vX.Y.Z` git tag releases all of it: `publish-pypi.yml` builds all five
-PyPI distributions into a single `dist/` and publishes them together, and
-`images.yml` builds and pushes all three engine images — each installing its
-matching pinned adapter version from that same release — multi-arch under
-the same tag.
+PyPI distributions into a single `dist/`, verifies them (and full engine
+images built from them) on amd64 and arm64, and only then publishes them
+together. It then builds all three engine images natively per architecture —
+each installing its matching pinned adapter version from that same release —
+pulls and smoke-tests the exact pushed digests, and finally gives the verified
+amd64 + arm64 digests one multi-arch tag. See `CONTRIBUTING.md` (Releasing).
 
 ### What this repo owns
 

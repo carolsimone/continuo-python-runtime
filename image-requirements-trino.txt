@@ -1,2 +1,3 @@
 continuo-python-runtime==0.7.0
 continuo-trino-adapter==0.2.1
+continuo-engine-contract==0.7.3

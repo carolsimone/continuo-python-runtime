@@ -64,7 +64,7 @@ def test_release_workflow_cancels_superseded_main_runs():
 def test_readme_and_template_name_images_the_publisher_emits():
     """Engine-selection examples must name images the publisher actually pushes.
 
-    images.yml pushes ``continuo-python-runtime-<engine>:<tag>``: the engine is
+    publish-pypi.yml pushes ``continuo-python-runtime-<engine>:<tag>``: the engine is
     part of the image NAME and the tag is the bare version, which is what lets
     Continuo's chart pin ``<name>:vX.Y.Z@sha256:<digest>``. The version is read
     from the root pyproject so neither the README nor the template Dockerfile

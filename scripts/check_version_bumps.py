@@ -26,7 +26,10 @@ def _run(*args):
 
 
 def _prev_tag():
-    r = _run("git", "describe", "--tags", "--match", "v*", "--abbrev=0", "HEAD^")
+    # `-test` tags are rehearsals, not releases: a package changed without a bump
+    # would diff clean against one, and skip-existing would then ship old bytes.
+    r = _run("git", "describe", "--tags", "--match", "v*", "--exclude", "*-[Tt][Ee][Ss][Tt]*",
+             "--abbrev=0", "HEAD^")
     return r.stdout.strip() if r.returncode == 0 else ""
 
 

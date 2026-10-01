@@ -14,6 +14,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CI = (ROOT / ".github/workflows/ci.yml").read_text()
 IMAGES = (ROOT / ".github/workflows/images.yml").read_text()
+# The image smoke steps live in ONE reusable workflow that images.yml (PR) and
+# publish-pypi.yml (release) both call, so that is where the per-engine
+# `VALIDATION_IMAGE_ENGINE` entries and `-m image` runs are.
+SMOKE = (ROOT / ".github/workflows/image-smoke.yml").read_text()
 
 # Directories that never hold this repo's own tests.
 _SKIP_DIRS = {".git", ".venv", ".claude", ".worktrees", ".superpowers", "node_modules",
@@ -110,10 +114,10 @@ def test_every_adapter_runs_its_unit_tests_in_ci():
 def test_image_tests_run_in_the_image_workflow_for_every_engine():
     engines = sorted(p.name for p in (ROOT / "adapters").iterdir() if (p / "tests").is_dir())
     for engine in engines:
-        assert f"VALIDATION_IMAGE_ENGINE: {engine}" in IMAGES, (
-            f"images.yml has no image smoke job for engine {engine!r}"
+        assert f"VALIDATION_IMAGE_ENGINE: {engine}" in SMOKE, (
+            f"image-smoke.yml has no image smoke step for engine {engine!r}"
         )
-    assert IMAGES.count("-m image") >= len(engines)
+    assert SMOKE.count("-m image") >= len(engines)
 
 
 def test_the_image_workflow_runs_when_the_image_tests_or_pins_change():

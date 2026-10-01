@@ -1,0 +1,255 @@
+name: image-smoke
+
+# Reusable: run the engine image smoke checks against ONE image on a native
+# runner of the matching architecture. This is the single definition of "the
+# image works", used by images.yml (PR, tarball built from the commit) and by
+# publish-pypi.yml (pre-upload gate, and the verification of the candidate
+# digests actually pushed to ghcr), so the PR path and the release path cannot
+# drift. Per engine it runs:
+#
+#   1. tests/test_image_smoke_validation.py -m image  (3 tests)
+#   2. the smoke node tests/smoke/node_smoke against a REAL warehouse stack
+#      (tests/smoke/<engine>-stack), asserting the success sentinel and 3 rows
+#   3. duckdb only: the baked extensions load offline as uid 65532
+#
+# mode=tar     the image is `image.tar` in artifact `image_artifact`
+# mode=digest  the image is `<registry_image>@<digest>`, the digest being the
+#              content of file `digest` in artifact `image_artifact`; it is
+#              pulled from ghcr, so what is tested is what was pushed.
+#
+# A cell that cannot run must fail loudly: the image's architecture is asserted
+# against the runner's before anything else is tested.
+#
+# No `permissions:` here on purpose (see image-build.yml): the caller grants
+# `contents: read`, plus `packages: read` for mode=digest.
+on:
+  workflow_call:
+    inputs:
+      engine:
+        description: postgres | trino | duckdb
+        type: string
+        required: true
+      arch:
+        description: amd64 | arm64
+        type: string
+        required: true
+      mode:
+        description: tar | digest
+        type: string
+        required: true
+      image_artifact:
+        type: string
+        required: true
+      registry_image:
+        description: ghcr.io/<owner>/continuo-python-runtime-<engine> (mode=digest)
+        type: string
+        default: ""
+
+jobs:
+  smoke:
+    name: smoke ${{ inputs.engine }} ${{ inputs.arch }}
+    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    env:
+      DUCKDB_CATALOG_HOST: localhost
+      DUCKDB_CATALOG_PORT: "15599"
+      DUCKDB_CATALOG_DB: catalog
+      DUCKDB_CATALOG_USER: continuo
+      DUCKDB_CATALOG_PASSWORD: continuo
+      DUCKDB_DATA_PATH: s3://warehouse/lake/
+      DUCKDB_S3_ENDPOINT: localhost:19100
+      DUCKDB_S3_ACCESS_KEY_ID: minioadmin
+      DUCKDB_S3_SECRET_ACCESS_KEY: minioadmin
+      DUCKDB_S3_URL_STYLE: path
+      DUCKDB_S3_USE_SSL: "false"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assert the runner architecture
+        run: |
+          want="${{ inputs.arch == 'arm64' && 'aarch64' || 'x86_64' }}"
+          test "$(uname -m)" = "$want" || { echo "::error::runner is $(uname -m), expected $want"; exit 1; }
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.image_artifact }}
+          path: ${{ runner.temp }}/img
+      - name: Log in to ghcr.io
+        if: inputs.mode == 'digest'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Load or pull the image under test
+        run: |
+          set -eu
+          case "${{ inputs.mode }}" in
+            tar)
+              docker load -i "$RUNNER_TEMP/img/image.tar"
+              image="cpr-smoke-${{ inputs.engine }}"
+              ;;
+            digest)
+              digest="$(cat "$RUNNER_TEMP/img/digest")"
+              case "$digest" in sha256:*) ;; *) echo "::error::bad digest file"; exit 1;; esac
+              image="${{ inputs.registry_image }}@${digest}"
+              docker pull "$image"
+              ;;
+            *) echo "::error::mode must be tar or digest"; exit 1;;
+          esac
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+          echo "testing $image" >> "$GITHUB_STEP_SUMMARY"
+      - name: Assert the image architecture
+        run: |
+          got="$(docker image inspect "$IMAGE" --format '{{.Os}}/{{.Architecture}}')"
+          test "$got" = "linux/${{ inputs.arch }}" || { echo "::error::image is $got, expected linux/${{ inputs.arch }}"; exit 1; }
+      - uses: astral-sh/setup-uv@v7
+      - name: Sync
+        run: uv sync --all-packages --all-groups
+
+      # ---- postgres -------------------------------------------------------
+      - name: Image smoke tests (postgres)
+        if: inputs.engine == 'postgres'
+        env:
+          VALIDATION_IMAGE_UNDER_TEST: ${{ env.IMAGE }}
+          VALIDATION_IMAGE_ENGINE: postgres
+          # PostgresAdapter.required_env()[0]
+          VALIDATION_IMAGE_REQUIRED_ENV: POSTGRES_HOST
+        run: uv run pytest tests/test_image_smoke_validation.py -m image -v
+      - name: Start postgres stack
+        if: inputs.engine == 'postgres'
+        run: docker compose -f tests/smoke/postgres-stack/docker-compose.yml up -d --wait
+      - name: Seed source table (postgres)
+        if: inputs.engine == 'postgres'
+        run: |
+          docker compose -f tests/smoke/postgres-stack/docker-compose.yml exec -T postgres \
+            psql -U continuo -d warehouse -c \
+            "CREATE SCHEMA analytics; CREATE TABLE analytics.src(id int); INSERT INTO analytics.src VALUES (1),(2),(3);"
+      - name: Run smoke node (postgres)
+        if: inputs.engine == 'postgres'
+        run: |
+          docker run --rm --network host \
+            -v "$PWD/tests/smoke/node_smoke:/app" \
+            -e NODE_ID=python-node.smoke.analytics.smoke \
+            -e TABLE_NAME=smoke \
+            -e TARGET_SCHEMA=analytics \
+            -e POSTGRES_HOST=localhost \
+            -e POSTGRES_PORT=15499 \
+            -e POSTGRES_DB=warehouse \
+            -e POSTGRES_USER=continuo \
+            -e POSTGRES_PASSWORD=continuo \
+            "$IMAGE" | tee "$RUNNER_TEMP/smoke.out"
+          test "${PIPESTATUS[0]}" -eq 0
+        shell: bash
+      - name: Assert success sentinel and row count (postgres)
+        if: inputs.engine == 'postgres'
+        run: |
+          grep -q '"status":"success"' "$RUNNER_TEMP/smoke.out"
+          count=$(docker compose -f tests/smoke/postgres-stack/docker-compose.yml exec -T postgres \
+            psql -U continuo -d warehouse -t -c "select count(*) from analytics.smoke" | tr -d '[:space:]')
+          test "$count" = "3"
+      - name: Tear down postgres stack
+        if: inputs.engine == 'postgres' && always()
+        run: docker compose -f tests/smoke/postgres-stack/docker-compose.yml down -v
+
+      # ---- trino ----------------------------------------------------------
+      - name: Image smoke tests (trino)
+        if: inputs.engine == 'trino'
+        env:
+          VALIDATION_IMAGE_UNDER_TEST: ${{ env.IMAGE }}
+          VALIDATION_IMAGE_ENGINE: trino
+          # TrinoAdapter.required_env()[0]
+          VALIDATION_IMAGE_REQUIRED_ENV: TRINO_HOST
+        run: uv run pytest tests/test_image_smoke_validation.py -m image -v
+      - name: Start trino stack
+        if: inputs.engine == 'trino'
+        run: docker compose -f tests/smoke/trino-stack/docker-compose.yml up -d --wait
+      - name: Seed source table (trino)
+        if: inputs.engine == 'trino'
+        run: |
+          docker exec "$(docker compose -f tests/smoke/trino-stack/docker-compose.yml ps -q trino)" \
+            trino --execute "CREATE SCHEMA IF NOT EXISTS iceberg.analytics; CREATE TABLE iceberg.analytics.src(id int); INSERT INTO iceberg.analytics.src VALUES 1,2,3"
+      - name: Run smoke node (trino)
+        if: inputs.engine == 'trino'
+        run: |
+          docker run --rm \
+            -v "$PWD/tests/smoke/node_smoke:/app" \
+            -e NODE_ID=python-node.smoke.analytics.smoke \
+            -e TABLE_NAME=smoke \
+            -e TARGET_SCHEMA=analytics \
+            -e TRINO_HOST=host.docker.internal \
+            -e TRINO_PORT=18080 \
+            -e TRINO_CATALOG=iceberg \
+            -e TRINO_USER=continuo \
+            --add-host=host.docker.internal:host-gateway \
+            "$IMAGE" | tee "$RUNNER_TEMP/smoke.out"
+          test "${PIPESTATUS[0]}" -eq 0
+        shell: bash
+      - name: Assert success sentinel and row count (trino)
+        if: inputs.engine == 'trino'
+        run: |
+          grep -q '"status":"success"' "$RUNNER_TEMP/smoke.out"
+          count=$(docker exec "$(docker compose -f tests/smoke/trino-stack/docker-compose.yml ps -q trino)" \
+            trino --execute "select count(*) from iceberg.analytics.smoke" | tr -d '[:space:]"')
+          test "$count" = "3"
+      - name: Tear down trino stack
+        if: inputs.engine == 'trino' && always()
+        run: docker compose -f tests/smoke/trino-stack/docker-compose.yml down -v
+
+      # ---- duckdb ---------------------------------------------------------
+      - name: Image smoke tests (duckdb)
+        if: inputs.engine == 'duckdb'
+        env:
+          VALIDATION_IMAGE_UNDER_TEST: ${{ env.IMAGE }}
+          VALIDATION_IMAGE_ENGINE: duckdb
+          # DuckDBAdapter.required_env()[0]
+          VALIDATION_IMAGE_REQUIRED_ENV: DUCKDB_CATALOG_HOST
+        run: uv run pytest tests/test_image_smoke_validation.py -m image -v
+      # The extensions are native binaries per architecture, baked at build
+      # time. No network, the non-root user: exactly how the executor runs it.
+      - name: Extensions load offline as the non-root user (duckdb)
+        if: inputs.engine == 'duckdb'
+        run: |
+          docker run --rm --network none --user 65532:65532 --entrypoint python "$IMAGE" -c \
+            "import os; from continuo_duckdb_adapter.infrastructure.extensions import check_offline; check_offline(os.environ['DUCKDB_EXTENSION_DIRECTORY'])"
+      - name: Start duckdb stack
+        if: inputs.engine == 'duckdb'
+        run: docker compose -f tests/smoke/duckdb-stack/docker-compose.yml up -d --wait
+      - name: Seed source table (duckdb)
+        if: inputs.engine == 'duckdb'
+        run: |
+          uv run python - <<'PY'
+          import pyarrow as pa
+          from continuo_duckdb_adapter.adapter import DuckDBAdapter
+
+          a = DuckDBAdapter.from_env()
+          a.ensure_table("analytics", "src", [{"name": "id", "type": "INTEGER", "nullable": True}], config={})
+          a.load("analytics", "src", pa.table({"id": pa.array([1, 2, 3], pa.int32())}))
+          a.close()
+          PY
+      - name: Run smoke node (duckdb)
+        if: inputs.engine == 'duckdb'
+        run: |
+          docker run --rm --network host \
+            -v "$PWD/tests/smoke/node_smoke:/app" \
+            -e NODE_ID=python-node.smoke.analytics.smoke \
+            -e TABLE_NAME=smoke \
+            -e TARGET_SCHEMA=analytics \
+            -e DUCKDB_CATALOG_HOST -e DUCKDB_CATALOG_PORT -e DUCKDB_CATALOG_DB \
+            -e DUCKDB_CATALOG_USER -e DUCKDB_CATALOG_PASSWORD -e DUCKDB_DATA_PATH \
+            -e DUCKDB_S3_ENDPOINT -e DUCKDB_S3_ACCESS_KEY_ID -e DUCKDB_S3_SECRET_ACCESS_KEY \
+            -e DUCKDB_S3_URL_STYLE -e DUCKDB_S3_USE_SSL \
+            "$IMAGE" | tee "$RUNNER_TEMP/smoke.out"
+          test "${PIPESTATUS[0]}" -eq 0
+        shell: bash
+      - name: Assert success sentinel and row count (duckdb)
+        if: inputs.engine == 'duckdb'
+        run: |
+          grep -q '"status":"success"' "$RUNNER_TEMP/smoke.out"
+          uv run python - <<'PY'
+          from continuo_duckdb_adapter.adapter import DuckDBAdapter
+
+          a = DuckDBAdapter.from_env()
+          assert a.fetch("SELECT count(*) AS n FROM analytics.smoke").to_pylist() == [{"n": 3}]
+          a.close()
+          PY
+      - name: Tear down duckdb stack
+        if: inputs.engine == 'duckdb' && always()
+        run: docker compose -f tests/smoke/duckdb-stack/docker-compose.yml down -v

@@ -1,6 +1,10 @@
 """The engine image installs pinned versions from image-requirements-<engine>.txt.
 Guard that those pins equal the repo's own pyproject versions, so the image can
 never ship a version different from what this tag publishes.
+
+The contract is pinned too, although the runtime pins it transitively: the
+WHEEL_SOURCE=testpypi image install uses `--no-deps` on this file so that only
+first-party packages ever come from TestPyPI, and then needs all three named.
 """
 import tomllib
 from pathlib import Path
@@ -27,16 +31,19 @@ def _pins(rel: str) -> dict[str, str]:
 def test_postgres_image_requirements_match_pyproject():
     pins = _pins("image-requirements-postgres.txt")
     assert pins["continuo-python-runtime"] == _v("pyproject.toml")
+    assert pins["continuo-engine-contract"] == _v("contract/pyproject.toml")
     assert pins["continuo-postgres-adapter"] == _v("adapters/postgres/pyproject.toml")
 
 
 def test_trino_image_requirements_match_pyproject():
     pins = _pins("image-requirements-trino.txt")
     assert pins["continuo-python-runtime"] == _v("pyproject.toml")
+    assert pins["continuo-engine-contract"] == _v("contract/pyproject.toml")
     assert pins["continuo-trino-adapter"] == _v("adapters/trino/pyproject.toml")
 
 
 def test_duckdb_image_requirements_match_pyproject():
     pins = _pins("image-requirements-duckdb.txt")
     assert pins["continuo-python-runtime"] == _v("pyproject.toml")
+    assert pins["continuo-engine-contract"] == _v("contract/pyproject.toml")
     assert pins["continuo-duckdb-adapter"] == _v("adapters/duckdb/pyproject.toml")

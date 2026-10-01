@@ -98,14 +98,77 @@ scripts/security-scan.sh
 - **Exact-pinned dependencies.** `continuo-engine-contract` and other in-repo packages
   are pinned exactly, not with a range — see the comment in `pyproject.toml` for why.
 
-## Before the first release that ships a new adapter
+## Releasing
 
-A new adapter package needs a PyPI and a TestPyPI *pending trusted publisher*
-registered **before** its first tag: for `continuo-duckdb-adapter`, workflow file
-`publish-pypi.yml` and the same GitHub environments (`pypi`, `testpypi`) as the
-other packages. `publish-pypi.yml` uploads every package in one call, so a project
-with no publisher registered fails the upload for the whole tag. This is done by
-hand on pypi.org / test.pypi.org; nothing in this repository can do it.
+A release is one `chore(release):` commit that bumps the version of every package whose
+source changed since the last tag (`scripts/check_version_bumps.py` refuses the tag
+otherwise) and turns `## [Unreleased]` in `CHANGELOG.md` into `## [X.Y.Z] - date`, then a
+`vX.Y.Z` tag on that commit. Pushing the tag starts **one** pipeline,
+`.github/workflows/publish-pypi.yml`; read its header comment for the design.
+
+The principle is *build once, test the exact artifact, promote the same bytes*:
+
+1. **Before anything irreversible.** The five packages are built once into `dist/`. On
+   native amd64 and arm64 runners they are installed from `dist/` into a clean venv
+   (entry point, CLI, `required_env()`), and each engine image is built from those same
+   wheels and smoke-tested against a real warehouse.
+2. **Upload.** The same `dist/` files go to PyPI. PyPI is immutable from here on.
+3. **Images.** Each engine image is built on a native runner per architecture from the
+   published pins and pushed to ghcr **by digest only** (no tag). Every digest is pulled
+   and run through the same smoke test, including the offline DuckDB extension check.
+4. **Promote.** Only when all six cells (3 engines x 2 arches) pass are the two verified
+   digests given the bare `vX.Y.Z` tag, with no rebuild. Consumers pin
+   `<name>:vX.Y.Z@sha256:<digest>`, so that tag exists only for verified images.
+5. `release.yml` creates the GitHub Release only if the whole pipeline succeeded.
+
+### Rehearse first with a `-test` tag
+
+A `-test` tag runs every step above against TestPyPI, so do it on the release commit
+before the real tag (put it on that very commit: `check_version_bumps.py` treats an
+earlier `-test` tag as the previous release):
+
+```bash
+git tag v0.8.0-test1 <release-commit> && git push origin v0.8.0-test1
+```
+
+Every package is rewritten to `<version>.dev<N>` (unique per run, TestPyPI is immutable),
+the images are built from TestPyPI and tagged `v0.8.0-test1`, and no bare or latest-like
+tag is written. Third-party dependencies still come from PyPI; only the five first-party
+packages are ever installed from TestPyPI, because TestPyPI hosts junk copies of real
+names. Use a new `-testN` for each rehearsal; delete the `-test` image tags in the ghcr
+package pages when done.
+
+To exercise the whole graph without any tag (builds and verifies everything on both
+arches, publishes, pushes and promotes nothing), from any branch:
+
+```bash
+gh workflow run publish-pypi.yml --ref <branch> -f dry_run=true
+```
+
+### When a run fails
+
+| Fails at | PyPI | ghcr | Release | Recover |
+|---|---|---|---|---|
+| `prepare`, `verify-packages`, `preflight-*` | nothing | nothing | none | Fix, delete the tag (`git push --delete origin vX.Y.Z`), re-tag. |
+| `publish-packages` | maybe some of the five files | nothing | none | Re-run failed jobs (`skip-existing` makes it resumable), or fix forward. |
+| `candidate-build` | published | maybe untagged digests | none | Transient (index lag, runner): re-run failed jobs. Real defect: yank the files on pypi.org and **fix forward** with a new version. |
+| `candidate-verify` | published | untagged candidates | none | Same: an image defect means yank and fix forward. |
+| `promote` | published | verified digests, maybe some engines tagged | none | Re-run failed jobs; tagging is idempotent and refuses to move an existing tag to different content. |
+
+PyPI files cannot be replaced, only yanked. Untagged candidate digests on ghcr are
+garbage that nothing consumes.
+
+### New package names: trusted publishers
+
+A new package needs a PyPI *and* a TestPyPI pending trusted publisher registered
+**before** its first tag: workflow file `publish-pypi.yml` and the GitHub environments
+`pypi` / `testpypi`. The upload is one call, so a project with no publisher fails it for
+the whole tag. This is done by hand on pypi.org / test.pypi.org; nothing in this
+repository can do it. A `-test` rehearsal needs all five projects registered on
+test.pypi.org, which is also the cheapest way to find a missing one before a real
+release. (`dry-run`, used by manual dry runs, is an unprotected environment with no
+publisher.) A first-ever image name on ghcr is created private: make it public and link
+it to this repository once.
 
 ## Code of conduct
 

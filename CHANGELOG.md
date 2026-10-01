@@ -5,6 +5,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-01
+
 ### Added
 
 - `continuo-duckdb-adapter` 0.1.0: a DuckDB engine adapter on a DuckLake
@@ -53,6 +55,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `release.yml` waits only for `publish-pypi.yml`, which now covers the images,
   and selects that tag's own run (a `-test` rehearsal on the same commit no
   longer shares its lookup).
+- `continuo-python-runtime` 0.7.0 → 0.8.0. `continuo-engine-contract`,
+  `continuo-postgres-adapter` and `continuo-trino-adapter` are unchanged;
+  `continuo-duckdb-adapter` 0.1.0 is new, and `continuo-python-runtime-duckdb`
+  is the third engine image published per tag.
 
 ### Fixed
 

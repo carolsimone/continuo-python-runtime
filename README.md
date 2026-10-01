@@ -266,18 +266,21 @@ A domain repo picks its warehouse engine by which base image it builds
 `FROM`:
 
 ```dockerfile
-FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.7.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.8.0
 # or
-FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.7.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.8.0
+# or
+FROM ghcr.io/carolsimone/continuo-python-runtime-duckdb:v0.8.0
 ```
 
 The engine is part of the image **name**; the tag is the bare version, so
 Continuo's Helm chart can pin an image as `<name>:vX.Y.Z@sha256:<digest>`.
 
 Each image bakes in exactly one `WarehouseAdapter` for that engine — the
-pinned PyPI version of the `continuo-postgres-adapter` or
-`continuo-trino-adapter` package built from this repo's `adapters/postgres/`
-or `adapters/trino/` source (see the table above) — registered under the
+pinned PyPI version of the `continuo-postgres-adapter`,
+`continuo-trino-adapter` or `continuo-duckdb-adapter` package built from this
+repo's `adapters/postgres/`, `adapters/trino/` or `adapters/duckdb/` source
+(see the table above) — registered under the
 `continuo_engine.adapters` entry-point group (entry names `postgres` /
 `trino` / `duckdb`). The runtime discovers it via `discover_adapter()` at run time, so a
 single image serves every node in the service and the release-time

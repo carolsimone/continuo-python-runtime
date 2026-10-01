@@ -64,6 +64,9 @@ jobs:
           wait_for() {
             local workflow_file="$1" elapsed=0 interval=20 timeout=5400
             while :; do
+              # branch=${TAG}: for a tag push the run's head_branch IS the tag
+              # name. A `-test` rehearsal on the same commit shares head_sha and
+              # event=push; without this the newest of the two could be read.
               # event=push, not just head_sha: a manual dry run of the same
               # workflow (workflow_dispatch) could share this head_sha and
               # would otherwise be picked up as the tag's run.
@@ -73,7 +76,7 @@ jobs:
               # under `set -e` would abort this script on the very first poll,
               # every time. Verified against this repo's real API: -f flags
               # 404 here, the URL query string form returns real run data.
-              conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_file}/runs?head_sha=${SHA}&event=push" \
+              conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_file}/runs?head_sha=${SHA}&event=push&branch=${TAG}" \
                 --jq '.workflow_runs[0].conclusion // "pending"')"
               case "${conclusion}" in
                 success)

@@ -112,7 +112,8 @@ def test_rehearsals_build_images_from_testpypi_and_real_tags_from_pypi():
     for engine in ENGINES:
         dockerfile = (ROOT / f"Dockerfile.{engine}").read_text()
         # First-party only from TestPyPI: never an extra index for third parties.
-        assert "--no-deps --index-url https://test.pypi.org/simple/" in dockerfile
+        # --only-binary: an sdist would pull its build backend from this index too.
+        assert "--no-deps --only-binary=:all: --index-url https://test.pypi.org/simple/" in dockerfile
         assert "--extra-index-url" not in dockerfile
 
 
@@ -125,4 +126,6 @@ def test_tags_trigger_the_release_pipeline_but_not_the_pr_workflow():
 def test_the_github_release_waits_for_the_release_pipeline_only():
     text = (WORKFLOWS / "release.yml").read_text()
     assert 'wait_for "publish-pypi.yml"' in text
+    # A -test rehearsal on the same commit shares head_sha and event=push.
+    assert "&branch=${TAG}" in text, "the poll must select this tag's run, not a rehearsal's"
     assert 'wait_for "images.yml"' not in text, "images.yml no longer runs on tags; waiting on it would hang"

@@ -48,7 +48,7 @@ RUN set -eu; \
         /tmp/wheelhouse/continuo_postgres_adapter-*.whl; \
       pip install --no-cache-dir -r /tmp/req.txt; \
     elif [ "$WHEEL_SOURCE" = "testpypi" ]; then \
-      pip install --no-cache-dir --no-deps --index-url https://test.pypi.org/simple/ \
+      pip install --no-cache-dir --no-deps --only-binary=:all: --index-url https://test.pypi.org/simple/ \
         -r /tmp/req.txt; \
       pip install --no-cache-dir -r /tmp/req.txt; \
     elif [ "$WHEEL_SOURCE" = "pypi" ]; then \

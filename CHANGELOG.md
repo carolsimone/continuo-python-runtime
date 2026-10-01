@@ -50,7 +50,18 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `images.yml` is the pull-request path only; it no longer builds or pushes on a
   tag. The postgres image smoke runs against `tests/smoke/postgres-stack`
   instead of a job service container, so one workflow serves every engine.
-- `release.yml` waits only for `publish-pypi.yml`, which now covers the images.
+- `release.yml` waits only for `publish-pypi.yml`, which now covers the images,
+  and selects that tag's own run (a `-test` rehearsal on the same commit no
+  longer shares its lookup).
+
+### Fixed
+
+- `scripts/check_version_bumps.py` no longer treats a `-test` rehearsal tag as
+  the previous release. A package changed without a version bump could diff
+  clean against a rehearsal tag, pass the guard, and ship old bytes through
+  `skip-existing`.
+- A tag with a differently-cased `-Test` is now a rehearsal in
+  `publish-pypi.yml` as it already was in `release.yml`, never a real release.
 
 ## [0.7.0] - 2026-09-29
 

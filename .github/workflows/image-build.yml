@@ -96,7 +96,7 @@ jobs:
           set -eu
           if [ "${{ inputs.wheel_source }}" = "testpypi" ]; then
             # First-party only, from TestPyPI: it hosts junk copies of real names.
-            pull() { python -m pip download --no-deps --index-url https://test.pypi.org/simple/ \
+            pull() { python -m pip download --no-deps --only-binary=:all: --index-url https://test.pypi.org/simple/ \
                        --dest /tmp/probe -r "$REQ"; }
           else
             pull() { python -m pip download --dest /tmp/probe -r "$REQ"; }
@@ -181,3 +181,4 @@ jobs:
           name: ${{ env.ARTIFACT }}
           path: out/
           retention-days: 3
+          overwrite: true

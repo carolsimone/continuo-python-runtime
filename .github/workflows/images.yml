@@ -45,6 +45,7 @@ jobs:
           name: dist
           path: dist/
           retention-days: 1
+          overwrite: true
 
   verify-packages:
     needs: dist

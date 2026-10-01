@@ -48,9 +48,12 @@ name: publish-pypi
 # file but stops resolvers choosing it) and FIX FORWARD with a new version. The
 # candidate digests pushed to ghcr are untagged garbage and can be ignored or
 # deleted; nothing consumes an untagged digest. No GitHub Release exists for a
-# failed run, and the bare tag was never written. A failure BEFORE
-# publish-packages leaves nothing behind except the git tag: delete it, fix,
-# re-tag. See CONTRIBUTING.md for the full failure table.
+# failed run, and a bare tag exists only on images whose exact digests passed
+# verification. `promote` is one job per engine, so a failure there can leave
+# some engines tagged and others not: re-run the failed jobs (tagging is
+# idempotent and refuses to move an existing tag), do not re-tag. A failure
+# BEFORE publish-packages leaves nothing behind except the git tag: delete it,
+# fix, re-tag. See CONTRIBUTING.md for the full failure table.
 #
 # Tag glob note: `v*` is the repository's single release pattern; GitHub
 # Actions tag globs anchor at character 1, so no other pattern may be added.
@@ -103,7 +106,10 @@ jobs:
           else
             case "$REF" in refs/tags/v*) ;; *) echo "::error::not a v* tag: $REF"; exit 1;; esac
             image_tag="$REF_NAME"; push="true"
-            case "$REF_NAME" in
+            # release.yml's `contains(..., '-test')` is case-insensitive, so this
+            # must be too: `v1.2.3-Test1` is a rehearsal, never a real release.
+            lower="$(printf '%s' "$REF_NAME" | tr '[:upper:]' '[:lower:]')"
+            case "$lower" in
               *-test*) mode="test"; wheel_source=testpypi;;
               *)       mode=real; wheel_source=pypi;;
             esac
@@ -164,6 +170,7 @@ jobs:
           name: dist
           path: dist/
           retention-days: 7
+          overwrite: true
 
   # ---- gates in front of the irreversible upload ---------------------------
 
@@ -332,7 +339,7 @@ jobs:
           path: digests
       - name: Assemble the multi-arch tag from the two verified digests
         run: |
-          set -eu
+          set -euo pipefail
           if [ "$PUSH" != "true" ]; then
             # A dry run built tarballs, not digests: just prove both verified
             # cells exist, and say what a real run would do.
@@ -347,14 +354,18 @@ jobs:
           arm="$(cat "digests/candidate-${ENGINE}-arm64/digest")"
           # Images are immutable: if the tag already exists it must already be
           # exactly these two digests (a re-run after a successful promote).
-          if existing="$(docker buildx imagetools inspect --raw "${IMAGE_NAME}:${TAG}" 2>/dev/null)"; then
+          # Only "the tag does not exist" may fall through to `create`: any
+          # other inspect failure (auth, network) must stop, not overwrite.
+          if existing="$(docker buildx imagetools inspect --raw "${IMAGE_NAME}:${TAG}" 2>"$RUNNER_TEMP/inspect.err")"; then
             echo "$existing" | jq -e --arg a "$amd" --arg b "$arm" \
               '([.manifests[].digest] | sort) == ([$a, $b] | sort)' >/dev/null \
               || { echo "::error::${IMAGE_NAME}:${TAG} already exists with different content"; exit 1; }
             echo "${IMAGE_NAME}:${TAG} already points at these digests"
-          else
+          elif grep -qiE 'not found|manifest unknown|name unknown|404' "$RUNNER_TEMP/inspect.err"; then
             docker buildx imagetools create -t "${IMAGE_NAME}:${TAG}" \
               "${IMAGE_NAME}@${amd}" "${IMAGE_NAME}@${arm}"
+          else
+            echo "::error::cannot tell whether ${IMAGE_NAME}:${TAG} exists:"; cat "$RUNNER_TEMP/inspect.err"; exit 1
           fi
           # Trust nothing: read the tag back and check what it contains.
           docker buildx imagetools inspect --raw "${IMAGE_NAME}:${TAG}" | jq -e --arg a "$amd" --arg b "$arm" '

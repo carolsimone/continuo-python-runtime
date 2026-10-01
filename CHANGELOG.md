@@ -23,6 +23,34 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `Dockerfile.duckdb` (engine image, DuckDB extensions baked in for offline,
   non-root start), the `tests/smoke/duckdb-stack` compose stack, and CI jobs
   that run the adapter's integration suite and the image smoke test against it.
+- Verified releases on amd64 and arm64. A `v*` tag now runs one pipeline
+  (`publish-pypi.yml`): the five packages are installed from the built
+  `dist/` into a clean venv on native amd64 and arm64 runners, and every engine
+  image is built from those same wheels and smoke-tested on both, all BEFORE the
+  irreversible PyPI upload. The upload sends those same `dist/` files. Images
+  are then built natively per architecture (no QEMU) from the published pins and
+  pushed by digest only; each digest is pulled and smoke-tested (including the
+  offline DuckDB extension check); only then are the two verified digests given
+  the bare `vX.Y.Z` tag. A failed verify or promote fails the workflow, so no
+  GitHub Release is created.
+- `-test` tags are a real dress rehearsal: TestPyPI upload with a unique
+  `<version>.dev<N>` per run, images built from TestPyPI (first-party packages
+  only; third-party dependencies still come from PyPI), pushed under a `-test`
+  tag. `workflow_dispatch` with `dry_run: true` runs the same graph and
+  publishes, pushes and promotes nothing.
+- `Dockerfile.*` accept `WHEEL_SOURCE=testpypi`; an unknown `WHEEL_SOURCE` now
+  fails the build instead of silently installing from PyPI.
+  `image-requirements-*.txt` also pin `continuo-engine-contract`.
+- Pull requests that touch images run the package gate and the image smoke tests
+  on arm64 as well as amd64, through the same reusable workflows
+  (`verify-packages.yml`, `image-build.yml`, `image-smoke.yml`) the release uses.
+
+### Changed
+
+- `images.yml` is the pull-request path only; it no longer builds or pushes on a
+  tag. The postgres image smoke runs against `tests/smoke/postgres-stack`
+  instead of a job service container, so one workflow serves every engine.
+- `release.yml` waits only for `publish-pypi.yml`, which now covers the images.
 
 ## [0.7.0] - 2026-09-29
 

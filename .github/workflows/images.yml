@@ -1,4 +1,17 @@
 name: images
+
+# Pull-request path. Builds the wheels of the PR's commit, installs them into
+# the clean-venv package gate and into every engine image, and smoke-tests each
+# image, on BOTH linux/amd64 and linux/arm64 (native runners, no QEMU).
+#
+# The checks themselves live in the reusable workflows verify-packages.yml,
+# image-build.yml and image-smoke.yml, which publish-pypi.yml (the tag-triggered
+# release pipeline) also calls: the PR path and the release path run the same
+# definitions, so they cannot drift. Releases are NOT built here any more; see
+# publish-pypi.yml.
+#
+# None of these jobs is a required status check (this workflow is path-filtered,
+# so requiring one would leave unrelated PRs pending forever).
 on:
   pull_request:
     paths:
@@ -12,301 +25,64 @@ on:
       - "scripts/**"
       - "pyproject.toml"
       - ".github/workflows/images.yml"
-  push:
-    tags:
-      - "v*"
+      - ".github/workflows/image-build.yml"
+      - ".github/workflows/image-smoke.yml"
+      - ".github/workflows/verify-packages.yml"
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        engine: [postgres, trino, duckdb]
+  dist:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
-      - name: Build wheels into a wheelhouse
-        run: uv build --all-packages -o wheelhouse
-      - name: Build ${{ matrix.engine }} image
-        run: docker build -f Dockerfile.${{ matrix.engine }} --build-arg WHEEL_SOURCE=wheelhouse -t cpr-smoke-${{ matrix.engine }} .
-      - name: Save image
-        run: docker save cpr-smoke-${{ matrix.engine }} -o /tmp/cpr-smoke-${{ matrix.engine }}.tar
+      - name: Build the sdists and wheels of all five packages
+        run: uv build --all-packages -o dist
       - uses: actions/upload-artifact@v7
         with:
-          name: cpr-smoke-${{ matrix.engine }}-image
-          path: /tmp/cpr-smoke-${{ matrix.engine }}.tar
+          name: dist
+          path: dist/
           retention-days: 1
 
-  smoke-postgres:
-    needs: build
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: continuo
-          POSTGRES_PASSWORD: continuo
-          POSTGRES_DB: warehouse
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U continuo -d warehouse"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: cpr-smoke-postgres-image
-          path: /tmp
-      - name: Load image
-        run: docker load -i /tmp/cpr-smoke-postgres.tar
-      - uses: astral-sh/setup-uv@v7
-      - name: Sync
-        run: uv sync --all-packages --all-groups
-      - name: Image smoke tests (postgres)
-        env:
-          VALIDATION_IMAGE_UNDER_TEST: cpr-smoke-postgres
-          VALIDATION_IMAGE_ENGINE: postgres
-          # PostgresAdapter.required_env()[0]
-          VALIDATION_IMAGE_REQUIRED_ENV: POSTGRES_HOST
-        run: uv run pytest tests/test_image_smoke_validation.py -m image -v
-      - name: Install psql client
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-client
-      - name: Seed source table
-        env:
-          PGPASSWORD: continuo
-        run: |
-          psql -h localhost -U continuo -d warehouse -c \
-            "CREATE SCHEMA analytics; CREATE TABLE analytics.src(id int); INSERT INTO analytics.src VALUES (1),(2),(3);"
-      - name: Run smoke node
-        run: |
-          docker run --rm --network host \
-            -v "$PWD/tests/smoke/node_smoke:/app" \
-            -e NODE_ID=python-node.smoke.analytics.smoke \
-            -e TABLE_NAME=smoke \
-            -e TARGET_SCHEMA=analytics \
-            -e POSTGRES_HOST=localhost \
-            -e POSTGRES_PORT=5432 \
-            -e POSTGRES_DB=warehouse \
-            -e POSTGRES_USER=continuo \
-            -e POSTGRES_PASSWORD=continuo \
-            cpr-smoke-postgres | tee /tmp/smoke.out
-          test "${PIPESTATUS[0]}" -eq 0
-        shell: bash
-      - name: Assert success sentinel
-        run: grep -q '"status":"success"' /tmp/smoke.out
-      - name: Assert row count
-        env:
-          PGPASSWORD: continuo
-        run: |
-          count=$(psql -h localhost -U continuo -d warehouse -t -c "select count(*) from analytics.smoke" | tr -d '[:space:]')
-          test "$count" = "3"
-
-  smoke-trino:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: cpr-smoke-trino-image
-          path: /tmp
-      - name: Load image
-        run: docker load -i /tmp/cpr-smoke-trino.tar
-      - uses: astral-sh/setup-uv@v7
-      - name: Sync
-        run: uv sync --all-packages --all-groups
-      - name: Image smoke tests (trino)
-        env:
-          VALIDATION_IMAGE_UNDER_TEST: cpr-smoke-trino
-          VALIDATION_IMAGE_ENGINE: trino
-          # TrinoAdapter.required_env()[0]
-          VALIDATION_IMAGE_REQUIRED_ENV: TRINO_HOST
-        run: uv run pytest tests/test_image_smoke_validation.py -m image -v
-      - name: Start trino stack
-        run: docker compose -f tests/smoke/trino-stack/docker-compose.yml up -d --wait
-      - name: Seed source table
-        run: |
-          docker exec "$(docker compose -f tests/smoke/trino-stack/docker-compose.yml ps -q trino)" \
-            trino --execute "CREATE SCHEMA IF NOT EXISTS iceberg.analytics; CREATE TABLE iceberg.analytics.src(id int); INSERT INTO iceberg.analytics.src VALUES 1,2,3"
-      - name: Run smoke node
-        run: |
-          docker run --rm \
-            -v "$PWD/tests/smoke/node_smoke:/app" \
-            -e NODE_ID=python-node.smoke.analytics.smoke \
-            -e TABLE_NAME=smoke \
-            -e TARGET_SCHEMA=analytics \
-            -e TRINO_HOST=host.docker.internal \
-            -e TRINO_PORT=18080 \
-            -e TRINO_CATALOG=iceberg \
-            -e TRINO_USER=continuo \
-            --add-host=host.docker.internal:host-gateway \
-            cpr-smoke-trino | tee /tmp/smoke-trino.out
-          test "${PIPESTATUS[0]}" -eq 0
-        shell: bash
-      - name: Assert success sentinel
-        run: grep -q '"status":"success"' /tmp/smoke-trino.out
-      - name: Assert row count
-        run: |
-          count=$(docker exec "$(docker compose -f tests/smoke/trino-stack/docker-compose.yml ps -q trino)" \
-            trino --execute "select count(*) from iceberg.analytics.smoke" | tr -d '[:space:]"')
-          test "$count" = "3"
-      - name: Tear down trino stack
-        if: always()
-        run: docker compose -f tests/smoke/trino-stack/docker-compose.yml down -v
-
-  smoke-duckdb:
-    needs: build
-    runs-on: ubuntu-latest
-    env:
-      DUCKDB_CATALOG_HOST: localhost
-      DUCKDB_CATALOG_PORT: "15599"
-      DUCKDB_CATALOG_DB: catalog
-      DUCKDB_CATALOG_USER: continuo
-      DUCKDB_CATALOG_PASSWORD: continuo
-      DUCKDB_DATA_PATH: s3://warehouse/lake/
-      DUCKDB_S3_ENDPOINT: localhost:19100
-      DUCKDB_S3_ACCESS_KEY_ID: minioadmin
-      DUCKDB_S3_SECRET_ACCESS_KEY: minioadmin
-      DUCKDB_S3_URL_STYLE: path
-      DUCKDB_S3_USE_SSL: "false"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: cpr-smoke-duckdb-image
-          path: /tmp
-      - name: Load image
-        run: docker load -i /tmp/cpr-smoke-duckdb.tar
-      - uses: astral-sh/setup-uv@v7
-      - name: Sync
-        run: uv sync --all-packages --all-groups
-      - name: Image smoke tests (duckdb)
-        env:
-          VALIDATION_IMAGE_UNDER_TEST: cpr-smoke-duckdb
-          VALIDATION_IMAGE_ENGINE: duckdb
-          # DuckDBAdapter.required_env()[0]
-          VALIDATION_IMAGE_REQUIRED_ENV: DUCKDB_CATALOG_HOST
-        run: uv run pytest tests/test_image_smoke_validation.py -m image -v
-      - name: Extensions load offline as the non-root user
-        run: |
-          docker run --rm --network none --user 65532:65532 --entrypoint python cpr-smoke-duckdb -c \
-            "import os; from continuo_duckdb_adapter.infrastructure.extensions import check_offline; check_offline(os.environ['DUCKDB_EXTENSION_DIRECTORY'])"
-      - name: Start duckdb stack
-        run: docker compose -f tests/smoke/duckdb-stack/docker-compose.yml up -d --wait
-      - name: Seed source table
-        run: |
-          uv run python - <<'PY'
-          import pyarrow as pa
-          from continuo_duckdb_adapter.adapter import DuckDBAdapter
-
-          a = DuckDBAdapter.from_env()
-          a.ensure_table("analytics", "src", [{"name": "id", "type": "INTEGER", "nullable": True}], config={})
-          a.load("analytics", "src", pa.table({"id": pa.array([1, 2, 3], pa.int32())}))
-          a.close()
-          PY
-      - name: Run smoke node
-        run: |
-          docker run --rm --network host \
-            -v "$PWD/tests/smoke/node_smoke:/app" \
-            -e NODE_ID=python-node.smoke.analytics.smoke \
-            -e TABLE_NAME=smoke \
-            -e TARGET_SCHEMA=analytics \
-            -e DUCKDB_CATALOG_HOST -e DUCKDB_CATALOG_PORT -e DUCKDB_CATALOG_DB \
-            -e DUCKDB_CATALOG_USER -e DUCKDB_CATALOG_PASSWORD -e DUCKDB_DATA_PATH \
-            -e DUCKDB_S3_ENDPOINT -e DUCKDB_S3_ACCESS_KEY_ID -e DUCKDB_S3_SECRET_ACCESS_KEY \
-            -e DUCKDB_S3_URL_STYLE -e DUCKDB_S3_USE_SSL \
-            cpr-smoke-duckdb | tee /tmp/smoke-duckdb.out
-          test "${PIPESTATUS[0]}" -eq 0
-        shell: bash
-      - name: Assert success sentinel
-        run: grep -q '"status":"success"' /tmp/smoke-duckdb.out
-      - name: Assert row count
-        run: |
-          uv run python - <<'PY'
-          from continuo_duckdb_adapter.adapter import DuckDBAdapter
-
-          a = DuckDBAdapter.from_env()
-          assert a.fetch("SELECT count(*) AS n FROM analytics.smoke").to_pylist() == [{"n": 3}]
-          a.close()
-          PY
-      - name: Tear down duckdb stack
-        if: always()
-        run: docker compose -f tests/smoke/duckdb-stack/docker-compose.yml down -v
-
-  # Runs on this same tag push, after the smoke jobs above pass. It builds all three
-  # engine images for linux/amd64 and linux/arm64 installing the pinned
-  # versions FROM PyPI (WHEEL_SOURCE=pypi, the Dockerfile default), then
-  # pushes them to ghcr.io/<owner>/continuo-python-runtime-<engine>:<tag>. The
-  # engine belongs in the image NAME, not the tag: Continuo's Helm chart pins
-  # an image as `<name>:vX.Y.Z@sha256:<digest>`, so the tag must be the bare
-  # version. Both platforms are required: domain repos build their own images
-  # FROM these, and Continuo's e2e runs them in a kind cluster on aarch64
-  # developer machines as well as on amd64 CI runners, so a single-arch
-  # publish is unusable off amd64. The smoke jobs above stay single-arch —
-  # they load a `docker save` tarball, which has no multi-platform
-  # equivalent.
-  #
-  # publish-pypi.yml runs in parallel on this same tag push, not before this
-  # job: there is no cross-workflow `needs:`, so this job cannot wait on that
-  # workflow directly. Instead the wait-until-installable step below polls
-  # PyPI until the pinned versions this tag just published are actually
-  # installable, which is what orders this build after publish-pypi.yml
-  # completes without a cross-workflow dependency.
-  # -test tags publish to TestPyPI only (see publish-pypi.yml), so this job
-  # skips them: there is no real-PyPI installable version to build an image
-  # from for those.
-  publish:
-    needs: [smoke-postgres, smoke-trino, smoke-duckdb]
-    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-test')
+  verify-packages:
+    needs: dist
     strategy:
-      # One engine's failed push must not cancel the other engines' pushes.
       fail-fast: false
       matrix:
         engine: [postgres, trino, duckdb]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - name: Log in to ghcr.io
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      # The pinned distributions declare Requires-Python >= 3.14, so the
-      # availability probe must resolve them under a 3.14 interpreter — the
-      # runner's default python is older and pip would reject them even after
-      # they are published, spinning out every retry. (The image build itself
-      # installs inside python:3.14-slim, so it is unaffected; this is only for
-      # the host-side probe below.)
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.14'
-      - name: Wait until the pinned versions are installable from PyPI
-        run: |
-          set -eu
-          req="image-requirements-${{ matrix.engine }}.txt"
-          for i in $(seq 1 30); do
-            if python -m pip download --dest /tmp/probe -r "$req" >/tmp/probe.log 2>&1; then
-              echo "installable"; exit 0
-            fi
-            echo "attempt $i: not yet on index; sleeping"; sleep 20
-          done
-          echo "pinned versions never became installable"; cat /tmp/probe.log; exit 1
-      - name: Build and push ${{ matrix.engine }} image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: Dockerfile.${{ matrix.engine }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ghcr.io/${{ github.repository_owner }}/continuo-python-runtime-${{ matrix.engine }}:${{ github.ref_name }}
+        arch: [amd64, arm64]
+    uses: ./.github/workflows/verify-packages.yml
+    with:
+      engine: ${{ matrix.engine }}
+      arch: ${{ matrix.arch }}
+
+  build:
+    needs: dist
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [postgres, trino, duckdb]
+        arch: [amd64, arm64]
+    uses: ./.github/workflows/image-build.yml
+    with:
+      engine: ${{ matrix.engine }}
+      arch: ${{ matrix.arch }}
+      wheel_source: wheelhouse
+      push: false
+      artifact_prefix: pr
+
+  smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [postgres, trino, duckdb]
+        arch: [amd64, arm64]
+    uses: ./.github/workflows/image-smoke.yml
+    with:
+      engine: ${{ matrix.engine }}
+      arch: ${{ matrix.arch }}
+      mode: tar
+      image_artifact: pr-${{ matrix.engine }}-${{ matrix.arch }}

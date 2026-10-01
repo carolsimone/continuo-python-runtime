@@ -1,0 +1,74 @@
+name: verify-packages
+
+# Reusable: install the BUILT wheels from the `dist` artifact into a clean venv
+# on a native runner and check them the way a consumer's `pip install` would
+# see them. Used by images.yml (every PR) and publish-pypi.yml (the gate in
+# front of the irreversible PyPI upload), so the two cannot drift.
+#
+# Only the wheels of continuo-engine-contract, continuo-python-runtime and ONE
+# adapter are installed, so `discover_adapter()` sees exactly one engine.
+# Third-party dependencies resolve from the real PyPI; the first-party ones are
+# installed from the files, never from an index (so a same-name release on any
+# index cannot stand in for the bytes under test). The checks run with
+# `python -I` from outside the checkout, so nothing in the repo is importable.
+on:
+  workflow_call:
+    inputs:
+      engine:
+        description: postgres | trino | duckdb
+        type: string
+        required: true
+      arch:
+        description: amd64 | arm64 (selects a native runner)
+        type: string
+        required: true
+      dist_artifact:
+        type: string
+        default: dist
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: packages ${{ inputs.engine }} ${{ inputs.arch }}
+    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    steps:
+      # Only the verifier script is taken from the repo.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/verify_installed_packages.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.dist_artifact }}
+          path: ${{ runner.temp }}/dist
+      - name: Assert the runner architecture
+        run: |
+          want="${{ inputs.arch == 'arm64' && 'aarch64' || 'x86_64' }}"
+          test "$(uname -m)" = "$want" || { echo "::error::runner is $(uname -m), expected $want"; exit 1; }
+      - name: Install the built wheels into a clean venv
+        run: |
+          set -eu
+          python -m venv "$RUNNER_TEMP/venv"
+          py="$RUNNER_TEMP/venv/bin/python"
+          engine="${{ inputs.engine }}"
+          mapfile -t wheels < <(find "$RUNNER_TEMP/dist" -maxdepth 1 \( \
+            -name 'continuo_engine_contract-*.whl' -o -name 'continuo_python_runtime-*.whl' \
+            -o -name "continuo_${engine}_adapter-*.whl" \) | sort)
+          test "${#wheels[@]}" -eq 3 || { echo "::error::expected 3 wheels, found ${#wheels[@]}: ${wheels[*]}"; exit 1; }
+          # Step 1: the exact local files, no index contacted, no dependencies.
+          "$py" -m pip install --no-index --no-deps "${wheels[@]}"
+          # Step 2: the same files again, now letting pip resolve only what is
+          # missing (third-party dependencies) from PyPI. The first-party
+          # requirements are satisfied by the files named on the command line.
+          "$py" -m pip install "${wheels[@]}"
+          "$py" -m pip check
+      - name: Verify the installed packages
+        run: |
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv/bin/python" -I "$GITHUB_WORKSPACE/scripts/verify_installed_packages.py" \
+            --engine "${{ inputs.engine }}" --dist-dir "$RUNNER_TEMP/dist"

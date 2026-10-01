@@ -1,0 +1,183 @@
+name: image-build
+
+# Reusable: build ONE engine image for ONE architecture on a native runner (no
+# QEMU), in one of two shapes:
+#
+#   push: false   `docker save` tarball uploaded as artifact
+#                 `<prefix>-<engine>-<arch>` (file image.tar). Nothing leaves
+#                 the run. PR smoke and dry runs.
+#   push: true    pushed to ghcr BY DIGEST ONLY: no tag of any kind, so the
+#                 candidate cannot be mistaken for a release. The digest is
+#                 uploaded as artifact `<prefix>-<engine>-<arch>` (file
+#                 `digest`, content `sha256:...`) for the verify and promote
+#                 jobs. Candidates that never get promoted are garbage.
+#
+# wheel_source feeds the Dockerfile's WHEEL_SOURCE:
+#   wheelhouse  the `dist` artifact's wheels (PR, dry run, pre-upload gate)
+#   pypi        the pins from real PyPI (a real release)
+#   testpypi    the pins from TestPyPI, first-party only (a -test rehearsal)
+#
+# version_suffix re-applies the rehearsal version rewrite to this job's own
+# checkout so image-requirements-<engine>.txt names the versions in `dist`
+# (see scripts/apply_rehearsal_version.py). Empty for a real release.
+on:
+  workflow_call:
+    inputs:
+      engine:
+        type: string
+        required: true
+      arch:
+        description: amd64 | arm64
+        type: string
+        required: true
+      wheel_source:
+        description: wheelhouse | pypi | testpypi
+        type: string
+        required: true
+      push:
+        type: boolean
+        default: false
+      version_suffix:
+        type: string
+        default: ""
+      artifact_prefix:
+        description: artifact name prefix, e.g. pr, preflight, candidate
+        type: string
+        required: true
+      dist_artifact:
+        type: string
+        default: dist
+    outputs:
+      artifact:
+        description: name of the artifact holding image.tar or digest
+        value: ${{ jobs.build.outputs.artifact }}
+
+# No `permissions:` here on purpose: a called workflow can only NARROW the
+# caller's token, so the caller grants `contents: read` (+ `packages: write`
+# when push is true).
+
+jobs:
+  build:
+    name: image ${{ inputs.engine }} ${{ inputs.arch }}
+    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    outputs:
+      artifact: ${{ inputs.artifact_prefix }}-${{ inputs.engine }}-${{ inputs.arch }}
+    env:
+      ARTIFACT: ${{ inputs.artifact_prefix }}-${{ inputs.engine }}-${{ inputs.arch }}
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/continuo-python-runtime-${{ inputs.engine }}
+      REQ: image-requirements-${{ inputs.engine }}.txt
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assert the runner architecture
+        run: |
+          want="${{ inputs.arch == 'arm64' && 'aarch64' || 'x86_64' }}"
+          test "$(uname -m)" = "$want" || { echo "::error::runner is $(uname -m), expected $want"; exit 1; }
+      - name: Apply the rehearsal version
+        if: inputs.version_suffix != ''
+        run: python3 scripts/apply_rehearsal_version.py --suffix "${{ inputs.version_suffix }}"
+      - name: Fetch the built wheels into the wheelhouse
+        if: inputs.wheel_source == 'wheelhouse'
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.dist_artifact }}
+          path: wheelhouse
+      - uses: actions/setup-python@v7
+        if: inputs.wheel_source != 'wheelhouse'
+        with:
+          # The pinned distributions declare Requires-Python >= 3.14, so the
+          # host-side probe below must run under 3.14 or pip rejects them even
+          # once published. (The image build itself runs inside python:3.14-slim.)
+          python-version: "3.14"
+      # Ordering between the upload and this build is a `needs:` edge in
+      # publish-pypi.yml, but an index can lag its own upload, so poll.
+      - name: Wait until the pinned versions are installable
+        if: inputs.wheel_source != 'wheelhouse'
+        run: |
+          set -eu
+          if [ "${{ inputs.wheel_source }}" = "testpypi" ]; then
+            # First-party only, from TestPyPI: it hosts junk copies of real names.
+            pull() { python -m pip download --no-deps --index-url https://test.pypi.org/simple/ \
+                       --dest /tmp/probe -r "$REQ"; }
+          else
+            pull() { python -m pip download --dest /tmp/probe -r "$REQ"; }
+          fi
+          for i in $(seq 1 30); do
+            if pull >/tmp/probe.log 2>&1; then
+              echo "installable"; exit 0
+            fi
+            echo "attempt $i: not yet on the index; sleeping"; sleep 20
+          done
+          echo "pinned versions never became installable"; cat /tmp/probe.log; exit 1
+      # TestPyPI versions are unique per run, so the files served must be the
+      # files this run built. Compare them byte for byte.
+      - name: Fetch dist to compare with the index
+        if: inputs.wheel_source == 'testpypi'
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.dist_artifact }}
+          path: dist
+      - name: Index bytes equal the bytes built in this run
+        if: inputs.wheel_source == 'testpypi'
+        run: |
+          set -eu
+          n=0
+          for f in /tmp/probe/*.whl; do
+            b="$(basename "$f")"
+            test -f "dist/$b" || { echo "::error::$b is on the index but was not built in this run"; exit 1; }
+            cmp "$f" "dist/$b" || { echo "::error::$b on the index differs from this run's build"; exit 1; }
+            n=$((n + 1))
+          done
+          test "$n" -eq 3 || { echo "::error::expected 3 first-party wheels, compared $n"; exit 1; }
+          echo "compared $n wheels: identical"
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to ghcr.io
+        if: inputs.push
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build the image (tarball)
+        if: "!inputs.push"
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.${{ inputs.engine }}
+          platforms: linux/${{ inputs.arch }}
+          build-args: WHEEL_SOURCE=${{ inputs.wheel_source }}
+          load: true
+          tags: cpr-smoke-${{ inputs.engine }}
+      - name: Save the image
+        if: "!inputs.push"
+        run: |
+          mkdir -p out
+          docker save cpr-smoke-${{ inputs.engine }} -o out/image.tar
+      # provenance/sbom off: with them on, a pushed digest is an index that
+      # also holds an attestation manifest, and merging two of those into one
+      # multi-arch tag nests indexes. Off, the digest IS the single-platform
+      # image manifest, which is exactly what the verify job pulls.
+      - name: Build and push by digest
+        id: push
+        if: inputs.push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.${{ inputs.engine }}
+          platforms: linux/${{ inputs.arch }}
+          build-args: WHEEL_SOURCE=${{ inputs.wheel_source }}
+          provenance: false
+          sbom: false
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+      - name: Record the digest
+        if: inputs.push
+        run: |
+          mkdir -p out
+          digest="${{ steps.push.outputs.digest }}"
+          case "$digest" in sha256:*) ;; *) echo "::error::no digest from the push"; exit 1;; esac
+          printf '%s' "$digest" > out/digest
+          echo "pushed ${IMAGE_NAME}@${digest} (candidate, untagged)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: out/
+          retention-days: 3

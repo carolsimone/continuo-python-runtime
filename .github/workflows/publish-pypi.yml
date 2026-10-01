@@ -1,88 +1,245 @@
 name: publish-pypi
 
-# Publishes all five PyPI distributions this repo owns — continuo-python-runtime
-# (the harness), continuo-engine-contract (the port, result-block format, and
-# shared guards), and the three engine adapters (continuo-postgres-adapter,
-# continuo-trino-adapter, continuo-duckdb-adapter) — via PyPI Trusted Publishing (OIDC, no stored
-# token). They publish together on a single v* tag, each at its own
-# pyproject version, so a tag that only bumps the runtime still carries an
-# unchanged adapter version along for the ride; skip-existing (below) makes
-# that a no-op rather than a duplicate-upload failure. A release-time guard
-# (scripts/check_version_bumps.py) refuses a tag that changed a package's
-# source without bumping its version, so skip-existing can never silently
-# ship stale adapter code under an unchanged version number.
+# The release pipeline for one `v*` tag: five PyPI distributions plus three
+# engine images on ghcr.io. The filename stays `publish-pypi.yml` because the
+# PyPI/TestPyPI trusted publishers are registered against it (and against the
+# `pypi` / `testpypi` environments); PyPI does not honour a reusable workflow
+# there, so the upload job must live in this file.
 #
-# Tag glob note: `v*` is the repository's single release pattern — the same tag
-# that images.yml builds and pushes all three engine images from, so one tag ships
-# the whole release. GitHub Actions tag globs anchor at character 1, so `v*`
-# claims every tag beginning with "v"; no other pattern may be introduced.
-# Tag `v<ver>-test<n>` publishes to TestPyPI; `v<ver>` publishes to real PyPI.
-# The GitHub environment name is what the PyPI "pending publisher" is
-# registered against — all five project names need one on each index.
+# PRINCIPLE: build once, test the exact artifact, promote the same bytes.
 #
-# All five distributions are built into a single `dist/` and uploaded in one
-# publish call, so there is no ordering constraint between them. The runtime
-# wheel declares continuo-engine-contract as a dependency and resolves it from
-# the index at install time ([tool.uv.sources] is dev-only and is not embedded
-# in the wheel).
+#   prepare            tests, build the five sdists+wheels ONCE into `dist`
+#   verify-packages    x6 (engine x arch, native runners): install `dist` into a
+#                      clean venv, check entry point / CLI / required_env
+#   preflight-build/   x6: build each engine image from those same `dist` wheels
+#   preflight-smoke    and run the full smoke test (real warehouse) on both arches
+#   publish-packages   upload THE SAME `dist` files. Irreversible. Needs all of
+#                      the above to have passed.
+#   candidate-build    x6: build from the published pins (PyPI, or TestPyPI for
+#                      -test) on native runners and push BY DIGEST ONLY (no tag)
+#   candidate-verify   x6: pull each candidate BY DIGEST and run the same smoke
+#   promote            x3: only after all 6 verified, give the two verified
+#                      digests ONE multi-arch tag (re-tag, no rebuild)
+#
+# Consumers pin `<name>:vX.Y.Z@sha256:<digest>`, so the bare version tag exists
+# only for images whose exact digests passed. release.yml creates the GitHub
+# Release only if this whole workflow succeeds.
+#
+# THREE MODES, decided in `prepare`:
+#   real   tag `vX.Y.Z`         -> PyPI, images built FROM PyPI, tag `vX.Y.Z`
+#   test   tag `vX.Y.Z-testN`   -> TestPyPI, images built FROM TestPyPI, tag
+#                                  `vX.Y.Z-testN`. A real dress rehearsal of every
+#                                  step. All versions are rewritten to a unique
+#                                  `<version>.dev<N>` first (TestPyPI is
+#                                  immutable; without this a second rehearsal of
+#                                  the same pyproject versions would silently
+#                                  verify the OLDER upload), and the files the
+#                                  index serves are compared byte for byte with
+#                                  the files this run built. No bare or
+#                                  latest-like image tag is ever written.
+#   dry    workflow_dispatch    -> same graph, but every irreversible step
+#                                  (upload, push, promote) is skipped; images
+#                                  stay tarballs built from `dist`. Start with:
+#                                    gh workflow run publish-pypi.yml \
+#                                      --ref <branch> -f dry_run=true
+#
+# RECOVERY. PyPI uploads are immutable: if anything fails AFTER publish-packages
+# the files are on the index for good. Yank them on pypi.org (a yank keeps the
+# file but stops resolvers choosing it) and FIX FORWARD with a new version. The
+# candidate digests pushed to ghcr are untagged garbage and can be ignored or
+# deleted; nothing consumes an untagged digest. No GitHub Release exists for a
+# failed run, and the bare tag was never written. A failure BEFORE
+# publish-packages leaves nothing behind except the git tag: delete it, fix,
+# re-tag. See CONTRIBUTING.md for the full failure table.
+#
+# Tag glob note: `v*` is the repository's single release pattern; GitHub
+# Actions tag globs anchor at character 1, so no other pattern may be added.
+# Each distribution is built into `dist/` and uploaded in one publish call.
+# The runtime wheel declares continuo-engine-contract as a dependency and
+# resolves it from the index at install time ([tool.uv.sources] is dev-only and
+# is not embedded in the wheel).
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and verify everything on both arches; publish, push and promote nothing
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-pipeline-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions: {}
 
 jobs:
-  publish-packages:
-    if: startsWith(github.ref_name, 'v')
+  prepare:
     runs-on: ubuntu-latest
-    environment: ${{ contains(github.ref_name, '-test') && 'testpypi' || 'pypi' }}
     permissions:
-      id-token: write # OIDC token for Trusted Publishing
-      contents: read # actions/checkout needs read access to the repo
+      contents: read
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+      wheel_source: ${{ steps.mode.outputs.wheel_source }}
+      push: ${{ steps.mode.outputs.push }}
+      image_tag: ${{ steps.mode.outputs.image_tag }}
+      suffix: ${{ steps.rewrite.outputs.suffix }}
     steps:
+      - name: Decide the mode
+        id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -eu
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            # A manual run can never publish: there is no tag to publish under.
+            [ "$DRY_RUN" = "true" ] || { echo "::error::workflow_dispatch only supports dry_run=true"; exit 1; }
+            mode=dry; wheel_source=wheelhouse; push="false"; image_tag=""
+          else
+            case "$REF" in refs/tags/v*) ;; *) echo "::error::not a v* tag: $REF"; exit 1;; esac
+            image_tag="$REF_NAME"; push="true"
+            case "$REF_NAME" in
+              *-test*) mode="test"; wheel_source=testpypi;;
+              *)       mode=real; wheel_source=pypi;;
+            esac
+          fi
+          {
+            echo "mode=$mode"; echo "wheel_source=$wheel_source"
+            echo "push=$push"; echo "image_tag=$image_tag"
+          } >> "$GITHUB_OUTPUT"
+          echo "mode: $mode (wheel_source=$wheel_source push=$push tag=${image_tag:-none})" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
       - name: Refuse a tag that changed a package without bumping its version
+        if: github.event_name == 'push'
         run: python scripts/check_version_bumps.py
       - name: Test before publishing
         # Gate all five published projects, including every adapter suite — an
-        # adapter regression must block its own immutable PyPI upload, and
-        # images.yml runs in parallel so its smoke failure cannot. Each suite is
-        # a SEPARATE pytest invocation: every workspace member's tests/ is its
-        # own `tests` package (with __init__.py + conftest.py), so running two
-        # of them in one process collides on the `tests.conftest` module name
+        # adapter regression must block its own immutable PyPI upload. Each
+        # suite is a SEPARATE pytest invocation: every workspace member's tests/
+        # is its own `tests` package (with __init__.py + conftest.py), so running
+        # two of them in one process collides on the `tests.conftest` module name
         # (see the [tool.pytest.ini_options] note in pyproject.toml). `not image
         # and not integration` deselects the tests needing a built engine image
-        # or a live warehouse (images.yml / the smoke jobs cover those). The
-        # step's default `set -e` fails the gate if any invocation fails.
+        # or a live warehouse (the smoke jobs below cover those). The step's
+        # default `set -e` fails the gate if any invocation fails.
         run: |
           uv sync --all-packages --all-groups
           uv run pytest tests contract/tests -m "not image and not integration" -q
           uv run pytest adapters/postgres/tests -m "not image and not integration" -q
           uv run pytest adapters/trino/tests -m "not image and not integration" -q
           uv run pytest adapters/duckdb/tests -m "not image and not integration" -q
-      - name: Build the contract sdist + wheel
-        run: uv build --package continuo-engine-contract -o dist
-      - name: Build the runtime sdist + wheel
-        run: uv build -o dist
-      - name: Build the postgres adapter sdist + wheel
-        run: uv build --package continuo-postgres-adapter -o dist
-      - name: Build the trino adapter sdist + wheel
-        run: uv build --package continuo-trino-adapter -o dist
-      - name: Build the duckdb adapter sdist + wheel
-        run: uv build --package continuo-duckdb-adapter -o dist
-      # Adapters change rarely, so most v* tags carry an unchanged adapter
-      # version alongside a bumped runtime/contract version. Without
-      # skip-existing, re-uploading that unchanged version 400s and fails the
-      # whole publish. Trade-off: a changed package published without a
-      # version bump is then silently skipped too — the
-      # check_version_bumps.py guard above is what catches that case, before
-      # this job's build/publish steps ever run.
+      - name: Rewrite versions to a unique dev release (rehearsal only)
+        id: rewrite
+        if: steps.mode.outputs.mode != 'real'
+        run: |
+          suffix="$(python scripts/apply_rehearsal_version.py \
+            --run-number "$GITHUB_RUN_NUMBER" --run-attempt "$GITHUB_RUN_ATTEMPT")"
+          echo "suffix=$suffix" >> "$GITHUB_OUTPUT"
+          echo "rehearsal version suffix: $suffix" >> "$GITHUB_STEP_SUMMARY"
+      - name: The rewritten tree is still internally consistent
+        if: steps.mode.outputs.mode != 'real'
+        run: uv run --frozen --no-sync pytest tests/test_image_requirements_sync.py tests/test_contract_pin_consistency.py -q
+      - name: Build the five sdists + wheels, once
+        run: |
+          set -eu
+          uv build --package continuo-engine-contract -o dist
+          uv build -o dist
+          uv build --package continuo-postgres-adapter -o dist
+          uv build --package continuo-trino-adapter -o dist
+          uv build --package continuo-duckdb-adapter -o dist
+          test "$(find dist -name '*.whl' | wc -l)" -eq 5
+          test "$(find dist -name '*.tar.gz' | wc -l)" -eq 5
+          (cd dist && sha256sum -- *) >> "$GITHUB_STEP_SUMMARY"
+      # Everything below, including the upload, uses THIS artifact: never rebuild.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  # ---- gates in front of the irreversible upload ---------------------------
+
+  verify-packages:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [postgres, trino, duckdb]
+        arch: [amd64, arm64]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/verify-packages.yml
+    with:
+      engine: ${{ matrix.engine }}
+      arch: ${{ matrix.arch }}
+
+  preflight-build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [postgres, trino, duckdb]
+        arch: [amd64, arm64]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/image-build.yml
+    with:
+      engine: ${{ matrix.engine }}
+      arch: ${{ matrix.arch }}
+      wheel_source: wheelhouse
+      push: false
+      version_suffix: ${{ needs.prepare.outputs.suffix }}
+      artifact_prefix: preflight
+
+  preflight-smoke:
+    needs: preflight-build
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [postgres, trino, duckdb]
+        arch: [amd64, arm64]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/image-smoke.yml
+    with:
+      engine: ${{ matrix.engine }}
+      arch: ${{ matrix.arch }}
+      mode: tar
+      image_artifact: preflight-${{ matrix.engine }}-${{ matrix.arch }}
+
+  # ---- the irreversible step ------------------------------------------------
+
+  publish-packages:
+    needs: [prepare, verify-packages, preflight-smoke]
+    runs-on: ubuntu-latest
+    # `dry-run` is an unprotected environment with no PyPI trust: a dry run
+    # still starts this job (so the graph proves the gates order it) but every
+    # upload step below is skipped.
+    environment: ${{ (needs.prepare.outputs.mode == 'real' && 'pypi') || (needs.prepare.outputs.mode == 'test' && 'testpypi') || 'dry-run' }}
+    permissions:
+      id-token: write # OIDC token for Trusted Publishing
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - name: Dry run, nothing is uploaded
+        if: needs.prepare.outputs.mode == 'dry'
+        run: |
+          echo "dry run: would upload $(find dist -type f | wc -l) files" >> "$GITHUB_STEP_SUMMARY"
+      # Rehearsal versions are unique per run, so there is nothing to skip: an
+      # existing file means something is wrong, and the upload must say so.
       - name: Publish to TestPyPI
-        if: contains(github.ref_name, '-test')
+        if: needs.prepare.outputs.mode == 'test'
         # Pinned to a commit SHA. release/v1 is a moving branch, and this job
         # holds id-token: write for PyPI Trusted Publishing — a compromised
         # revision could mint a token and publish under this project's name.
@@ -90,13 +247,112 @@ jobs:
         with:
           repository-url: https://test.pypi.org/legacy/
           packages-dir: dist
-          skip-existing: true
+          skip-existing: false
+      # Adapters change rarely, so most v* tags carry an unchanged adapter
+      # version alongside a bumped runtime/contract version. Without
+      # skip-existing, re-uploading that unchanged version 400s and fails the
+      # whole publish. Trade-off: a changed package published without a
+      # version bump is then silently skipped too — the check_version_bumps.py
+      # guard in `prepare` is what catches that case.
       - name: Publish to PyPI
-        if: ${{ !contains(github.ref_name, '-test') }}
-        # Pinned to a commit SHA. release/v1 is a moving branch, and this job
-        # holds id-token: write for PyPI Trusted Publishing — a compromised
-        # revision could mint a token and publish under this project's name.
+        if: needs.prepare.outputs.mode == 'real'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           packages-dir: dist
           skip-existing: true
+
+  # ---- images, from the published pins --------------------------------------
+
+  candidate-build:
+    needs: [prepare, publish-packages]
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [postgres, trino, duckdb]
+        arch: [amd64, arm64]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image-build.yml
+    with:
+      engine: ${{ matrix.engine }}
+      arch: ${{ matrix.arch }}
+      wheel_source: ${{ needs.prepare.outputs.wheel_source }}
+      push: ${{ needs.prepare.outputs.push == 'true' }}
+      version_suffix: ${{ needs.prepare.outputs.suffix }}
+      artifact_prefix: candidate
+
+  candidate-verify:
+    needs: [prepare, candidate-build]
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [postgres, trino, duckdb]
+        arch: [amd64, arm64]
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/image-smoke.yml
+    with:
+      engine: ${{ matrix.engine }}
+      arch: ${{ matrix.arch }}
+      mode: ${{ needs.prepare.outputs.push == 'true' && 'digest' || 'tar' }}
+      image_artifact: candidate-${{ matrix.engine }}-${{ matrix.arch }}
+      registry_image: ghcr.io/${{ github.repository_owner }}/continuo-python-runtime-${{ matrix.engine }}
+
+  # `needs: candidate-verify` waits for ALL six cells: one failed cell blocks
+  # every engine's tag, because a release is all or nothing.
+  promote:
+    needs: [prepare, candidate-verify]
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [postgres, trino, duckdb]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/continuo-python-runtime-${{ matrix.engine }}
+      TAG: ${{ needs.prepare.outputs.image_tag }}
+      PUSH: ${{ needs.prepare.outputs.push }}
+      ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to ghcr.io
+        if: needs.prepare.outputs.push == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: candidate-${{ matrix.engine }}-*
+          path: digests
+      - name: Assemble the multi-arch tag from the two verified digests
+        run: |
+          set -eu
+          amd="$(cat "digests/candidate-${ENGINE}-amd64/digest")"
+          arm="$(cat "digests/candidate-${ENGINE}-arm64/digest")"
+          if [ "$PUSH" != "true" ]; then
+            echo "dry run: would tag ${IMAGE_NAME}:<tag> = amd64 ${amd} + arm64 ${arm}" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Images are immutable: if the tag already exists it must already be
+          # exactly these two digests (a re-run after a successful promote).
+          if existing="$(docker buildx imagetools inspect --raw "${IMAGE_NAME}:${TAG}" 2>/dev/null)"; then
+            echo "$existing" | jq -e --arg a "$amd" --arg b "$arm" \
+              '([.manifests[].digest] | sort) == ([$a, $b] | sort)' >/dev/null \
+              || { echo "::error::${IMAGE_NAME}:${TAG} already exists with different content"; exit 1; }
+            echo "${IMAGE_NAME}:${TAG} already points at these digests"
+          else
+            docker buildx imagetools create -t "${IMAGE_NAME}:${TAG}" \
+              "${IMAGE_NAME}@${amd}" "${IMAGE_NAME}@${arm}"
+          fi
+          # Trust nothing: read the tag back and check what it contains.
+          docker buildx imagetools inspect --raw "${IMAGE_NAME}:${TAG}" | jq -e --arg a "$amd" --arg b "$arm" '
+            ([.manifests[].digest] | sort) == ([$a, $b] | sort)
+            and ([.manifests[].platform | "\(.os)/\(.architecture)"] | sort) == ["linux/amd64", "linux/arm64"]' >/dev/null
+          index="$(docker buildx imagetools inspect "${IMAGE_NAME}:${TAG}" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "${IMAGE_NAME}:${TAG}@${index}  (amd64 ${amd}, arm64 ${arm})" | tee -a "$GITHUB_STEP_SUMMARY"

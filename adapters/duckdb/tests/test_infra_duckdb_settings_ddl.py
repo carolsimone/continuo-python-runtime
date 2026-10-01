@@ -266,3 +266,30 @@ def test_read_and_write_statements():
     assert R.insert_select(T, ["a", "b%"], "src") == (
         'INSERT INTO "lake"."s"."t" ("a", "b%") SELECT "a", "b%" FROM "src"'
     )
+
+
+# --- identifier equality as DuckDB defines it --------------------------------
+
+
+def test_same_identifier_is_ascii_case_insensitive():
+    from continuo_duckdb_adapter.infrastructure.ddl import same_identifier
+
+    assert same_identifier("Orders", "orders")
+    assert same_identifier("ORDERS", "oRdErS")
+    assert same_identifier("order table", "ORDER TABLE")
+    assert not same_identifier("orders", "order")
+
+
+def test_same_identifier_does_not_fold_non_ascii():
+    from continuo_duckdb_adapter.infrastructure.ddl import same_identifier
+
+    assert not same_identifier("É", "é")
+    assert same_identifier("É", "É")
+
+
+def test_table_exists_query_prefilters_with_lower_and_binds_every_name():
+    assert DdlRenderer.TABLE_EXISTS_QUERY == (
+        "SELECT schema_name, table_name FROM duckdb_tables() "
+        "WHERE lower(database_name) = lower(?) AND lower(schema_name) = lower(?) "
+        "AND lower(table_name) = lower(?)"
+    )

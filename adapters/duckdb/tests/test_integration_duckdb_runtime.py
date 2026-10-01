@@ -200,3 +200,54 @@ def test_run_node_csv_kind_loads_a_minio_csv_into_duckdb(
     assert rows == [
         {"order_id": 1, "amount": 10.5}, {"order_id": 2, "amount": 20.0}, {"order_id": 3, "amount": 5.25},
     ]
+
+
+# --- identifier casing (PR review): DuckDB resolves names case-insensitively --
+
+
+def _tables_named(adapter, schema: str, table: str) -> int:
+    rows = adapter.fetch(
+        "SELECT count(*) AS n FROM duckdb_tables() "
+        f"WHERE database_name = 'lake' AND schema_name ILIKE '{schema}' AND table_name ILIKE '{table}'"
+    ).to_pylist()
+    return rows[0]["n"]
+
+
+def test_ensure_table_finds_an_existing_table_whatever_the_casing(adapter, schema):
+    """An existing "IT_X"."Orders" must satisfy ensure_table("it_x", "orders"): without
+    that, ensure_table falls through to CREATE TABLE and fails with "already exists",
+    and the harness never loads its data."""
+    adapter.ensure_table(schema.upper(), "Orders", ID, config={})
+    adapter.load(schema.upper(), "Orders", pa.table({"id": pa.array([1, 2, 3], pa.int32())}))
+
+    adapter.ensure_table(schema, "orders", ID, config={})  # must not raise
+    adapter.ensure_table(schema.upper(), "ORDERS", ID, config={})  # nor this
+
+    assert _tables_named(adapter, schema, "orders") == 1
+    assert adapter.fetch(f'SELECT count(*) AS n FROM "{schema}"."orders"').to_pylist() == [{"n": 3}]
+
+
+def test_ensure_table_with_another_casing_does_not_reapply_the_layout(adapter, schema, catalog_db):
+    cols = [{"name": "id", "type": "INTEGER", "nullable": True}, {"name": "name", "type": "TEXT", "nullable": True}]
+    adapter.ensure_table(schema.upper(), "Orders", cols, config={"partitioned_by": ["name"]})
+    adapter.ensure_table(schema, "orders", cols, config={"sorted_by": ["id"]})
+    catalog_db.execute(
+        "SELECT count(*) FROM ducklake_sort_info si JOIN ducklake_table t ON t.table_id = si.table_id "
+        "JOIN ducklake_schema s ON s.schema_id = t.schema_id "
+        "WHERE lower(s.schema_name) = lower(%s) AND lower(t.table_name) = 'orders' "
+        "AND si.end_snapshot IS NULL AND t.end_snapshot IS NULL",
+        (schema,),
+    )
+    assert catalog_db.fetchone()[0] == 0  # the table existed: layout is applied only on creation
+
+
+def test_non_ascii_names_that_differ_only_in_case_are_two_tables(adapter, schema):
+    """DuckDB's catalog folds ASCII case only, so "É" and "é" are different tables and the
+    existence check must not conflate them (SQL lower() alone would)."""
+    adapter.ensure_table(schema, "É", ID, config={})
+    adapter.ensure_table(schema, "é", ID, config={})  # a different table: must be created
+    names = adapter.fetch(
+        f"SELECT table_name FROM duckdb_tables() WHERE database_name = 'lake' AND schema_name = '{schema}' "
+        "ORDER BY table_name"
+    ).to_pylist()
+    assert sorted(row["table_name"] for row in names) == ["É", "é"]

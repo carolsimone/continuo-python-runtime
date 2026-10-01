@@ -33,6 +33,7 @@ class FakeConnection:
     def __init__(self) -> None:
         self.statements: list[str] = []
         self.errors: dict[str, Exception] = {}
+        self.rows: list[tuple] = []
         self.closed = False
 
     def execute(self, sql, parameters=None):
@@ -53,6 +54,9 @@ class FakeConnection:
 
     def fetchone(self):
         return (1,)
+
+    def fetchall(self):
+        return self.rows
 
     def to_arrow_table(self):
         return "arrow"
@@ -85,7 +89,7 @@ def test_every_operation_redacts_every_spelling(spelling):
     }
     prefixes = {
         "create_schema_if_not_exists": "CREATE SCHEMA", "drop_schema_cascade": "DROP SCHEMA",
-        "table_exists": "SELECT count", "delete_all": "DELETE", "fetch_arrow": "SELECT 1",
+        "table_exists": "SELECT schema_name", "delete_all": "DELETE", "fetch_arrow": "SELECT 1",
         "explain_read": "EXPLAIN",
     }
     for name, operation in operations.items():
@@ -412,3 +416,43 @@ def test_aws_is_loaded_only_for_the_credential_chain(connect_with):
     script, _, connect = connect_with([None], env={**chain_env, "DUCKDB_DATA_PATH": "/data/lake/"})
     connect().close()
     assert 'LOAD "aws"' not in _loaded(script)
+
+
+# --- table_exists follows DuckDB's identifier semantics ---------------------
+#
+# DuckDB resolves schema and table names case-insensitively (quoted or not) but
+# only for ASCII letters, and keeps the stored casing. The existence check must
+# agree, or ensure_table on an existing "Analytics"."Orders" would fall through
+# to CREATE TABLE and fail with "already exists".
+
+
+@pytest.mark.parametrize("schema,table", [
+    ("analytics", "orders"), ("ANALYTICS", "ORDERS"), ("Analytics", "Orders"), ("aNaLyTiCs", "oRdErS"),
+])
+def test_table_exists_ignores_ascii_case_like_duckdb(schema, table):
+    connection = FakeConnection()
+    connection.rows = [("Analytics", "Orders")]
+    session, _ = make_session(connection)
+    assert session.table_exists(QualifiedTable.of(schema, table))
+
+
+@pytest.mark.parametrize("schema,table", [("analytics", "other"), ("other", "orders")])
+def test_table_exists_is_false_for_a_different_name(schema, table):
+    connection = FakeConnection()
+    connection.rows = [("Analytics", "Orders")]
+    session, _ = make_session(connection)
+    assert not session.table_exists(QualifiedTable.of(schema, table))
+
+
+def test_table_exists_does_not_fold_non_ascii_case():
+    """SQL lower() is Unicode-aware but DuckDB's catalog is not: "é" is not "É"."""
+    connection = FakeConnection()
+    connection.rows = [("s", "É")]
+    session, _ = make_session(connection)
+    assert session.table_exists(QualifiedTable.of("s", "É"))
+    assert not session.table_exists(QualifiedTable.of("s", "é"))
+
+
+def test_table_exists_is_false_when_the_catalog_returns_nothing():
+    session, _ = make_session(FakeConnection())
+    assert not session.table_exists(T)

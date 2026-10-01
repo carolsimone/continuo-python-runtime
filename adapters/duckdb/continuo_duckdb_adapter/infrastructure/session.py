@@ -34,6 +34,7 @@ from .ddl import (
     install_extension,
     load_extension,
     s3_secret_statement,
+    same_identifier,
     secret_texts,
     set_extension_directory,
     set_temp_directory,
@@ -210,11 +211,14 @@ class DuckLakeSession(LakeGateway):
 
     def table_exists(self, table: QualifiedTable) -> bool:
         with self._guarded():
-            row = self._run(
+            rows = self._run(
                 DdlRenderer.TABLE_EXISTS_QUERY,
                 [self._renderer.catalog_name, table.schema.name, table.table.name],
-            ).fetchone()
-        return bool(row and row[0])
+            ).fetchall()
+        return any(
+            same_identifier(schema, table.schema.name) and same_identifier(name, table.table.name)
+            for schema, name in rows
+        )
 
     def drop_table_if_exists(self, table: QualifiedTable) -> None:
         self._run(self._renderer.drop_table_if_exists(table))

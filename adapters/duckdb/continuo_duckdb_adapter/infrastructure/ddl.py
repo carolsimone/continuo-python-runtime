@@ -28,6 +28,20 @@ def quote_identifier(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+def same_identifier(left: str, right: str) -> bool:
+    """Whether DuckDB resolves *left* and *right* to the same schema or table name.
+
+    DuckDB matches identifiers case-insensitively, quoted or not, but only for
+    ASCII letters (``"é"`` does not resolve ``"É"``), and it keeps the casing a
+    name was created with. SQL ``lower()`` is Unicode-aware, so it cannot stand
+    in for this comparison.
+    """
+    return left.translate(_ASCII_LOWER) == right.translate(_ASCII_LOWER)
+
+
 def sql_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
@@ -126,9 +140,13 @@ def s3_secret_statement(settings: DuckLakeSettings) -> str:
 class DdlRenderer:
     """SQL text for every LakeGateway operation, against one catalog alias."""
 
+    # lower() is only a cheap pre-filter: it matches a superset of what DuckDB
+    # treats as the same name, so every returned row is confirmed with
+    # ``same_identifier`` before it counts.
     TABLE_EXISTS_QUERY = (
-        "SELECT count(*) FROM duckdb_tables() "
-        "WHERE database_name = ? AND schema_name = ? AND table_name = ?"
+        "SELECT schema_name, table_name FROM duckdb_tables() "
+        "WHERE lower(database_name) = lower(?) AND lower(schema_name) = lower(?) "
+        "AND lower(table_name) = lower(?)"
     )
 
     def __init__(self, catalog: str) -> None:

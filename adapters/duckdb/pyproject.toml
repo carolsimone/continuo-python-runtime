@@ -34,7 +34,7 @@ test = [
     # Integration tests read the DuckLake catalog (postgres) and the data
     # files (MinIO) directly to prove layout was really applied.
     "psycopg2-binary==2.9.12",
-    "boto3==1.43.85",
+    "boto3==1.43.104",
 ]
 
 [build-system]

@@ -13,7 +13,7 @@ dependencies = [
     # newest. This adapter subclasses the contract's WarehouseAdapter port
     # directly, so the pair must stay the tested one.
     "continuo-engine-contract==0.7.3",
-    "trino==0.339.0",
+    "trino==0.340.0",
     "pyarrow==25.0.1",
 ]
 classifiers = [

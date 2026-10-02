@@ -5,6 +5,27 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking for newly copied templates.** The `template/` release workflow
+  calls continuo's public release API instead of an unauthenticated webhook:
+  - `RELEASE_ENDPOINT` keeps its name but is now the origin of continuo's
+    `auth.publicUrl` (`scheme://host[:port]`, no path), which is also the OIDC
+    audience.
+  - The repository must be bound to the service in continuo's
+    `ciAuth.bindings`.
+  - The first release of a service is an operator bootstrap; the workflow never
+    sends `bootstrap`.
+
+  The workflow checks the endpoint and does an authenticated read of
+  `/api/v1/current-prod` before building, so a wrong URL, audience or missing
+  binding fails early. It then submits to `<RELEASE_ENDPOINT>/api/v1/releases`
+  with a fresh GitHub Actions OIDC token per call and polls
+  `GET /api/v1/releases/{id}` for up to about 50 minutes (`timeout-minutes: 60`),
+  failing on `rejected` and `superseded`. A newer push no longer cancels a run
+  that is waiting for its release (`cancel-in-progress: false`). Workflows
+  already copied from the template are untouched.
+
 ## [0.8.0] - 2026-10-01
 
 Packages in this release: `continuo-python-runtime` 0.8.0 (no runtime code

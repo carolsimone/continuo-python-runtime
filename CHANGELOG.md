@@ -5,6 +5,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The `template/` release workflow calls continuo's public release API: it
+  submits to `<RELEASE_ENDPOINT>/api/v1/releases` with the job's GitHub Actions
+  OIDC token (a fresh one per call) and polls `GET /api/v1/releases/{id}` for up
+  to about 15 minutes, failing on `rejected` and `superseded`. `RELEASE_ENDPOINT`
+  keeps its name and is now continuo's base URL (`scheme://host[:port]`, no
+  path); the workflow fails before building when it is empty or carries a path.
+  The repository must be bound in continuo's `ciAuth.bindings`, and a service's
+  first release is an operator bootstrap.
+
 ## [0.8.0] - 2026-10-01
 
 Packages in this release: `continuo-python-runtime` 0.8.0 (no runtime code

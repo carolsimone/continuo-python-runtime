@@ -99,7 +99,7 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
 - `output_columns` types come from the supported set: `BIGINT`,
   `INT`/`INTEGER`, `DOUBLE PRECISION`, `NUMERIC(p,s)`/`DECIMAL(p,s)`,
   `VARCHAR(n)`/`CHAR(n)`/`TEXT`, `TIMESTAMP`, `DATE`, `BOOLEAN`.
-- Ordering is a hard rule: **upload completes before `POST /releases`** —
+- Ordering is a hard rule: **upload completes before `POST /api/v1/releases`** —
   Continuo does no existence check (D3); a POST racing its own upload
   fails at the parsing stage.
 
@@ -285,21 +285,29 @@ own `import` statements, resolved by static AST analysis
 ## 13.3 Surface 3 — the release call
 
 ```
-POST /releases
+POST <continuo-origin>/api/v1/releases
+Authorization: Bearer <GitHub Actions OIDC token>
 {
   "service":    "marketing-py",          # one service name per domain repo
   "release_id": "<unique, matches the S3 key path>",
   "image_tag":  "<registry>/<image>:<tag>",   # the image the executor will run
-  "repo":       "owner/name",            # where the source lives (remediation)
-  "commit_sha": "<full sha>",            # must contain scripts + contracts
   "kind":       "python"
 }
 ```
 
-202 Accepted `{"release_id": …, "status": "received"}`; 400 on any missing
-field. Idempotent on `release_id` — safe to retry. `repo` + `commit_sha`
-must point at the actual source of the scripts and contract files, because
-the remediation agent fetches them from GitHub to propose fix PRs.
+The token's audience is the origin of the continuo install, and the
+repository must be bound to the service in continuo's `ciAuth.bindings`
+([Releasing from CI](https://github.com/carolsimone/continuo/blob/main/deploy/README.md#releasing-from-ci-github-actions)). A CI
+token supplies `repo` and `commit_sha` (the repository and commit the workflow
+runs in), so the body leaves them out; they must point at the actual source of
+the scripts and contract files, because the remediation agent fetches them from
+GitHub to propose fix PRs. 202 Accepted `{"release_id": …, "status": …}`; 400
+on a missing or unknown field. Idempotent on `release_id` with the same body —
+safe to retry. The workflow then polls `GET /api/v1/releases/{release_id}`
+with a fresh token until `terminal` is true: `promoted` is success, `rejected`
+and `superseded` are failures. The first release of a service is an operator
+bootstrap (`"bootstrap": true`), which a CI binding may send only with
+`allowBootstrap`.
 
 ## 13.4 Surface 4 — the runtime image
 
@@ -399,7 +407,7 @@ intentionally differ from the dbt job env (`SCHEMA`/`DBT_TARGET_SCHEMA`/dbt
 2. merge contract files → contract.yaml; compute the per-node hash fields (§13.2)
 3. build + push the image (scripts + contracts + harness baked in)
 4. upload contract.yaml → s3://<bucket>/<service>/<release_id>/contract.yaml
-5. POST /releases {…, kind: "python"}          # only after 3 and 4 succeed
+5. POST /api/v1/releases {…, kind: "python"}  # only after 3 and 4 succeed; then poll to a terminal status
 ```
 
 Provisioning Continuo hands each domain repo, once: S3 write credentials

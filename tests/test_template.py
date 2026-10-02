@@ -1,7 +1,10 @@
 """Test the domain-repo template."""
 
+import os
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from continuo_python_runtime.cli import main
@@ -59,6 +62,70 @@ def test_release_workflow_cancels_superseded_main_runs():
         "group": "release",
         "cancel-in-progress": True,
     }
+
+
+def _release_job():
+    workflow = yaml.safe_load(
+        (TEMPLATE / ".github" / "workflows" / "release.yml").read_text()
+    )
+    return workflow, workflow["jobs"]["release"]
+
+
+def _step(job, name):
+    return next(step for step in job["steps"] if step.get("name") == name)
+
+
+def test_release_workflow_uses_the_public_release_api():
+    """The release call is the authenticated public API, bounded and token-safe."""
+    workflow, job = _release_job()
+    names = [step.get("name") for step in job["steps"]]
+    submit = _step(job, "Submit release to continuo")["run"]
+
+    assert job["permissions"]["id-token"] == "write"
+    assert isinstance(job["timeout-minutes"], int)
+    assert workflow["env"]["RELEASE_ENDPOINT"] == "${{ vars.RELEASE_ENDPOINT }}"
+    # Submit comes after the image build and the contract upload.
+    assert names.index("Submit release to continuo") > names.index("Upload contract artifact")
+    assert "/api/v1/releases" in submit
+    assert "audience=" in submit
+    assert "terminal" in submit
+    assert "seq 1 90" in submit  # a bounded poll
+    # The bare, unauthenticated `${{ vars.RELEASE_ENDPOINT }}/releases` call is gone.
+    assert "/releases\"" not in (TEMPLATE / ".github" / "workflows" / "release.yml").read_text()
+    # The body is built with jq, and the token is only ever sent as a header.
+    assert "jq -n" in submit
+    assert "echo \"$token" not in submit and "ACTIONS_ID_TOKEN_REQUEST_TOKEN\" >&2" not in submit
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "ok"),
+    [
+        ("", False),
+        ("continuo.example.com", False),
+        ("https://continuo.example.com/api", False),
+        ("https://continuo.example.com?x=1", False),
+        ("https://continuo.example.com", True),
+        ("https://continuo.example.com/", True),
+        ("http://localhost:8090", True),
+    ],
+)
+def test_release_workflow_fails_closed_on_a_bad_endpoint(tmp_path, endpoint, ok):
+    """The first step rejects an unset or malformed RELEASE_ENDPOINT before any build."""
+    _, job = _release_job()
+    assert job["steps"][0]["name"] == "Check release endpoint"
+    github_env = tmp_path / "github_env"
+    github_env.touch()
+    result = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", job["steps"][0]["run"]],
+        env={"PATH": os.environ["PATH"], "RELEASE_ENDPOINT": endpoint, "GITHUB_ENV": str(github_env)},
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) is ok, result.stdout + result.stderr
+    if ok:
+        assert github_env.read_text() == f"CONTINUO_ORIGIN={endpoint.rstrip('/')}\n"
+    else:
+        assert "RELEASE_ENDPOINT" in result.stdout
 
 
 def test_readme_and_template_name_images_the_publisher_emits():

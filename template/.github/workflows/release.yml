@@ -6,11 +6,30 @@ concurrency:
   cancel-in-progress: true
 env:
   SERVICE: your-service-name          # one service name per domain repo
+  # Repository variable RELEASE_ENDPOINT: the base URL of continuo's ui, as
+  # scheme://host[:port] with no path (e.g. https://continuo.example.com).
+  # This repository must be bound to $SERVICE in continuo's `ciAuth.bindings`.
+  RELEASE_ENDPOINT: ${{ vars.RELEASE_ENDPOINT }}
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions: { contents: read, packages: write, id-token: write }
     steps:
+      # Fail before building anything when the endpoint is missing or malformed.
+      # CONTINUO_ORIGIN (the endpoint without a trailing slash) is both the API
+      # base and the OIDC audience.
+      - name: Check release endpoint
+        run: |
+          if [ -z "$RELEASE_ENDPOINT" ]; then
+            echo "::error::repository variable RELEASE_ENDPOINT is not set; set it to continuo's base URL (scheme://host)"
+            exit 1
+          fi
+          if ! printf '%s' "$RELEASE_ENDPOINT" | grep -Eq '^https?://[^/?#]+/?$'; then
+            echo "::error::RELEASE_ENDPOINT must be continuo's base URL as scheme://host[:port] with no path (got '$RELEASE_ENDPOINT')"
+            exit 1
+          fi
+          echo "CONTINUO_ORIGIN=${RELEASE_ENDPOINT%/}" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       # PRECONDITION: continuo-python-runtime must be published to PyPI (this repo's release pipeline).
@@ -53,14 +72,87 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      - name: POST /releases            # strictly after build+push and upload
+      # Strictly after build+push and upload: continuo does no existence check, so
+      # a release that races its own artifacts fails at the parsing stage.
+      #
+      # Submits the release to continuo's public API and waits for its verdict.
+      # Each call carries a GitHub Actions OIDC token whose audience is the origin
+      # of RELEASE_ENDPOINT. The tokens expire within minutes, so every call asks
+      # for a fresh one; no token is ever printed. The token carries `repo` and
+      # `commit_sha`, so the body leaves them out. Promoted is success; rejected
+      # and superseded fail the job.
+      - name: Submit release to continuo
         run: |
-          body=$(jq -n \
-            --arg service "$SERVICE" \
+          resp="$(mktemp)"
+          trap 'rm -f "$resp"' EXIT
+
+          oidc_token() {
+            local aud
+            aud="$(jq -rn --arg a "$CONTINUO_ORIGIN" '$a | @uri')"
+            printf 'Authorization: bearer %s\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              | curl -sS --fail -H @- "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${aud}" \
+              | jq -er '.value'
+          }
+
+          # call METHOD PATH [BODY]: prints the HTTP status (000 when curl or the
+          # token request failed); the response body is left in $resp.
+          call() {
+            local method="$1" path="$2" body="${3:-}" token
+            token="$(oidc_token)" || { echo "could not request a GitHub Actions OIDC token" >&2; echo 000; return 0; }
+            local -a args=(-sS -X "$method" -o "$resp" -w '%{http_code}' -H @- -H 'Accept: application/json')
+            [ -z "$body" ] || args+=(-H 'Content-Type: application/json' -d "$body")
+            local out
+            out="$(printf 'Authorization: Bearer %s\n' "$token" | curl "${args[@]}" "${CONTINUO_ORIGIN}${path}" || true)"
+            echo "${out:-000}"
+          }
+
+          fail_with_response() {
+            echo "::error::$1: HTTP $2 $(jq -r '"code=\(.code // "unknown") error=\(.error // "none")"' "$resp" 2>/dev/null || true)"
+            exit 1
+          }
+
+          body="$(jq -n \
             --arg release_id "$RELEASE_ID" \
+            --arg service "$SERVICE" \
             --arg image_tag "$IMAGE_TAG" \
-            --arg repo "${{ github.repository }}" \
-            --arg commit_sha "$GITHUB_SHA" \
-            '{service: $service, release_id: $release_id, image_tag: $image_tag, repo: $repo, commit_sha: $commit_sha, kind: "python"}')
-          curl --fail-with-body -X POST "${{ vars.RELEASE_ENDPOINT }}/releases" \
-            -H 'Content-Type: application/json' -d "$body"
+            '{release_id: $release_id, service: $service, image_tag: $image_tag, kind: "python"}')"
+
+          # A submit is idempotent on release_id, so transient failures are retried.
+          for attempt in 1 2 3; do
+            status="$(call POST /api/v1/releases "$body")"
+            case "$status" in 000 | 429 | 502 | 503 | 504) sleep $((attempt * 5)) ;; *) break ;; esac
+          done
+          [ "$status" = 202 ] || fail_with_response "submitting release $RELEASE_ID" "$status"
+          echo "submitted release $RELEASE_ID (service=$SERVICE) to $CONTINUO_ORIGIN"
+
+          # Poll to a terminal status: 90 polls x 10 s = 15 minutes.
+          last=""
+          for _ in $(seq 1 90); do
+            status="$(call GET "/api/v1/releases/$RELEASE_ID")"
+            case "$status" in
+              200) ;;
+              000 | 429 | 502 | 503 | 504) sleep 10; continue ;;
+              *) fail_with_response "reading release $RELEASE_ID" "$status" ;;
+            esac
+            state="$(jq -r '.status // empty' "$resp")"
+            if [ "$state" != "$last" ]; then echo "release $RELEASE_ID status: ${state:-unknown}"; last="$state"; fi
+            if [ "$(jq -r '.terminal // false' "$resp")" = true ]; then
+              ui_url="$(jq -r '.ui_url // empty' "$resp")"
+              [ -z "$ui_url" ] || echo "details: $ui_url"
+              case "$state" in
+                promoted) exit 0 ;;
+                rejected)
+                  echo "::error::release $RELEASE_ID rejected: $(jq -r '"\(.reject_reason // "") \(.reject_detail // "")"' "$resp")"
+                  exit 1 ;;
+                superseded)
+                  echo "::error::release $RELEASE_ID was superseded by a newer release before it could be promoted"
+                  exit 1 ;;
+                *)
+                  echo "::error::release $RELEASE_ID ended with unexpected status '$state'"
+                  exit 1 ;;
+              esac
+            fi
+            sleep 10
+          done
+          echo "::error::timed out waiting for release $RELEASE_ID to reach a terminal status (last: ${last:-unknown})"
+          exit 1

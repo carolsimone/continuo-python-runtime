@@ -101,9 +101,12 @@ the Go parser has not been taught is a production outage, not a refactor.
    service name (one service name per domain repo).
 3. Configure repository variables in GitHub (Settings → Secrets and
    variables → Actions): `REGISTRY` (your Docker registry), `BUCKET` (your
-   S3 bucket for contract artifacts), `RELEASE_ENDPOINT` (the release
-   webhook endpoint). `RELEASE_ENDPOINT` is the **base URL** of the Continuo
-   API (no `/releases` suffix) — the workflow appends `/releases` itself.
+   S3 bucket for contract artifacts), `RELEASE_ENDPOINT` (the base
+   URL of your continuo install, `scheme://host[:port]` with no path). The
+   workflow calls `<RELEASE_ENDPOINT>/api/v1/releases` with its GitHub Actions
+   OIDC token, so the repository must be bound to your service in continuo's
+   `ciAuth.bindings` (see [Releasing from CI](https://github.com/carolsimone/continuo/blob/main/deploy/README.md#releasing-from-ci-github-actions)),
+   and an operator bootstraps the service's first release.
 4. Configure repository secrets: `AWS_ACCESS_KEY_ID` and
    `AWS_SECRET_ACCESS_KEY` for the S3 upload. The template workflow pushes
    the built image to GHCR using the workflow's own `GITHUB_TOKEN` (granted

@@ -1,6 +1,6 @@
-# Continuo Python Domain Repository Template
+# continuo Python Domain Repository Template
 
-This is a copy-ready template for implementing a [Continuo Python domain repo](https://github.com/carolsimone/continuo-python-runtime).
+This is a copy-ready template for implementing a [continuo Python domain repo](https://github.com/carolsimone/continuo-python-runtime).
 
 ## Quick Start
 
@@ -9,16 +9,28 @@ This is a copy-ready template for implementing a [Continuo Python domain repo](h
 3. **Configure repository variables** in GitHub (Settings → Secrets and variables → Actions):
    - `REGISTRY`: Your Docker registry (e.g., `ghcr.io/org`)
    - `BUCKET`: Your S3 bucket for contract artifacts
-   - `RELEASE_ENDPOINT`: Your release webhook endpoint. This is the **base
-     URL** of the Continuo API (no `/releases` suffix) — the workflow
-     appends `/releases` itself.
+   - `RELEASE_ENDPOINT`: the base URL of your continuo install, as
+     `scheme://host[:port]` with no path (for example
+     `https://continuo.example.com`). The workflow calls
+     `<RELEASE_ENDPOINT>/api/v1/releases` and fails before building anything
+     when the variable is empty or carries a path.
 4. **Configure repository secrets**:
    - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for S3 uploads
    - `release.yml` already logs in to `ghcr.io` with the built-in `GITHUB_TOKEN`
      (no extra secret needed) — only add your own login step if `REGISTRY`
      points at a registry other than `ghcr.io`
-5. **Write your contracts** in `contracts/` and **implement scripts** in `scripts/`
-6. **Push to main** to trigger the release pipeline
+5. **Bind the repository in continuo.** The workflow authenticates with its
+   GitHub Actions OIDC token (`id-token: write`, already set), so no secret is
+   stored. The operator who runs the install lists this repository under
+   `ciAuth.bindings` for your service name; see
+   [Releasing from CI](https://github.com/carolsimone/continuo/blob/main/deploy/README.md#releasing-from-ci-github-actions). Until the
+   repository is bound, every release call is refused.
+6. **Bootstrap the service once.** The first release of a service has no
+   production version to validate against, so an operator promotes it with
+   `"bootstrap": true`; the workflow never sends that flag. Releases from the
+   workflow work once the service has been bootstrapped.
+7. **Write your contracts** in `contracts/` and **implement scripts** in `scripts/`
+8. **Push to main** to trigger the release pipeline
 
 ## Choosing a base
 
@@ -29,7 +41,7 @@ need one Dockerfile in your repo.
 
 **Shape 1 — `Dockerfile`, `FROM` the engine image (simplest).** Builds
 `FROM ghcr.io/carolsimone/continuo-python-runtime-<engine>:vX.Y.Z`, an image
-that already has the Continuo runtime and one engine adapter installed and
+that already has the continuo runtime and one engine adapter installed and
 pinned by the publisher. You only add your `contracts/` and `scripts/` (and
 any extra dependency your script needs). Pin by tag or digest
 (`:vX.Y.Z@sha256:<digest>`) for reproducibility. Use this unless you have a
@@ -74,9 +86,12 @@ The CI/CD pipeline (`release.yml`) performs the six-step orchestration:
 3. **Run domain tests** (optional, if `tests/` exists)
 4. **Merge** contracts into a single artifact
 5. **Build and push** Docker image
-6. **Upload contract** and **POST release notification**
+6. **Upload contract**, then **submit the release** to continuo's
+   `POST /api/v1/releases` and poll `GET /api/v1/releases/{id}` for up to about
+   15 minutes. The job succeeds when the release is `promoted` and fails when it
+   is `rejected` or `superseded`
 
 ## Resources
 
-- [Continuo Python Runtime Documentation](https://github.com/carolsimone/continuo-python-runtime)
+- [continuo Python Runtime Documentation](https://github.com/carolsimone/continuo-python-runtime)
 - [Boundary Contract (design §13)](https://github.com/carolsimone/continuo-python-runtime/blob/main/docs/boundary-contract.md)

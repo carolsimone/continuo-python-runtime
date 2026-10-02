@@ -9,11 +9,15 @@ This is a copy-ready template for implementing a [continuo Python domain repo](h
 3. **Configure repository variables** in GitHub (Settings → Secrets and variables → Actions):
    - `REGISTRY`: Your Docker registry (e.g., `ghcr.io/org`)
    - `BUCKET`: Your S3 bucket for contract artifacts
-   - `RELEASE_ENDPOINT`: the base URL of your continuo install, as
-     `scheme://host[:port]` with no path (for example
-     `https://continuo.example.com`). The workflow calls
-     `<RELEASE_ENDPOINT>/api/v1/releases` and fails before building anything
-     when the variable is empty or carries a path.
+   - `RELEASE_ENDPOINT`: the base URL of your continuo install. It must be
+     exactly the origin of continuo's `auth.publicUrl`: lowercase host, no
+     default port, no path (for example `https://continuo.example.com`). The
+     workflow also uses it as the OIDC token audience, which assumes continuo's
+     default `ciAuth.audience`; if the install sets a different one, change the
+     `audience` the workflow requests. It calls
+     `<RELEASE_ENDPOINT>/api/v1/releases`, and fails before building anything
+     when the variable is empty or malformed, or when continuo refuses this
+     repository (a preflight read of `/api/v1/current-prod`).
 4. **Configure repository secrets**:
    - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for S3 uploads
    - `release.yml` already logs in to `ghcr.io` with the built-in `GITHUB_TOKEN`
@@ -88,7 +92,7 @@ The CI/CD pipeline (`release.yml`) performs the six-step orchestration:
 5. **Build and push** Docker image
 6. **Upload contract**, then **submit the release** to continuo's
    `POST /api/v1/releases` and poll `GET /api/v1/releases/{id}` for up to about
-   15 minutes. The job succeeds when the release is `promoted` and fails when it
+   50 minutes (the job's `timeout-minutes` is 60). The job succeeds when the release is `promoted` and fails when it
    is `rejected` or `superseded`
 
 ## Resources

@@ -102,7 +102,8 @@ the Go parser has not been taught is a production outage, not a refactor.
 3. Configure repository variables in GitHub (Settings → Secrets and
    variables → Actions): `REGISTRY` (your Docker registry), `BUCKET` (your
    S3 bucket for contract artifacts), `RELEASE_ENDPOINT` (the base
-   URL of your continuo install, `scheme://host[:port]` with no path). The
+   URL of your continuo install, `scheme://host[:port]` with no path, the origin of continuo's
+   `auth.publicUrl`). The
    workflow calls `<RELEASE_ENDPOINT>/api/v1/releases` with its GitHub Actions
    OIDC token, so the repository must be bound to your service in continuo's
    `ciAuth.bindings` (see [Releasing from CI](https://github.com/carolsimone/continuo/blob/main/deploy/README.md#releasing-from-ci-github-actions)),

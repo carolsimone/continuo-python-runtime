@@ -549,3 +549,15 @@ def test_config_validation_survives_a_second_recognized_top_level_key(monkeypatc
     conn = _FakeConnection()
     PostgresAdapter(conn).ensure_table("s", "t", _ONE_COL, config={"fillfactor": 90})
     assert conn.committed  # DDL ran; no KeyError on the way in
+
+
+def test_load_of_zero_rows_truncates_in_one_explicit_transaction():
+    """load's transaction shape, pinned across the insert-path refactor."""
+    conn = _FakeConnection()
+    PostgresAdapter(conn).load("s", "t", pa.table({"id": pa.array([], pa.int64())}))
+    (cur,) = conn.cursors
+    assert cur.statements == [
+        "BEGIN",
+        pg_sql.SQL("TRUNCATE {}.{}").format(pg_sql.Identifier("s"), pg_sql.Identifier("t")),
+        "COMMIT",
+    ]

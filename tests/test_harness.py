@@ -715,3 +715,42 @@ def test_python_api_missing_env_key_is_a_script_error_naming_the_key(tmp_path, c
     assert run_node(_api_env(repo), adapter=FakeWarehouseAdapter()) == 1
     out = capsys.readouterr().out
     assert "ScriptError" in out and "FX_API_KEY" in out
+
+
+# --- non-replace write modes are rejected until the per-mode dispatch lands ---
+
+
+def _repo_with_mode(tmp_path, marker, **mode_fields):
+    repo = _repo_with_config(tmp_path, {}, marker)
+    doc = yaml.safe_load((repo / "contracts" / "t.yml").read_text())
+    del doc["nodes"][0]["config"]
+    doc["nodes"][0].update(mode_fields)
+    (repo / "contracts" / "t.yml").write_text(yaml.safe_dump(doc))
+    return repo
+
+
+@pytest.mark.parametrize(
+    "mode_fields",
+    [
+        {"mode_type": "append"},
+        {"mode_type": "upsert", "primary_key": ["id"]},
+    ],
+    ids=["append", "upsert"],
+)
+def test_run_node_rejects_non_replace_modes_before_writing_anything(
+    tmp_path, capsys, mode_fields
+):
+    """load() replaces the table, so an accepted append/upsert contract must not reach it."""
+    marker = tmp_path / "script-ran"
+    repo = _repo_with_mode(tmp_path, marker, **mode_fields)
+    ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    assert run_node(_env(repo), adapter=ad) == 1
+    out = capsys.readouterr().out
+    assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
+    body = _sentinel_body(out)
+    assert body["status"] == "error"
+    assert body["message"].startswith("LoadError:")
+    assert "not supported by the harness yet" in body["message"]
+    assert mode_fields["mode_type"] in body["message"]
+    assert not marker.exists(), "script ran despite an unsupported write mode"
+    assert ad.ensured is None and ad.loaded is None

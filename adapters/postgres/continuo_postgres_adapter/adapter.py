@@ -35,8 +35,8 @@ import pyarrow as pa  # type: ignore[import-untyped]
 
 from continuo_engine_contract.config import ensure_known_keys  # type: ignore[import-untyped]
 from continuo_engine_contract.port import (  # type: ignore[import-untyped]
+    AppendCapable,
     LiveColumn,
-    TableIntrospection,
     WarehouseAdapter,
 )
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
@@ -377,7 +377,7 @@ def _arrow_table_from_rows(colnames: list[str], rows: list[tuple[Any, ...]]) -> 
     return pa.table({name: pa.array(values) for name, values in zip(colnames, by_column)})
 
 
-class PostgresAdapter(WarehouseAdapter, TableIntrospection):
+class PostgresAdapter(WarehouseAdapter, AppendCapable):
     """WarehouseAdapter speaking postgres over a psycopg2 connection."""
 
     def __init__(self, conn: "psycopg2.extensions.connection") -> None:
@@ -749,6 +749,20 @@ class PostgresAdapter(WarehouseAdapter, TableIntrospection):
             if data.num_rows:
                 logger.info("loading %d row(s) into %s.%s", data.num_rows, schema, table)
                 _insert_rows(cur, schema, table, data)
+
+    def append(self, schema: str, table: str, data: "pa.Table") -> None:
+        """Atomically insert every row of *data* into ``schema.table``; earlier rows stay.
+
+        One explicit transaction of batched inserts that name *data*'s columns
+        (the same insert path as ``load``, without the TRUNCATE). A 0-row
+        *data* opens no transaction at all.
+        """
+        if not data.num_rows:
+            logger.info("append of 0 rows into %s.%s: nothing to write", schema, table)
+            return
+        with self._transaction("append") as cur:
+            logger.info("appending %d row(s) into %s.%s", data.num_rows, schema, table)
+            _insert_rows(cur, schema, table, data)
 
     def close(self) -> None:
         """Release the underlying connection."""

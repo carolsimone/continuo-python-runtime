@@ -561,3 +561,9 @@ def test_load_of_zero_rows_truncates_in_one_explicit_transaction():
         pg_sql.SQL("TRUNCATE {}.{}").format(pg_sql.Identifier("s"), pg_sql.Identifier("t")),
         "COMMIT",
     ]
+
+
+def test_append_of_zero_rows_opens_no_transaction():
+    conn = _FakeConnection()
+    PostgresAdapter(conn).append("s", "t", pa.table({"id": pa.array([], pa.int64())}))
+    assert conn.cursors == []

@@ -9,7 +9,7 @@ import uuid
 import psycopg2
 import pytest
 
-from continuo_engine_contract.conformance import IntrospectionConformance
+from continuo_engine_contract.conformance import AppendConformance, IntrospectionConformance
 from continuo_postgres_adapter.adapter import PostgresAdapter
 
 pytestmark = pytest.mark.integration
@@ -38,4 +38,8 @@ def schema(adapter):
 
 
 class TestPostgresIntrospection(IntrospectionConformance):
+    pass
+
+
+class TestPostgresAppend(AppendConformance):
     pass

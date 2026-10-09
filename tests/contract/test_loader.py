@@ -727,3 +727,144 @@ def test_secret_ref_on_python_node_is_rejected():
 def test_bad_secret_ref_is_rejected_naming_the_node():
     with pytest.raises(ContractError, match=r"c\.yml \(analytics\.fx\): 'secret_ref'"):
         parse_node(_api_entry(secret_ref="continuo-app-credentials"), "c.yml")
+
+
+# --- write modes: mode_type and primary_key ----------------------------------
+
+
+def _upsert_entry(**over):
+    entry = {
+        "schema": "fx", "table": "fx_rates", "owner": "m", "schedule": "hourly",
+        "criticality": "SECONDARY", "kind": "python-api", "script": "scripts/fx.py",
+        "mode_type": "upsert", "primary_key": ["rate_date", "base"],
+        "output_columns": [
+            {"name": "rate_date", "type": "DATE", "nullable": False},
+            {"name": "base", "type": "VARCHAR(3)", "nullable": False},
+            {"name": "rate", "type": "DECIMAL(12,6)"},
+        ],
+    }
+    entry.update(over)
+    return entry
+
+
+def test_mode_type_defaults_to_replace():
+    node = parse_node(_node_entry(), "f.yml")
+    assert node.mode_type == "replace"
+    assert node.primary_key == ()
+
+
+@pytest.mark.parametrize("mode", ["append", "replace"])
+def test_python_node_accepts_append_and_explicit_replace(mode):
+    node = parse_node(_node_entry(mode_type=mode), "f.yml")
+    assert node.mode_type == mode
+    assert node.primary_key == ()
+
+
+def test_python_node_accepts_upsert_with_a_key():
+    node = parse_node(_node_entry(mode_type="upsert", primary_key=["id"]), "f.yml")
+    assert node.mode_type == "upsert"
+    assert node.primary_key == ("id",)
+
+
+def test_upsert_node_keeps_its_key_in_authored_order():
+    node = parse_node(_upsert_entry(primary_key=["base", "rate_date"]), "c.yml")
+    assert node.mode_type == "upsert"
+    assert node.primary_key == ("base", "rate_date")
+
+
+@pytest.mark.parametrize("mode", ["APPEND", "merge", "", None, 1, ["append"]])
+def test_unknown_mode_type_is_rejected(mode):
+    with pytest.raises(
+        ContractError,
+        match=r"c\.yml \(fx\.fx_rates\): 'mode_type' must be one of \['append', 'replace', 'upsert'\]",
+    ):
+        parse_node(_upsert_entry(mode_type=mode), "c.yml")
+
+
+@pytest.mark.parametrize("mode", ["append", "upsert"])
+def test_python_csv_only_allows_replace(mode):
+    entry = _csv_entry(mode_type=mode)
+    if mode == "upsert":
+        entry["primary_key"] = ["order_id"]
+    with pytest.raises(ContractError, match=f"'mode_type' {mode} is not allowed for kind python-csv"):
+        parse_node(entry, "f.yml", check_reads=False)
+
+
+def test_python_csv_accepts_explicit_replace():
+    node = parse_node(_csv_entry(mode_type="replace"), "f.yml", check_reads=False)
+    assert node.mode_type == "replace"
+
+
+def test_upsert_without_primary_key_is_rejected():
+    entry = _upsert_entry()
+    del entry["primary_key"]
+    with pytest.raises(ContractError, match="'primary_key' is required when mode_type is upsert"):
+        parse_node(entry, "c.yml")
+
+
+@pytest.mark.parametrize("mode", ["append", "replace"])
+def test_primary_key_without_upsert_is_rejected(mode):
+    with pytest.raises(
+        ContractError, match=rf"'primary_key' is only allowed when mode_type is upsert \(got {mode}\)"
+    ):
+        parse_node(_upsert_entry(mode_type=mode), "c.yml")
+
+
+def test_primary_key_on_the_default_mode_is_rejected():
+    entry = _upsert_entry()
+    del entry["mode_type"]
+    with pytest.raises(
+        ContractError, match=r"'primary_key' is only allowed when mode_type is upsert \(got replace\)"
+    ):
+        parse_node(entry, "c.yml")
+
+
+@pytest.mark.parametrize("key", [[], "rate_date", {"rate_date": 1}, None])
+def test_primary_key_must_be_a_non_empty_list(key):
+    with pytest.raises(
+        ContractError, match="'primary_key' must be a non-empty list of output column names"
+    ):
+        parse_node(_upsert_entry(primary_key=key), "c.yml")
+
+
+@pytest.mark.parametrize("name", ["", "  ", 3, None])
+def test_primary_key_entries_must_be_non_empty_strings(name):
+    with pytest.raises(ContractError, match="'primary_key' entry .* must be a non-empty string"):
+        parse_node(_upsert_entry(primary_key=["rate_date", name]), "c.yml")
+
+
+def test_primary_key_names_must_be_unique_case_insensitively():
+    with pytest.raises(ContractError, match="'primary_key' names 'RATE_DATE' more than once"):
+        parse_node(_upsert_entry(primary_key=["rate_date", "RATE_DATE"]), "c.yml")
+
+
+def test_primary_key_column_must_be_declared():
+    with pytest.raises(
+        ContractError,
+        match=r"c\.yml \(fx\.fx_rates\): 'primary_key' column 'quote' is not in output_columns",
+    ):
+        parse_node(_upsert_entry(primary_key=["rate_date", "quote"]), "c.yml")
+
+
+def test_primary_key_column_must_be_not_null():
+    with pytest.raises(
+        ContractError, match="'primary_key' column 'rate' must be declared nullable: false"
+    ):
+        parse_node(_upsert_entry(primary_key=["rate_date", "rate"]), "c.yml")
+
+
+def test_primary_key_names_must_match_output_columns_exactly():
+    """Review Focus 2: postgres quotes identifiers, so Rate_Date is not rate_date."""
+    with pytest.raises(
+        ContractError,
+        match=r"c\.yml \(fx\.fx_rates\): 'primary_key' column 'Rate_Date' is not in output_columns",
+    ):
+        parse_node(_upsert_entry(primary_key=["Rate_Date", "base"]), "c.yml")
+
+
+def test_primary_key_names_a_column_that_differs_only_in_case_from_another():
+    """With output columns base and Base, the key names exactly one of them."""
+    entry = _upsert_entry(primary_key=["rate_date", "Base"])
+    entry["output_columns"].append({"name": "Base", "type": "VARCHAR(3)", "nullable": False})
+    node = parse_node(entry, "c.yml")
+    assert node.primary_key == ("rate_date", "Base")

@@ -17,7 +17,9 @@ from continuo_python_runtime.contract.kinds import rules_for
 from continuo_python_runtime.contract.model import (
     CRITICALITIES,
     DEFAULT_KIND,
+    DEFAULT_MODE_TYPE,
     EXTRA_COLUMNS_POLICIES,
+    MODE_TYPES,
     Column,
     Node,
 )
@@ -40,6 +42,8 @@ _ALLOWED_KEYS = {
     "config",
     "content_hash",
     "secret_ref",
+    "mode_type",
+    "primary_key",
 }
 
 _REQUIRED_STRING_FIELDS = ("schema", "table", "owner", "schedule")
@@ -140,6 +144,59 @@ def _validate_config(raw: Any, label: str) -> dict[str, Any]:
     return raw
 
 
+def _validate_primary_key(
+    raw: dict[str, Any], mode_type: str, columns: list[Column], label: str
+) -> tuple[str, ...]:
+    """Validate ``primary_key`` against ``mode_type`` and the declared columns.
+
+    Required for ``upsert`` and rejected otherwise: a key on ``append`` or
+    ``replace`` would look enforced when it is not. Names keep their order,
+    which is what the wire entry carries. Each must be spelled exactly as an
+    output column (postgres quotes identifiers, so ``Rate_Date`` is not
+    ``rate_date``) declared ``nullable: false``, because a NULL key never
+    matches an existing row. Repeats are refused case-insensitively too, so a
+    key cannot name two columns that differ only in case.
+    """
+    if mode_type != "upsert":
+        if "primary_key" in raw:
+            raise ContractError(
+                f"{label}: 'primary_key' is only allowed when mode_type is upsert "
+                f"(got {mode_type})"
+            )
+        return ()
+    if "primary_key" not in raw:
+        raise ContractError(f"{label}: 'primary_key' is required when mode_type is upsert")
+    raw_key = raw["primary_key"]
+    if not isinstance(raw_key, list) or not raw_key:
+        raise ContractError(
+            f"{label}: 'primary_key' must be a non-empty list of output column names"
+        )
+    by_name = {column.name: column for column in columns}
+    seen: set[str] = set()
+    for name in raw_key:
+        if not isinstance(name, str) or not name.strip():
+            raise ContractError(
+                f"{label}: 'primary_key' entry {name!r} must be a non-empty string"
+            )
+        folded = name.lower()  # same folding as continuo's parser
+        if folded in seen:
+            raise ContractError(
+                f"{label}: 'primary_key' names {name!r} more than once "
+                "(names are compared case-insensitively)"
+            )
+        seen.add(folded)
+        column = by_name.get(name)
+        if column is None:
+            raise ContractError(
+                f"{label}: 'primary_key' column {name!r} is not in output_columns"
+            )
+        if column.nullable:
+            raise ContractError(
+                f"{label}: 'primary_key' column {name!r} must be declared nullable: false"
+            )
+    return tuple(raw_key)
+
+
 def parse_node(
     raw: dict[str, Any],
     source: str,
@@ -158,7 +215,8 @@ def parse_node(
     ``check_reads=False`` skips *only* that :func:`ensure_single_read` call —
     the read-shape gate — leaving every other rule here (required fields,
     criticality, the ``reads`` map's own shape, output-column types and
-    uniqueness, ``config``, ``content_hash``) in force. It exists for
+    uniqueness, ``mode_type`` and ``primary_key``, ``config``,
+    ``content_hash``) in force. It exists for
     :func:`~continuo_python_runtime.harness.run_node`; see
     :func:`load_contract_dir` for why the runtime opts out.
     """
@@ -229,6 +287,17 @@ def parse_node(
             raise ContractError(f"{label}: 'secret_ref' is not allowed for kind {kind}")
         secret_ref = validate_secret_ref(raw["secret_ref"], label)
 
+    mode_type = raw.get("mode_type", DEFAULT_MODE_TYPE)
+    if not isinstance(mode_type, str) or mode_type not in MODE_TYPES:
+        raise ContractError(
+            f"{label}: 'mode_type' must be one of {sorted(MODE_TYPES)}, got {mode_type!r}"
+        )
+    if mode_type not in rules.mode_types:
+        raise ContractError(
+            f"{label}: 'mode_type' {mode_type} is not allowed for kind {kind} "
+            f"(allowed: {sorted(rules.mode_types)})"
+        )
+
     raw_columns = raw.get("output_columns")
     if not isinstance(raw_columns, list) or not raw_columns:
         raise ContractError(f"{label}: 'output_columns' must be a non-empty list")
@@ -269,6 +338,8 @@ def parse_node(
         seen_names.add(name)
         columns.append(Column(name=name, type=col_type, nullable=nullable))
 
+    primary_key = _validate_primary_key(raw, mode_type, columns, label)
+
     description = raw.get("description", "")
     if not isinstance(description, str):
         raise ContractError(f"{label}: 'description' must be a string")
@@ -294,6 +365,8 @@ def parse_node(
         content_hash=content_hash,
         kind=kind,
         secret_ref=secret_ref,
+        mode_type=mode_type,
+        primary_key=primary_key,
     )
 
 

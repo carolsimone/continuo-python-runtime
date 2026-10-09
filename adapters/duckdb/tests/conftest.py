@@ -100,6 +100,9 @@ class FakeLakeGateway(LakeGateway):
     def insert_arrow(self, table, data):
         self._do("insert_arrow", table, data)
 
+    def merge_arrow(self, table, data, key):
+        self._do("merge_arrow", table, data, tuple(key))
+
     def close(self):
         self._do("close")
 

@@ -220,6 +220,32 @@ class DdlRenderer:
         cols = ", ".join(quote_identifier(name) for name in column_names)
         return f"INSERT INTO {self.table_ref(table)} ({cols}) SELECT {cols} FROM {quote_identifier(source)}"
 
+    def merge_from(
+        self, table: QualifiedTable, column_names: Sequence[str], key: Sequence[str], source: str
+    ) -> str:
+        """MERGE *source* into *table* on *key*: overwrite a matched row's other columns, insert the rest.
+
+        With every column in the key there is nothing to overwrite, so the
+        statement has no WHEN MATCHED branch. Every column is named, so the
+        source's column order does not matter.
+        """
+        key_set = set(key)
+        on = " AND ".join(
+            f"t.{quote_identifier(name)} = s.{quote_identifier(name)}" for name in key
+        )
+        updates = [name for name in column_names if name not in key_set]
+        matched = ""
+        if updates:
+            matched = " WHEN MATCHED THEN UPDATE SET " + ", ".join(
+                f"{quote_identifier(name)} = s.{quote_identifier(name)}" for name in updates
+            )
+        cols = ", ".join(quote_identifier(name) for name in column_names)
+        values = ", ".join(f"s.{quote_identifier(name)}" for name in column_names)
+        return (
+            f"MERGE INTO {self.table_ref(table)} AS t USING {quote_identifier(source)} AS s "
+            f"ON ({on}){matched} WHEN NOT MATCHED THEN INSERT ({cols}) VALUES ({values})"
+        )
+
     @staticmethod
     def _partition(key: PartitionKey) -> str:
         column = quote_identifier(key.column.name)

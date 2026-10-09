@@ -487,3 +487,26 @@ def test_columns_errors_are_redacted():
     with pytest.raises(duckdb.IOException) as caught:
         session.columns(T)
     assert PASSWORD not in str(caught.value)
+
+
+def test_merge_arrow_registers_merges_and_unregisters():
+    import pyarrow as pa
+
+    session, connection = make_session()
+    session.merge_arrow(T, pa.table({"id": [1], "v": ["a"]}), ["id"])
+    register, merge, unregister = connection.statements
+    view = register.removeprefix("register ")
+    assert view.startswith("__continuo_merge_")
+    assert merge == DdlRenderer("lake").merge_from(T, ["id", "v"], ["id"], view)
+    assert unregister == f"unregister {view}"
+
+
+def test_merge_arrow_errors_are_redacted_and_the_view_is_still_unregistered():
+    import pyarrow as pa
+
+    session, connection = make_session()
+    connection.errors["MERGE"] = leaky(duckdb.IOException, PASSWORD)
+    with pytest.raises(duckdb.IOException) as caught:
+        session.merge_arrow(T, pa.table({"id": [1]}), ["id"])
+    assert PASSWORD not in str(caught.value)
+    assert connection.statements[-1].startswith("unregister __continuo_merge_")

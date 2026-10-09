@@ -80,4 +80,10 @@ class LakeGateway(ABC):
         """Append *data* in its own column order."""
 
     @abstractmethod
+    def merge_arrow(
+        self, table: QualifiedTable, data: "pyarrow.Table", key: Sequence[str]
+    ) -> None:
+        """Insert *data*'s rows with a new *key*, overwrite rows whose key exists."""
+
+    @abstractmethod
     def close(self) -> None: ...

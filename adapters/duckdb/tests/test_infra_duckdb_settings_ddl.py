@@ -301,3 +301,24 @@ def test_columns_query_prefilters_with_lower_and_keeps_table_order():
         "WHERE lower(database_name) = lower(?) AND lower(schema_name) = lower(?) "
         "AND lower(table_name) = lower(?) ORDER BY column_index"
     )
+
+
+def test_merge_from_overwrites_non_key_columns_and_inserts_the_rest():
+    assert R.merge_from(T, ["id", "v%", "Rate"], ["id"], "src") == (
+        'MERGE INTO "lake"."s"."t" AS t USING "src" AS s ON (t."id" = s."id")'
+        ' WHEN MATCHED THEN UPDATE SET "v%" = s."v%", "Rate" = s."Rate"'
+        ' WHEN NOT MATCHED THEN INSERT ("id", "v%", "Rate") VALUES (s."id", s."v%", s."Rate")'
+    )
+
+
+def test_merge_from_with_every_column_in_the_key_has_no_matched_branch():
+    assert R.merge_from(T, ["a", "b"], ["a", "b"], "src") == (
+        'MERGE INTO "lake"."s"."t" AS t USING "src" AS s ON (t."a" = s."a" AND t."b" = s."b")'
+        ' WHEN NOT MATCHED THEN INSERT ("a", "b") VALUES (s."a", s."b")'
+    )
+
+
+def test_merge_from_quotes_a_reserved_word_key():
+    assert R.merge_from(T, ["order", "x"], ["order"], 'we"ird').startswith(
+        'MERGE INTO "lake"."s"."t" AS t USING "we""ird" AS s ON (t."order" = s."order")'
+    )

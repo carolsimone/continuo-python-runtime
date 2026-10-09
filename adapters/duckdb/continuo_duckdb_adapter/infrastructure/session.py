@@ -287,6 +287,16 @@ class DuckLakeSession(LakeGateway):
             with contextlib.suppress(duckdb.Error):
                 self._con.unregister(view)
 
+    def merge_arrow(self, table: QualifiedTable, data: "pa.Table", key: Sequence[str]) -> None:
+        view = f"__continuo_merge_{uuid.uuid4().hex}"
+        with self._guarded():
+            self._con.register(view, data)
+        try:
+            self._run(self._renderer.merge_from(table, data.schema.names, key, view))
+        finally:
+            with contextlib.suppress(duckdb.Error):
+                self._con.unregister(view)
+
     def close(self) -> None:
         try:
             self._con.close()

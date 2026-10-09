@@ -3,6 +3,7 @@
 Run the stack first:
     docker compose -f tests/smoke/postgres-stack/docker-compose.yml up -d --wait
 """
+import datetime
 import decimal
 import os
 import uuid
@@ -382,3 +383,110 @@ def test_run_node_csv_kind_loads_minio_csv_into_postgres(clean_schema, csv_minio
         rows = cur.fetchall()
     conn.close()
     assert rows == [(1, 10.5), (2, 20.0), (3, 5.25)]
+
+
+# --- write modes end to end ----------------------------------------------------
+
+_FX_COLUMNS = [
+    {"name": "rate_date", "type": "DATE", "nullable": False},
+    {"name": "base", "type": "VARCHAR(3)", "nullable": False},
+    {"name": "rate", "type": "DECIMAL(12,6)", "nullable": True},
+]
+
+_FX_SCRIPT = (
+    "import datetime\n"
+    "from decimal import Decimal\n\n"
+    "import pyarrow as pa\n\n"
+    "ROWS = {rows!r}\n\n\n"
+    "def run(ctx):\n"
+    "    return pa.table({{\n"
+    "        'rate_date': pa.array([datetime.date.fromisoformat(r[0]) for r in ROWS], pa.date32()),\n"
+    "        'base': pa.array([r[1] for r in ROWS], pa.string()),\n"
+    "        'rate': pa.array([Decimal(r[2]) for r in ROWS], pa.decimal128(12, 6)),\n"
+    "    }})\n"
+)
+
+
+def _fx_run_env(repo, schema, run, rows, **mode):
+    """A python-api fx node returning *rows*, with a script file unique to *run*.
+
+    One file per run: rewriting the same file within a second at the same size
+    would let Python reuse its cached bytecode and return the previous rows.
+    """
+    (repo / "contracts").mkdir(exist_ok=True)
+    (repo / "scripts").mkdir(exist_ok=True)
+    script = f"scripts/fx_{run}.py"
+    (repo / script).write_text(_FX_SCRIPT.format(rows=rows))
+    node = {
+        "schema": schema, "table": "fx_rates", "owner": "m", "schedule": "hourly",
+        "criticality": "SECONDARY", "kind": "python-api", "script": script,
+        "output_columns": _FX_COLUMNS, **mode,
+    }
+    (repo / "contracts" / "fx.yml").write_text(yaml.safe_dump({"nodes": [node]}))
+    return {
+        "NODE_ID": f"python-api.svc.{schema}.fx_rates", "TABLE_NAME": "fx_rates",
+        "TARGET_SCHEMA": schema, "CONTRACT_DIR": str(repo / "contracts"), "APP_ROOT": str(repo),
+    }
+
+
+@pytest.mark.integration
+def test_run_node_append_keeps_the_rows_of_earlier_runs(clean_schema, tmp_path):
+    env = _fx_run_env(tmp_path, clean_schema, "run1", [("2026-10-08", "EUR", "1.081200")], mode_type="append")
+    assert run_node(env, adapter=_adapter()) == 0
+    env = _fx_run_env(
+        tmp_path, clean_schema, "run2",
+        [("2026-10-08", "EUR", "1.081200"), ("2026-10-09", "EUR", "1.090000")],
+        mode_type="append",
+    )
+    assert run_node(env, adapter=_adapter()) == 0
+    assert _count(clean_schema, "fx_rates") == 3
+
+
+@pytest.mark.integration
+def test_run_node_upsert_overwrites_by_key_and_keeps_the_constraint(clean_schema, tmp_path):
+    """Review Focus 4 and 5 through the whole harness."""
+    key = {"mode_type": "upsert", "primary_key": ["rate_date", "base"]}
+    env = _fx_run_env(
+        tmp_path, clean_schema, "run1",
+        [("2026-10-08", "EUR", "1.081200"), ("2026-10-08", "GBP", "0.861000")], **key,
+    )
+    assert run_node(env, adapter=_adapter()) == 0
+    env = _fx_run_env(
+        tmp_path, clean_schema, "run2",
+        [("2026-10-08", "EUR", "1.090000"), ("2026-10-09", "EUR", "1.100000")], **key,
+    )
+    assert run_node(env, adapter=_adapter()) == 0
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute(
+            f'SELECT rate_date, base, rate FROM "{clean_schema}"."fx_rates" ORDER BY rate_date, base'
+        )
+        rows = cur.fetchall()
+        cur.execute(
+            "SELECT kcu.column_name FROM information_schema.table_constraints tc "
+            "JOIN information_schema.key_column_usage kcu "
+            "ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema "
+            "AND kcu.table_name = tc.table_name "
+            "WHERE tc.table_schema = %s AND tc.table_name = %s "
+            "AND tc.constraint_type = 'PRIMARY KEY' ORDER BY kcu.ordinal_position",
+            (clean_schema, "fx_rates"),
+        )
+        key_columns = [row[0] for row in cur.fetchall()]
+    conn.close()
+    assert rows == [
+        (datetime.date(2026, 10, 8), "EUR", decimal.Decimal("1.090000")),
+        (datetime.date(2026, 10, 8), "GBP", decimal.Decimal("0.861000")),
+        (datetime.date(2026, 10, 9), "EUR", decimal.Decimal("1.100000")),
+    ]
+    assert key_columns == ["rate_date", "base"]
+
+
+@pytest.mark.integration
+def test_run_node_append_into_a_drifted_table_fails_naming_the_column(clean_schema, tmp_path, capsys):
+    _seed(clean_schema, "fx_rates", "rate_date date NOT NULL, base varchar(3) NOT NULL", "")
+    env = _fx_run_env(tmp_path, clean_schema, "run1", [("2026-10-08", "EUR", "1.081200")], mode_type="append")
+    assert run_node(env, adapter=_adapter()) == 1
+    out = capsys.readouterr().out
+    assert '"message":"LoadError: table runtime_it.fx_rates does not match' in out
+    assert "missing column(s) ['rate']" in out
+    assert _count(clean_schema, "fx_rates") == 0

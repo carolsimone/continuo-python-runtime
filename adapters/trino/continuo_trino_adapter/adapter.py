@@ -539,6 +539,7 @@ class TrinoAdapter(WarehouseAdapter, AppendCapable):
         columns: list[dict[str, Any]],
         *,
         config: dict[str, Any],
+        primary_key: Sequence[str] = (),
     ) -> None:
         """CREATE TABLE IF NOT EXISTS with typed DDL compiled from *columns*.
 
@@ -553,8 +554,20 @@ class TrinoAdapter(WarehouseAdapter, AppendCapable):
         table behind (fail closed), then rendered into the CREATE TABLE's
         ``WITH`` clause. Required and keyword-only, matching the contract 0.6.0
         port signature.
+
+        *primary_key* declares nothing: Trino has no constraint syntax, so an
+        upsert node's key is guaranteed by ``upsert`` (the port's duplicate
+        check, then one MERGE). It does gate one config value: Trino's MERGE
+        needs Iceberg format version 2, so a key with ``format_version`` below
+        2 is rejected before any DDL.
         """
         properties = _table_properties(config)
+        format_version = (config or {}).get("format_version")
+        if primary_key and isinstance(format_version, int) and format_version < 2:
+            raise ValueError(
+                f"config 'format_version' {format_version} cannot hold an upsert table: "
+                "Trino's MERGE needs Iceberg format version 2 or later"
+            )
         for col in columns:
             validate_column_type(col["type"])
 

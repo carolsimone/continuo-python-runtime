@@ -154,3 +154,31 @@ def test_a_failed_stage_drop_after_the_commit_is_only_logged(caplog):
         _adapter(conn).append("s", "t", pa.table({"id": [1]}))
     assert any(st.startswith('INSERT INTO "iceberg"."s"."t"') for st in conn.statements)
     assert "best-effort cleanup of staging table" in caplog.text
+
+
+_FX = [
+    {"name": "rate_date", "type": "DATE", "nullable": False},
+    {"name": "base", "type": "VARCHAR(3)", "nullable": False},
+]
+
+
+def test_ensure_table_with_a_key_emits_the_same_ddl_as_without():
+    keyed, plain = _ScriptedConnection(), _ScriptedConnection()
+    _adapter(keyed).ensure_table("s", "t", _FX, config={}, primary_key=("rate_date", "base"))
+    _adapter(plain).ensure_table("s", "t", _FX, config={})
+    assert keyed.statements == plain.statements
+
+
+def test_an_upsert_key_on_a_format_version_1_table_is_rejected_before_any_ddl():
+    conn = _ScriptedConnection()
+    with pytest.raises(ValueError, match="format_version"):
+        _adapter(conn).ensure_table(
+            "s", "t", _FX, config={"format_version": 1}, primary_key=("rate_date", "base")
+        )
+    assert conn.statements == []
+
+
+def test_format_version_1_without_a_key_is_still_allowed():
+    conn = _ScriptedConnection()
+    _adapter(conn).ensure_table("s", "t", _FX, config={"format_version": 1})
+    assert conn.statements[-1].endswith("WITH (format_version = 1)")

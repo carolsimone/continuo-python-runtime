@@ -7,7 +7,7 @@ import yaml
 
 from continuo_python_runtime.closure import resolve_closure
 from continuo_python_runtime.contract.loader import load_contract_dir
-from continuo_python_runtime.contract.model import CONTRACT_VERSION, Node
+from continuo_python_runtime.contract.model import CONTRACT_VERSION, DEFAULT_MODE_TYPE, Node
 from continuo_python_runtime.contract.paths import resolve_script_path
 from continuo_python_runtime.errors import ContractError
 from continuo_python_runtime.hashing import hash_parts
@@ -20,7 +20,10 @@ def node_entry(node: Node) -> dict:
     Returns the node as a dict with all fields, output_columns as list of
     dicts. The entry carries no hash fields: build_wire_contract adds all
     four (source_hash, shared_code_hash, config_hash, content_hash). The
-    nullable field is always present in output_columns.
+    nullable field is always present in output_columns. ``secret_ref``,
+    ``mode_type`` and ``primary_key`` appear only when they differ from their
+    default, so a node that does not use them has the entry (and hashes) it
+    had before they existed.
     """
     entry = {
         "schema": node.schema,
@@ -47,6 +50,12 @@ def node_entry(node: Node) -> dict:
     # only when set keeps every other node's config_hash unchanged.
     if node.secret_ref:
         entry["secret_ref"] = node.secret_ref
+    # Same reasoning: every replace node's entry, config_hash and content_hash
+    # stay byte-identical, so contract_version stays 1.
+    if node.mode_type != DEFAULT_MODE_TYPE:
+        entry["mode_type"] = node.mode_type
+    if node.mode_type == "upsert":
+        entry["primary_key"] = list(node.primary_key)
     return entry
 
 

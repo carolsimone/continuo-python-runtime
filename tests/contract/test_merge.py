@@ -6,9 +6,14 @@ import yaml
 
 import pytest
 
-from continuo_python_runtime.contract.merge import build_wire_contract, write_wire_contract
+from continuo_python_runtime.contract.loader import parse_node
+from continuo_python_runtime.contract.merge import (
+    build_wire_contract,
+    node_entry,
+    write_wire_contract,
+)
 from continuo_python_runtime.errors import ContractError
-from continuo_python_runtime.hashing import content_hash_fold
+from continuo_python_runtime.hashing import config_hash, content_hash_fold
 
 WIRE_ENTRY_KEYS = {
     "schema", "table", "owner", "schedule", "criticality", "script", "reads",
@@ -530,3 +535,85 @@ def test_python_api_script_is_held_to_the_closure_lint(tmp_path):
     (repo / "scripts" / "fx.py").write_text("import psycopg2\n\ndef run(ctx):\n    return None\n")
     with pytest.raises(ContractError, match="lint violations"):
         build_wire_contract(repo / "contracts", repo, "s")
+
+
+# --- write modes on the wire --------------------------------------------------
+
+
+def _modes_repo(tmp_path, **extra):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "fx.py").write_text(
+        "import pyarrow as pa\n\ndef run(ctx):\n    return pa.table({'rate': [1.0]})\n"
+    )
+    node = {
+        "schema": "fx", "table": "fx_rates", "owner": "m", "schedule": "hourly",
+        "criticality": "SECONDARY", "kind": "python-api", "script": "scripts/fx.py",
+        "output_columns": [
+            {"name": "rate_date", "type": "DATE", "nullable": False},
+            {"name": "base", "type": "VARCHAR(3)", "nullable": False},
+            {"name": "rate", "type": "DECIMAL(12,6)"},
+        ],
+    }
+    node.update(extra)
+    (tmp_path / "contracts" / "fx.yml").write_text(yaml.safe_dump({"nodes": [node]}))
+    return tmp_path
+
+
+def _only_entry(repo):
+    (entry,) = build_wire_contract(repo / "contracts", repo, "s")["nodes"]
+    return entry
+
+
+def test_replace_entry_is_identical_whether_or_not_mode_type_is_authored(tmp_path):
+    implicit = _only_entry(_modes_repo(tmp_path / "a"))
+    explicit = _only_entry(_modes_repo(tmp_path / "b", mode_type="replace"))
+    assert set(explicit) == WIRE_ENTRY_KEYS
+    assert explicit == implicit
+
+
+def test_append_entry_carries_mode_type_and_no_key(tmp_path):
+    entry = _only_entry(_modes_repo(tmp_path, mode_type="append"))
+    assert set(entry) == WIRE_ENTRY_KEYS | {"mode_type"}
+    assert entry["mode_type"] == "append"
+
+
+def test_upsert_entry_carries_its_key_in_authored_order(tmp_path):
+    entry = _only_entry(
+        _modes_repo(tmp_path, mode_type="upsert", primary_key=["base", "rate_date"])
+    )
+    assert set(entry) == WIRE_ENTRY_KEYS | {"mode_type", "primary_key"}
+    assert entry["mode_type"] == "upsert"
+    assert entry["primary_key"] == ["base", "rate_date"]
+
+
+def test_mode_type_and_primary_key_are_part_of_the_config_hash(tmp_path):
+    append = _only_entry(_modes_repo(tmp_path / "a", mode_type="append"))
+    upsert = _only_entry(
+        _modes_repo(tmp_path / "b", mode_type="upsert", primary_key=["rate_date", "base"])
+    )
+    reordered = _only_entry(
+        _modes_repo(tmp_path / "c", mode_type="upsert", primary_key=["base", "rate_date"])
+    )
+    assert append["source_hash"] == upsert["source_hash"] == reordered["source_hash"]
+    assert len({append["config_hash"], upsert["config_hash"], reordered["config_hash"]}) == 3
+
+
+# Computed with continuo-python-runtime 0.8.0 (before mode_type existed) for the
+# shared fixture's replace node. A replace entry must hash exactly like this.
+_PRE_WRITE_MODES_CONFIG_HASH = "651db2a6fdafda3f4dcdd5358132b0d7cd0177836be90380cd79388ac31d8cdf"
+_REPLACE_NODE = {
+    "schema": "fixture", "table": "replace_node", "owner": "data-team",
+    "schedule": "hourly", "criticality": "SECONDARY", "kind": "python-node",
+    "script": "scripts/replace_node.py", "reads": {"src": "SELECT id FROM fixture.src"},
+    "output_columns": [{"name": "id", "type": "BIGINT", "nullable": False}],
+    "description": "", "extra_columns": "raise", "config": {},
+}
+
+
+@pytest.mark.parametrize("extra", [{}, {"mode_type": "replace"}])
+def test_a_replace_entry_hashes_exactly_as_it_did_before_write_modes(extra):
+    entry = node_entry(parse_node({**_REPLACE_NODE, **extra}, "f.yml"))
+    assert "mode_type" not in entry and "primary_key" not in entry
+    assert config_hash(entry) == _PRE_WRITE_MODES_CONFIG_HASH

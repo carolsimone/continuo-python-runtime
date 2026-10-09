@@ -14,6 +14,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `python-csv` nodes allow only `replace`. `continuo-runtime validate`, `merge`
   and `run` enforce these rules; the harness's write path for the new modes
   follows in a later entry.
+- The merged wire entry carries `mode_type` when it is not `replace` and
+  `primary_key` (authored order) for `upsert`; both are part of
+  `config_hash`. Entries of nodes that do not set them, and their hashes, are
+  unchanged.
 
 ### Changed
 

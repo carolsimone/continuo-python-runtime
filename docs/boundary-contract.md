@@ -61,6 +61,19 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   node's wire entry or `config_hash` changes), and it is part of
   `config_hash`, so `content_hash` changes when the referenced Secret name
   changes. `source_hash` does not.
+- **`mode_type`** and **`primary_key`** are additive and optional. `mode_type`
+  (`replace`, the default; `append`; `upsert`) says how the harness writes
+  the node's table on each run; `python-csv` allows only `replace`.
+  `primary_key` is required for `upsert` and rejected for every other mode: a
+  non-empty list of output column names, each spelled exactly as in
+  `output_columns` and declared `nullable: false`, unique case-insensitively. On the merged wire entry `mode_type` appears
+  only when it is not `replace`, and `primary_key` only for `upsert`, in the
+  authored order and spelling — so every existing node's wire entry,
+  `config_hash` and `content_hash` are unchanged and `contract_version` stays
+  1. Both are part of `config_hash` when present. A shared fixture of the
+  expected entries lives in this repo at
+  `tests/fixtures/wire_contract_write_modes.yml` and, byte-identical, in
+  continuo at `topology-controller/tests/fixtures/wire_contract_write_modes.yml`.
 - **Reads must be single-statement SELECTs with every table reference
   schema-qualified** (`analytics.table_a`, never `table_a`) — the resolver
   raises `UnqualifiedTableReference` and rejects the whole release otherwise

@@ -45,6 +45,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `table_columns` reads `information_schema`. `ensure_table` accepts an
   upsert key (no constraint DDL) and rejects it with `format_version: 1`.
   `load` now shares the stage helpers (no behavior change).
+- The harness writes each node with its `mode_type`: `load` for `replace`,
+  `append`, or `upsert` with the node's `primary_key` (also passed to
+  `ensure_table`). An adapter without the needed capability fails with
+  `LoadError: <Adapter> does not support <mode>` before the script runs; an
+  `upsert` whose rows repeat a key fails with `ConformError` and writes
+  nothing. See "Write modes" in the README.
 
 ### Changed
 

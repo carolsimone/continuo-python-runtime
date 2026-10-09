@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from continuo_engine_contract.port import AppendCapable, LiveColumn, UpsertCapable
 
 from continuo_python_runtime.contract.model import Column, Node
 
@@ -131,6 +132,53 @@ class FakeWarehouseAdapter:
 
     def close(self):
         self.closed = True
+
+
+class FakeAppendAdapter(FakeWarehouseAdapter, AppendCapable):
+    """FakeWarehouseAdapter that declares AppendCapable.
+
+    ``live_columns`` is what table_columns reports; None reports exactly the
+    columns ensure_table received (a table the harness just created).
+    """
+
+    def __init__(self, tables=None, live_columns=None):
+        super().__init__(tables)
+        self.live_columns = live_columns
+        self.introspected = None
+        self.appended = None
+
+    def table_columns(self, schema, table):
+        self.introspected = (schema, table)
+        if self.live_columns is not None:
+            return list(self.live_columns)
+        return [LiveColumn(c["name"], c["nullable"]) for c in self.ensured[2]]
+
+    def append(self, schema, table, data):
+        self.appended = (schema, table, data)
+
+
+class FakeUpsertAdapter(FakeWarehouseAdapter, UpsertCapable):
+    """FakeWarehouseAdapter that declares UpsertCapable; upsert() is the port's own template method."""
+
+    def __init__(self, tables=None, live_columns=None):
+        super().__init__(tables)
+        self.live_columns = live_columns
+        self.introspected = None
+        self.ensured_primary_key = None
+        self.upserted = None
+
+    def ensure_table(self, schema, table, columns, *, config, primary_key=()):
+        super().ensure_table(schema, table, columns, config=config)
+        self.ensured_primary_key = tuple(primary_key)
+
+    def table_columns(self, schema, table):
+        self.introspected = (schema, table)
+        if self.live_columns is not None:
+            return list(self.live_columns)
+        return [LiveColumn(c["name"], c["nullable"]) for c in self.ensured[2]]
+
+    def _upsert(self, schema, table, data, primary_key):
+        self.upserted = (schema, table, data, tuple(primary_key))
 
 
 @pytest.fixture

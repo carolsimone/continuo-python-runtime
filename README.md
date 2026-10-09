@@ -53,7 +53,8 @@ engine adapters, the validation runner, and the node harness. The former
 `continuo-validation` repository was merged in — there is no longer a separate
 validation-side port, adapter class, entry-point group, or image. One
 `WarehouseAdapter` per engine serves both the data plane (`fetch` /
-`ensure_table` / `load`) and validation (`ensure_schema` / `drop_schema` /
+`ensure_table` / `load`, plus the opt-in `table_columns` / `append` / `upsert`
+capabilities) and validation (`ensure_schema` / `drop_schema` /
 `build_empty_from_sql` / `build_empty_from_columns` / `clone_empty_from_prod` /
 `check_binds`), and one image per engine runs both roles.
 
@@ -175,6 +176,54 @@ produced, never how it is checked or written.
   script reads with `os.environ[...]`. The contract never holds a secret value
   or env var name; the Secret itself is created in the cluster by the operator.
 
+## Write modes
+
+`mode_type:` chooses how the harness writes a node's table on each run:
+
+| `mode_type` | Each run | Rows from earlier runs |
+| --- | --- | --- |
+| `replace` (default) | empties the table, inserts this run's rows | gone |
+| `append` | inserts this run's rows | kept |
+| `upsert` | inserts rows with a new key, overwrites rows whose key exists | kept unless overwritten; never deleted |
+
+```yaml
+- schema: fx
+  table: fx_rates
+  kind: python-api
+  mode_type: upsert
+  primary_key: [rate_date, base, quote]
+  output_columns:
+    - {name: rate_date, type: DATE,       nullable: false}
+    - {name: base,      type: VARCHAR(3), nullable: false}
+    - {name: quote,     type: VARCHAR(3), nullable: false}
+    - {name: rate,      type: DECIMAL(12,6)}
+```
+
+- `python-csv` nodes only `replace`.
+- `primary_key` is required for `upsert` and rejected otherwise: a non-empty
+  list of output columns declared `nullable: false` (a NULL key never
+  matches), each spelled exactly as in `output_columns`, names unique
+  case-insensitively. A Postgres `replace` table that
+  wants uniqueness uses `config.indexes` with `unique: true`.
+- Every write is atomic: all of the run's rows or none. An `append` or
+  `upsert` run with zero rows writes nothing (a `replace` run with zero rows
+  still empties the table).
+- `append` is a plain insert: a run that committed but was reported failed
+  and is retried stores its rows twice. `upsert` is idempotent.
+- An `upsert` run whose own rows repeat a key fails with `ConformError` and
+  writes nothing.
+- The installed engine must support the mode; all three shipped adapters do.
+  A bring-your-own adapter declares `AppendCapable` / `UpsertCapable` from
+  `continuo-engine-contract` (and can run its conformance suite); without them
+  an `append`/`upsert` node fails with `LoadError: <Adapter> does not support
+  <mode>` before its script runs.
+- Engines: on Postgres the key is the table's `PRIMARY KEY`, created with the
+  table; DuckLake and Trino/Iceberg have no constraints, so the key is
+  guaranteed by the write path only. On Trino an `upsert` table needs Iceberg
+  `format_version` 2 (the default).
+- `full_refresh` stays refused for every python node: a rebuild would destroy
+  an accumulating table.
+
 ## The script API
 
 A node script is a Python file with exactly one required entry point:
@@ -261,8 +310,8 @@ text.
 | `ContractError` | Contract missing or invalid, node not found for `NODE_ID`, or the declared script is missing/unreachable. | The contract yaml or the `script:` path. |
 | `ReadError` | `ctx.read()` was called with an undeclared name, or a declared read failed at the warehouse. | The `reads:` map, or the upstream query/warehouse access. |
 | `ScriptError` | `run()` raised, has no callable `run`, or returned a value that isn't Arrow-convertible. | The node script. |
-| `ConformError` | Structural mismatch (extra/missing/duplicate columns), a strict-cast failure, a not-null violation, or a VARCHAR/CHAR overflow. | The script's output shape, or the `output_columns` declaration. |
-| `LoadError` | Adapter construction failed, or the DDL/INSERT failed at the warehouse during the write. | Warehouse connectivity/permissions, or the target table. |
+| `ConformError` | Structural mismatch (extra/missing/duplicate columns), a strict-cast failure, a not-null violation, a VARCHAR/CHAR overflow, or an `upsert` run whose rows repeat a primary key. | The script's output shape, or the `output_columns` declaration. |
+| `LoadError` | Adapter construction failed, the installed engine does not support the node's `mode_type`, or the DDL/INSERT failed at the warehouse during the write. | Warehouse connectivity/permissions, the engine image, or the target table. |
 
 ## Engine selection
 

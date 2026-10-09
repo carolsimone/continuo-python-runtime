@@ -610,3 +610,28 @@ def test_ensure_table_rejects_a_primary_key_on_an_undeclared_column_and_emits_no
             "s", "t", _KEYED, config={}, primary_key=("rate_date", "quote")
         )
     assert conn.cursors == []
+
+
+def test_on_conflict_overwrites_every_non_key_column():
+    assert adapter_module._on_conflict(["rate_date", "base", "rate"], ["rate_date", "base"]) == (
+        pg_sql.SQL("ON CONFLICT ({}) DO UPDATE SET {}").format(
+            pg_sql.SQL(", ").join([pg_sql.Identifier("rate_date"), pg_sql.Identifier("base")]),
+            pg_sql.SQL(", ").join([
+                pg_sql.SQL("{} = EXCLUDED.{}").format(
+                    pg_sql.Identifier("rate"), pg_sql.Identifier("rate")
+                )
+            ]),
+        )
+    )
+
+
+def test_on_conflict_does_nothing_when_every_column_is_in_the_key():
+    assert adapter_module._on_conflict(["a", "b"], ["a", "b"]) == pg_sql.SQL(
+        "ON CONFLICT ({}) DO NOTHING"
+    ).format(pg_sql.SQL(", ").join([pg_sql.Identifier("a"), pg_sql.Identifier("b")]))
+
+
+def test_upsert_of_zero_rows_opens_no_transaction():
+    conn = _FakeConnection()
+    PostgresAdapter(conn).upsert("s", "t", pa.table({"id": pa.array([], pa.int64())}), ["id"])
+    assert conn.cursors == []

@@ -11,9 +11,15 @@ import psycopg2
 import pytest
 
 from continuo_engine_contract.conformance import (
+    ARROW,
+    COLUMNS,
     FX_COLUMNS,
+    NAMES,
     AppendConformance,
+    ConformanceBase,
     IntrospectionConformance,
+    UpsertConformance,
+    table_of,
 )
 from continuo_postgres_adapter.adapter import PostgresAdapter
 
@@ -50,6 +56,10 @@ class TestPostgresAppend(AppendConformance):
     pass
 
 
+class TestPostgresUpsert(UpsertConformance):
+    pass
+
+
 def _primary_key_columns(schema: str, table: str) -> list[str]:
     conn = psycopg2.connect(**PG)
     try:
@@ -82,3 +92,12 @@ def test_ensure_table_with_a_primary_key_creates_an_enforced_constraint(adapter,
                 cur.execute(insert, (datetime.date(2026, 10, 8), "EUR", None))
     finally:
         conn.close()
+
+
+def test_upsert_into_a_table_without_its_primary_key_fails_and_writes_nothing(adapter, schema):
+    """ON CONFLICT needs the constraint; postgres refuses instead of collecting duplicates."""
+    adapter.ensure_table(schema, "unkeyed", COLUMNS, config={})
+    adapter.append(schema, "unkeyed", table_of(ARROW, [(1, "a", 10)]))
+    with pytest.raises(psycopg2.errors.InvalidColumnReference):
+        adapter.upsert(schema, "unkeyed", table_of(ARROW, [(1, "b", 20)]), ["id"])
+    ConformanceBase().expect_rows(adapter, schema, "unkeyed", NAMES, [(1, "a", 10)])

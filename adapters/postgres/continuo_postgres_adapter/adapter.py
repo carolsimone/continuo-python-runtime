@@ -8,8 +8,10 @@ One class covers both roles Continuo asks of an engine:
   without scanning data. Schema creation is serialized on a session advisory
   lock because parallel root validation nodes race on ``CREATE SCHEMA``.
 * **Python-node data-plane I/O** — ``fetch`` executes one declared read and
-  returns an Arrow table; ``ensure_table``/``load`` build and atomically
-  replace a table's contents.
+  returns an Arrow table; ``ensure_table`` builds the table (an upsert key as
+  its ``PRIMARY KEY``); ``load`` atomically replaces its contents, ``append``
+  adds rows and ``_upsert`` inserts or overwrites by key, all through one
+  insert helper; ``table_columns`` reads its shape.
 
 The connection runs with ``autocommit = True``: every method owns its
 transaction explicitly rather than relying on psycopg2's implicit
@@ -17,7 +19,7 @@ per-connection transaction. A single-statement method (``drop_schema``,
 ``build_empty_from_sql``, ``clone_empty_from_prod``) needs nothing further —
 under autocommit each statement commits as it runs. A method that must apply
 several statements atomically (``build_empty_from_columns``, ``check_binds``,
-``ensure_table``, ``load``) wraps them in its own explicit
+``ensure_table``, ``load``, ``append``, ``_upsert``) wraps them in its own explicit
 ``BEGIN``/``COMMIT``, with a ``ROLLBACK`` on the error path so a mid-sequence
 failure leaves no partial change and no aborted transaction behind for the
 next call on the same connection.
@@ -37,6 +39,7 @@ from continuo_engine_contract.config import ensure_known_keys  # type: ignore[im
 from continuo_engine_contract.port import (  # type: ignore[import-untyped]
     AppendCapable,
     LiveColumn,
+    UpsertCapable,
     WarehouseAdapter,
 )
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
@@ -352,6 +355,24 @@ def _insert_rows(
     execute_values(cur, statement, values, page_size=_INSERT_PAGE_SIZE)
 
 
+def _on_conflict(columns: Sequence[str], primary_key: Sequence[str]) -> "pg_sql.Composed":
+    """The upsert's ``ON CONFLICT`` clause.
+
+    Overwrites every non-key column from ``EXCLUDED``; with every column in
+    the key there is nothing to overwrite, so ``DO NOTHING``.
+    """
+    key = set(primary_key)
+    target = pg_sql.SQL(", ").join(pg_sql.Identifier(name) for name in primary_key)
+    updates = [name for name in columns if name not in key]
+    if not updates:
+        return pg_sql.SQL("ON CONFLICT ({}) DO NOTHING").format(target)
+    assignments = pg_sql.SQL(", ").join(
+        pg_sql.SQL("{} = EXCLUDED.{}").format(pg_sql.Identifier(name), pg_sql.Identifier(name))
+        for name in updates
+    )
+    return pg_sql.SQL("ON CONFLICT ({}) DO UPDATE SET {}").format(target, assignments)
+
+
 def _arrow_table_from_rows(colnames: list[str], rows: list[tuple[Any, ...]]) -> "pa.Table":
     """Build a column-wise Arrow table from cursor description names and fetched rows.
 
@@ -384,7 +405,7 @@ def _arrow_table_from_rows(colnames: list[str], rows: list[tuple[Any, ...]]) -> 
     return pa.table({name: pa.array(values) for name, values in zip(colnames, by_column)})
 
 
-class PostgresAdapter(WarehouseAdapter, AppendCapable):
+class PostgresAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
     """WarehouseAdapter speaking postgres over a psycopg2 connection."""
 
     def __init__(self, conn: "psycopg2.extensions.connection") -> None:
@@ -787,6 +808,32 @@ class PostgresAdapter(WarehouseAdapter, AppendCapable):
         with self._transaction("append") as cur:
             logger.info("appending %d row(s) into %s.%s", data.num_rows, schema, table)
             _insert_rows(cur, schema, table, data)
+
+    def _upsert(
+        self, schema: str, table: str, data: "pa.Table", primary_key: Sequence[str]
+    ) -> None:
+        """Insert new keys and overwrite existing ones in one transaction.
+
+        Batched ``INSERT ... ON CONFLICT (key) DO UPDATE`` (``DO NOTHING`` when
+        every column is in the key) through the shared insert path. Needs the
+        table's ``PRIMARY KEY`` (see ``ensure_table``): postgres rejects
+        ``ON CONFLICT`` on columns without a matching constraint, so a table
+        created without it fails here instead of collecting duplicates. Keys
+        arrive unique (``UpsertCapable.upsert``), which also keeps one
+        statement from touching a row twice. A 0-row *data* opens no
+        transaction.
+        """
+        if not data.num_rows:
+            logger.info("upsert of 0 rows into %s.%s: nothing to write", schema, table)
+            return
+        with self._transaction("upsert") as cur:
+            logger.info(
+                "upserting %d row(s) into %s.%s on (%s)",
+                data.num_rows, schema, table, ", ".join(primary_key),
+            )
+            _insert_rows(
+                cur, schema, table, data, suffix=_on_conflict(data.schema.names, primary_key)
+            )
 
     def close(self) -> None:
         """Release the underlying connection."""

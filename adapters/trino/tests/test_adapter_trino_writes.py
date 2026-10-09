@@ -10,6 +10,7 @@ import re
 import pyarrow as pa
 import pytest
 
+from continuo_engine_contract.keys import DuplicateKeyError
 from continuo_engine_contract.port import LiveColumn
 import continuo_trino_adapter.adapter as adapter_module
 from continuo_trino_adapter.adapter import TrinoAdapter
@@ -182,3 +183,49 @@ def test_format_version_1_without_a_key_is_still_allowed():
     conn = _ScriptedConnection()
     _adapter(conn).ensure_table("s", "t", _FX, config={"format_version": 1})
     assert conn.statements[-1].endswith("WITH (format_version = 1)")
+
+
+def test_merge_statement_overwrites_non_key_columns_and_inserts_the_rest():
+    assert adapter_module._merge_statement(
+        '"iceberg"."s"."t"', '"iceberg"."s"."st"', ["order", "Rate", "pct%"], ["order", "Rate"]
+    ) == (
+        'MERGE INTO "iceberg"."s"."t" AS t USING "iceberg"."s"."st" AS s '
+        'ON (t."order" = s."order" AND t."Rate" = s."Rate") '
+        'WHEN MATCHED THEN UPDATE SET "pct%" = s."pct%" '
+        'WHEN NOT MATCHED THEN INSERT ("order", "Rate", "pct%") '
+        'VALUES (s."order", s."Rate", s."pct%")'
+    )
+
+
+def test_merge_statement_with_every_column_in_the_key_has_no_matched_branch():
+    assert adapter_module._merge_statement(
+        '"iceberg"."s"."t"', '"iceberg"."s"."st"', ["a", "b"], ["a", "b"]
+    ) == (
+        'MERGE INTO "iceberg"."s"."t" AS t USING "iceberg"."s"."st" AS s '
+        'ON (t."a" = s."a" AND t."b" = s."b") '
+        'WHEN NOT MATCHED THEN INSERT ("a", "b") VALUES (s."a", s."b")'
+    )
+
+
+def test_upsert_stages_then_merges_once_then_drops_the_stage():
+    conn = _ScriptedConnection()
+    _adapter(conn).upsert("s", "t", pa.table({"id": [1, 2], "v": ["a", "b"]}), ["id"])
+    s = conn.statements
+    stage = _ref(s[1], "stage")
+    assert s[2] == f'INSERT INTO {stage} ("id", "v") VALUES (?, ?), (?, ?)'
+    assert s[3] == adapter_module._merge_statement('"iceberg"."s"."t"', stage, ["id", "v"], ["id"])
+    assert s[4] == f"DROP TABLE {stage}"
+    assert len(s) == 5
+
+
+def test_upsert_of_zero_rows_creates_no_stage():
+    conn = _ScriptedConnection()
+    _adapter(conn).upsert("s", "t", pa.table({"id": pa.array([], pa.int64())}), ["id"])
+    assert conn.statements == []
+
+
+def test_upsert_with_a_repeated_key_runs_no_statement():
+    conn = _ScriptedConnection()
+    with pytest.raises(DuplicateKeyError):
+        _adapter(conn).upsert("s", "t", pa.table({"id": [1, 1]}), ["id"])
+    assert conn.statements == []

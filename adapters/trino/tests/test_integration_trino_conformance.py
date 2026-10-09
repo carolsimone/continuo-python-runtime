@@ -16,6 +16,7 @@ from continuo_engine_contract.conformance import (
     AppendConformance,
     ConformanceBase,
     IntrospectionConformance,
+    UpsertConformance,
     bulk_rows,
     table_of,
 )
@@ -62,4 +63,15 @@ def test_a_failed_append_leaves_no_stage_table(adapter, schema):
     table = ConformanceBase().new_table(adapter, schema, COLUMNS)
     with pytest.raises(Exception):
         adapter.append(schema, table, table_of(ARROW, bulk_rows(1)))
+    assert _stage_tables(adapter, schema) == []
+
+
+class TestTrinoUpsert(UpsertConformance):
+    pass
+
+
+def test_a_failed_upsert_leaves_no_stage_table(adapter, schema):
+    table = ConformanceBase().new_table(adapter, schema, COLUMNS, primary_key=["id"])
+    with pytest.raises(Exception):
+        adapter.upsert(schema, table, table_of(ARROW, bulk_rows(1)), ["id"])
     assert _stage_tables(adapter, schema) == []

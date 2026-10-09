@@ -9,6 +9,7 @@ import re
 import pyarrow as pa
 import pytest
 
+from continuo_engine_contract.port import LiveColumn
 from continuo_trino_adapter.adapter import TrinoAdapter
 
 
@@ -86,3 +87,19 @@ def test_a_failed_stage_insert_on_load_drops_the_stage_and_never_swaps():
     stage = _ref(conn.statements[1], "stage")
     assert conn.statements[-1] == f"DROP TABLE {stage}"
     assert not any("RENAME" in statement for statement in conn.statements)
+
+
+def test_table_columns_reads_information_schema_with_lowercased_names():
+    conn = _ScriptedConnection(rows_for={"information_schema.columns": [["id", "NO"], ["label", "YES"]]})
+    columns = _adapter(conn).table_columns("MixedSchema", "MixedTable")
+    assert columns == [LiveColumn("id", False), LiveColumn("label", True)]
+    assert conn.statements == [
+        'SELECT column_name, is_nullable FROM "iceberg".information_schema.columns '
+        "WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position"
+    ]
+    assert conn.params == [["mixedschema", "mixedtable"]]
+
+
+def test_table_columns_of_a_missing_table_raises_lookup_error():
+    with pytest.raises(LookupError, match=r"s\.t"):
+        _adapter(_ScriptedConnection()).table_columns("s", "t")

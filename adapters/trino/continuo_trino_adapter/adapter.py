@@ -71,7 +71,11 @@ from urllib.parse import urlsplit, urlunsplit
 import pyarrow as pa  # type: ignore[import-untyped]
 
 from continuo_engine_contract.config import ensure_known_keys  # type: ignore[import-untyped]
-from continuo_engine_contract.port import WarehouseAdapter  # type: ignore[import-untyped]
+from continuo_engine_contract.port import (  # type: ignore[import-untyped]
+    LiveColumn,
+    TableIntrospection,
+    WarehouseAdapter,
+)
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
 from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 
@@ -285,7 +289,7 @@ _INSERT_BATCH_SIZE = 500
 _STAGE_PREFIX = "__continuo_stage_"
 
 
-class TrinoAdapter(WarehouseAdapter):
+class TrinoAdapter(WarehouseAdapter, TableIntrospection):
     """WarehouseAdapter speaking Trino (Iceberg connector) over the trino DBAPI."""
 
     def __init__(self, conn: "trino.dbapi.Connection", catalog: str) -> None:
@@ -467,6 +471,25 @@ class TrinoAdapter(WarehouseAdapter):
             return _arrow_table_from_rows(colnames, rows)
         finally:
             cur.close()
+
+    def table_columns(self, schema: str, table: str) -> list[LiveColumn]:
+        """Names and nullability of ``schema.table`` from ``information_schema.columns``.
+
+        Trino stores schema, table and column names lowercased, so the lookup
+        lowercases *schema* and *table*; callers compare column names
+        case-insensitively.
+
+        Raises:
+            LookupError: If the table does not exist.
+        """
+        rows = self._execute(
+            f"SELECT column_name, is_nullable FROM {_quote(self._catalog)}.information_schema.columns "
+            "WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position",
+            [schema.lower(), table.lower()],
+        )
+        if not rows:
+            raise LookupError(f"table {schema}.{table} does not exist in catalog {self._catalog}")
+        return [LiveColumn(name=row[0], nullable=row[1] == "YES") for row in rows]
 
     @classmethod
     def validate_config(

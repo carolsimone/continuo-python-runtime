@@ -19,6 +19,7 @@ from collections.abc import Callable, Iterator, Sequence
 from typing import TYPE_CHECKING
 
 import duckdb
+from continuo_engine_contract.port import LiveColumn  # type: ignore[import-untyped]
 
 from ..application.ports import LakeConflictError, LakeGateway
 from ..domain.columns import ColumnDefinition
@@ -219,6 +220,19 @@ class DuckLakeSession(LakeGateway):
             same_identifier(schema, table.schema.name) and same_identifier(name, table.table.name)
             for schema, name in rows
         )
+
+    def columns(self, table: QualifiedTable) -> list[LiveColumn]:
+        with self._guarded():
+            rows = self._run(
+                DdlRenderer.COLUMNS_QUERY,
+                [self._renderer.catalog_name, table.schema.name, table.table.name],
+            ).fetchall()
+        return [
+            LiveColumn(name=name, nullable=bool(nullable))
+            for schema, table_name, name, nullable in rows
+            if same_identifier(schema, table.schema.name)
+            and same_identifier(table_name, table.table.name)
+        ]
 
     def drop_table_if_exists(self, table: QualifiedTable) -> None:
         self._run(self._renderer.drop_table_if_exists(table))

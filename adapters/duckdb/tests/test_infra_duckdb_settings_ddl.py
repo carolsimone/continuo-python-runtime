@@ -293,3 +293,11 @@ def test_table_exists_query_prefilters_with_lower_and_binds_every_name():
         "WHERE lower(database_name) = lower(?) AND lower(schema_name) = lower(?) "
         "AND lower(table_name) = lower(?)"
     )
+
+
+def test_columns_query_prefilters_with_lower_and_keeps_table_order():
+    assert DdlRenderer.COLUMNS_QUERY == (
+        "SELECT schema_name, table_name, column_name, is_nullable FROM duckdb_columns() "
+        "WHERE lower(database_name) = lower(?) AND lower(schema_name) = lower(?) "
+        "AND lower(table_name) = lower(?) ORDER BY column_index"
+    )

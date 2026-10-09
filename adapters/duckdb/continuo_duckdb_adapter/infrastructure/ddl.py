@@ -149,6 +149,14 @@ class DdlRenderer:
         "AND lower(table_name) = lower(?)"
     )
 
+    # Same pre-filter-then-confirm shape as TABLE_EXISTS_QUERY: the session keeps
+    # only the rows whose schema and table pass ``same_identifier``.
+    COLUMNS_QUERY = (
+        "SELECT schema_name, table_name, column_name, is_nullable FROM duckdb_columns() "
+        "WHERE lower(database_name) = lower(?) AND lower(schema_name) = lower(?) "
+        "AND lower(table_name) = lower(?) ORDER BY column_index"
+    )
+
     def __init__(self, catalog: str) -> None:
         self._catalog = catalog
 

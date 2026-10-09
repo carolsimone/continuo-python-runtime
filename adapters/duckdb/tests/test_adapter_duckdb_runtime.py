@@ -1,6 +1,7 @@
 """Runtime use cases, against the recording FakeLakeGateway (no engine)."""
 import pyarrow as pa
 import pytest
+from continuo_engine_contract.port import LiveColumn
 
 from continuo_duckdb_adapter.application.ports import LakeConflictError
 from continuo_duckdb_adapter.domain.columns import ColumnDefinition
@@ -104,3 +105,14 @@ def test_load_rolls_back_when_the_insert_fails(warehouse, gateway):
     with pytest.raises(RuntimeError):
         warehouse.load("s", "t", pa.table({"id": [1]}))
     assert gateway.names() == ["begin", "delete_all", "insert_arrow", "rollback"]
+
+
+def test_table_columns_returns_the_gateways_columns(warehouse, gateway):
+    gateway.live_columns = [LiveColumn("id", False), LiveColumn("ts", True)]
+    assert warehouse.table_columns("s", "t") == [LiveColumn("id", False), LiveColumn("ts", True)]
+    assert gateway.calls == [("columns", T)]
+
+
+def test_table_columns_of_a_missing_table_raises_lookup_error(warehouse, gateway):
+    with pytest.raises(LookupError, match=r"s\.t"):
+        warehouse.table_columns("s", "t")

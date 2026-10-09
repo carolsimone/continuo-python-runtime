@@ -6,6 +6,7 @@ import stat
 
 import duckdb
 import pytest
+from continuo_engine_contract.port import LiveColumn
 
 from continuo_duckdb_adapter.application.ports import LakeConflictError
 from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
@@ -456,3 +457,33 @@ def test_table_exists_does_not_fold_non_ascii_case():
 def test_table_exists_is_false_when_the_catalog_returns_nothing():
     session, _ = make_session(FakeConnection())
     assert not session.table_exists(T)
+
+
+def test_columns_keeps_only_the_rows_of_the_same_table_by_duckdb_casing():
+    connection = FakeConnection()
+    connection.rows = [
+        ("Analytics", "Orders", "id", False),
+        ("Analytics", "Orders", "note", True),
+        ("analytics", "Other", "x", True),
+    ]
+    session, _ = make_session(connection)
+    assert session.columns(QualifiedTable.of("analytics", "orders")) == [
+        LiveColumn("id", False),
+        LiveColumn("note", True),
+    ]
+    assert connection.statements == [DdlRenderer.COLUMNS_QUERY]
+
+
+def test_columns_of_a_missing_table_is_empty():
+    session, _ = make_session(FakeConnection())
+    assert session.columns(T) == []
+
+
+def test_columns_errors_are_redacted():
+    session, connection = make_session()
+    connection.errors["SELECT schema_name, table_name, column_name"] = leaky(
+        duckdb.IOException, PASSWORD
+    )
+    with pytest.raises(duckdb.IOException) as caught:
+        session.columns(T)
+    assert PASSWORD not in str(caught.value)

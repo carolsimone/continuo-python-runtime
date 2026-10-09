@@ -13,7 +13,11 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from continuo_engine_contract.port import WarehouseAdapter  # type: ignore[import-untyped]
+from continuo_engine_contract.port import (  # type: ignore[import-untyped]
+    LiveColumn,
+    TableIntrospection,
+    WarehouseAdapter,
+)
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
 
 from ..domain.columns import ColumnDefinition, column_types
@@ -42,7 +46,7 @@ def _columns(raw: list[dict]) -> list[ColumnDefinition]:
     return [ColumnDefinition.from_mapping(entry) for entry in raw]
 
 
-class LakeWarehouse(WarehouseAdapter):
+class LakeWarehouse(WarehouseAdapter, TableIntrospection):
     """WarehouseAdapter implemented over a LakeGateway."""
 
     def __init__(
@@ -158,6 +162,17 @@ class LakeWarehouse(WarehouseAdapter):
         docs/boundary-contract.md section 13.4).
         """
         TableLayout.from_config(config, {name: None for name in column_names})
+
+    def table_columns(self, schema: str, table: str) -> list[LiveColumn]:
+        """Columns of ``schema.table`` as the DuckLake catalog reports them.
+
+        Raises:
+            LookupError: If the table does not exist.
+        """
+        columns = self._gateway.columns(QualifiedTable.of(schema, table))
+        if not columns:
+            raise LookupError(f"table {schema}.{table} does not exist")
+        return columns
 
     def ensure_table(
         self,

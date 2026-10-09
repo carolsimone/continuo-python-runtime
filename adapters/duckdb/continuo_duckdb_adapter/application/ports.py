@@ -6,6 +6,8 @@ from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING
 
+from continuo_engine_contract.port import LiveColumn  # type: ignore[import-untyped]
+
 from ..domain.columns import ColumnDefinition
 from ..domain.identifiers import Identifier, QualifiedTable
 from ..domain.layout import TableLayout
@@ -34,6 +36,10 @@ class LakeGateway(ABC):
 
     @abstractmethod
     def table_exists(self, table: QualifiedTable) -> bool: ...
+
+    @abstractmethod
+    def columns(self, table: QualifiedTable) -> "list[LiveColumn]":
+        """Name and nullability of every column of *table*, in table order; [] when absent."""
 
     @abstractmethod
     def drop_table_if_exists(self, table: QualifiedTable) -> None: ...

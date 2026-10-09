@@ -25,6 +25,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `ensure_unique_key` and then the engine's `_upsert`). `ensure_table` takes an
   optional keyword-only `primary_key`. `continuo_engine_contract.keys` holds
   `ensure_unique_key` and `DuplicateKeyError(ValueError)`.
+- `continuo_engine_contract.conformance`: a pytest conformance suite for the
+  write capabilities (`IntrospectionConformance`, `AppendConformance`,
+  `UpsertConformance`). Each shipped adapter's integration suite runs it
+  against its real engine; a bring-your-own adapter subclasses the same
+  classes. Install with `continuo-engine-contract[testing]`.
 
 ### Changed
 

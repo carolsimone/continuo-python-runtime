@@ -209,8 +209,19 @@ dependencies = [
     { name = "sqlglot" },
 ]
 
+[package.optional-dependencies]
+testing = [
+    { name = "pyarrow" },
+    { name = "pytest" },
+]
+
 [package.metadata]
-requires-dist = [{ name = "sqlglot", specifier = "==30.17.0" }]
+requires-dist = [
+    { name = "pyarrow", marker = "extra == 'testing'", specifier = "==25.0.1" },
+    { name = "pytest", marker = "extra == 'testing'", specifier = "==9.1.1" },
+    { name = "sqlglot", specifier = "==30.17.0" },
+]
+provides-extras = ["testing"]
 
 [[package]]
 name = "continuo-postgres-adapter"

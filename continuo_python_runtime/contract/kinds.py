@@ -1,8 +1,9 @@
 """Per-kind contract rules: which fields a node of each kind must carry.
 
 Each kind is one ``KindRules`` entry composed of a script policy, a reads rule,
-and whether it may name a Secret. Adding a kind means adding one entry to
-``RULES``; nothing that parses a contract branches on the kind's name.
+whether it may name a Secret, and which write modes it may declare. Adding a
+kind means adding one entry to ``RULES``; nothing that parses a contract
+branches on the kind's name.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from typing import Any
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
 from sqlglot.errors import TokenError
 
-from continuo_python_runtime.contract.model import KINDS
+from continuo_python_runtime.contract.model import DEFAULT_MODE_TYPE, KINDS, MODE_TYPES
 from continuo_python_runtime.csv_source import parse_csv_uri
 from continuo_python_runtime.errors import ContractError
 
@@ -108,12 +109,18 @@ class KindRules:
     script_required: bool
     reads: ReadsRule
     secret_allowed: bool = False
+    # The write modes a node of this kind may declare. A new kind gets replace
+    # only unless its entry opts into more.
+    mode_types: frozenset[str] = frozenset({DEFAULT_MODE_TYPE})
 
 
 RULES: dict[str, KindRules] = {
-    "python-node": KindRules(script_required=True, reads=SqlReads()),
+    "python-node": KindRules(script_required=True, reads=SqlReads(), mode_types=MODE_TYPES),
+    # A csv drop is a snapshot of its source: replace only (spec D2).
     "python-csv": KindRules(script_required=False, reads=CsvRead()),
-    "python-api": KindRules(script_required=True, reads=NoReads(), secret_allowed=True),
+    "python-api": KindRules(
+        script_required=True, reads=NoReads(), secret_allowed=True, mode_types=MODE_TYPES
+    ),
 }
 
 

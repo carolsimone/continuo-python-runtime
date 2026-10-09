@@ -1,4 +1,11 @@
-from continuo_python_runtime.contract.model import DEFAULT_KIND, KINDS, Column, Node
+from continuo_python_runtime.contract.model import (
+    DEFAULT_KIND,
+    DEFAULT_MODE_TYPE,
+    KINDS,
+    MODE_TYPES,
+    Column,
+    Node,
+)
 
 
 def _node(**over):
@@ -43,3 +50,27 @@ def test_kind_accepts_python_csv():
 
 def test_kinds_frozenset_contains_every_kind():
     assert KINDS == frozenset({"python-node", "python-csv", "python-api"})
+
+
+def test_mode_types_are_the_closed_vocabulary():
+    assert MODE_TYPES == frozenset({"append", "upsert", "replace"})
+    assert DEFAULT_MODE_TYPE == "replace"
+
+
+def test_mode_type_defaults_to_replace_with_no_key():
+    n = _node()
+    assert n.mode_type == "replace"
+    assert n.primary_key == ()
+
+
+def test_an_upsert_node_keeps_its_key_as_written_in_key_order():
+    n = _node(
+        output_columns=(
+            Column("rate_date", "DATE", nullable=False),
+            Column("base", "VARCHAR(3)", nullable=False),
+        ),
+        mode_type="upsert",
+        primary_key=("base", "rate_date"),
+    )
+    assert n.mode_type == "upsert"
+    assert n.primary_key == ("base", "rate_date")

@@ -27,7 +27,7 @@ import hashlib
 import logging
 import os
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import psycopg2  # type: ignore[import-untyped]
@@ -309,6 +309,13 @@ def _column_ddl(columns: list[dict[str, Any]]) -> "pg_sql.Composed":
             parts.append(pg_sql.SQL("NOT NULL"))
         col_defs.append(pg_sql.SQL(" ").join(parts))
     return pg_sql.SQL(", ").join(col_defs)
+
+
+def _primary_key_ddl(primary_key: Sequence[str]) -> "pg_sql.Composed":
+    """``PRIMARY KEY (...)`` for an upsert node's table: enforced and indexed by postgres."""
+    return pg_sql.SQL("PRIMARY KEY ({})").format(
+        pg_sql.SQL(", ").join(pg_sql.Identifier(name) for name in primary_key)
+    )
 
 
 # Rows per INSERT statement on every write path (execute_values' page_size).
@@ -669,6 +676,7 @@ class PostgresAdapter(WarehouseAdapter, AppendCapable):
         columns: list[dict[str, Any]],
         *,
         config: dict[str, Any],
+        primary_key: Sequence[str] = (),
     ) -> None:
         """CREATE TABLE IF NOT EXISTS with typed DDL compiled from *columns*.
 
@@ -680,17 +688,33 @@ class PostgresAdapter(WarehouseAdapter, AppendCapable):
         keyword-only, matching the contract 0.6.0 port signature. The create
         and every index either all land or none do, in the same explicit
         BEGIN/COMMIT/ROLLBACK shape build_empty_from_columns uses.
+
+        *primary_key* (an upsert node's key, in the declared column spelling)
+        becomes the created table's ``PRIMARY KEY``, which ``_upsert``'s
+        ``ON CONFLICT`` needs. Like the indexes it applies only when this call
+        creates the table: an existing table without the constraint makes the
+        upsert fail at ``ON CONFLICT`` rather than collect duplicate keys.
         """
-        indexes = _validated_indexes(config, table, [col["name"] for col in columns])
+        declared = [col["name"] for col in columns]
+        indexes = _validated_indexes(config, table, declared)
         for col in columns:
             validate_column_type(col["type"])
+        undeclared = [name for name in primary_key if name not in declared]
+        if undeclared:
+            raise ValueError(
+                f"primary key on undeclared column(s) {undeclared!r}; "
+                f"declared columns: {declared!r}"
+            )
 
         self.ensure_schema(schema)
 
+        elements = _column_ddl(columns)
+        if primary_key:
+            elements = pg_sql.SQL(", ").join([elements, _primary_key_ddl(primary_key)])
         stmt = pg_sql.SQL("CREATE TABLE IF NOT EXISTS {}.{} ({})").format(
             pg_sql.Identifier(schema),
             pg_sql.Identifier(table),
-            _column_ddl(columns),
+            elements,
         )
         with self._conn.cursor() as cur:
             cur.execute("BEGIN")

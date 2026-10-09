@@ -34,7 +34,11 @@ import psycopg2  # type: ignore[import-untyped]
 import pyarrow as pa  # type: ignore[import-untyped]
 
 from continuo_engine_contract.config import ensure_known_keys  # type: ignore[import-untyped]
-from continuo_engine_contract.port import WarehouseAdapter  # type: ignore[import-untyped]
+from continuo_engine_contract.port import (  # type: ignore[import-untyped]
+    LiveColumn,
+    TableIntrospection,
+    WarehouseAdapter,
+)
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
 from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 from psycopg2 import errors as pg_errors  # type: ignore[import-untyped]
@@ -373,7 +377,7 @@ def _arrow_table_from_rows(colnames: list[str], rows: list[tuple[Any, ...]]) -> 
     return pa.table({name: pa.array(values) for name, values in zip(colnames, by_column)})
 
 
-class PostgresAdapter(WarehouseAdapter):
+class PostgresAdapter(WarehouseAdapter, TableIntrospection):
     """WarehouseAdapter speaking postgres over a psycopg2 connection."""
 
     def __init__(self, conn: "psycopg2.extensions.connection") -> None:
@@ -606,6 +610,26 @@ class PostgresAdapter(WarehouseAdapter):
                 self._conn.rollback()
                 raise
         return table
+
+    def table_columns(self, schema: str, table: str) -> list[LiveColumn]:
+        """Names and nullability of ``schema.table`` from ``information_schema.columns``.
+
+        Names are matched exactly: this adapter creates every schema, table and
+        column with quoted identifiers, so the catalog holds them as written.
+
+        Raises:
+            LookupError: If the table does not exist (or this role cannot see it).
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT column_name, is_nullable FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position",
+                (schema, table),
+            )
+            rows = cur.fetchall()
+        if not rows:
+            raise LookupError(f"table {schema}.{table} does not exist")
+        return [LiveColumn(name=name, nullable=is_nullable == "YES") for name, is_nullable in rows]
 
     @classmethod
     def validate_config(

@@ -65,6 +65,7 @@ import logging
 import os
 import uuid
 
+from collections.abc import Callable, Sequence
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -72,8 +73,8 @@ import pyarrow as pa  # type: ignore[import-untyped]
 
 from continuo_engine_contract.config import ensure_known_keys  # type: ignore[import-untyped]
 from continuo_engine_contract.port import (  # type: ignore[import-untyped]
+    AppendCapable,
     LiveColumn,
-    TableIntrospection,
     WarehouseAdapter,
 )
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
@@ -250,6 +251,12 @@ def _sibling_location(location: str, name: str) -> str:
     )
 
 
+def _append_statement(target_ref: str, stage_ref: str, columns: Sequence[str]) -> str:
+    """The append's one write to the target: ``INSERT ... SELECT`` every staged row."""
+    col_list = ", ".join(_quote(name) for name in columns)
+    return f"INSERT INTO {target_ref} ({col_list}) SELECT {col_list} FROM {stage_ref}"
+
+
 def _arrow_table_from_rows(colnames: list[str], rows: list[Any]) -> "pa.Table":
     """Build a column-wise Arrow table from cursor description names and fetched rows.
 
@@ -289,7 +296,7 @@ _INSERT_BATCH_SIZE = 500
 _STAGE_PREFIX = "__continuo_stage_"
 
 
-class TrinoAdapter(WarehouseAdapter, TableIntrospection):
+class TrinoAdapter(WarehouseAdapter, AppendCapable):
     """WarehouseAdapter speaking Trino (Iceberg connector) over the trino DBAPI."""
 
     def __init__(self, conn: "trino.dbapi.Connection", catalog: str) -> None:
@@ -650,6 +657,42 @@ class TrinoAdapter(WarehouseAdapter, TableIntrospection):
         finally:
             if stage_ref is not None:
                 self._drop_stage(stage_ref)
+
+    def _write_via_stage(
+        self, schema: str, table: str, data: "pa.Table", final_statement: Callable[[str], str]
+    ) -> None:
+        """Stage *data* beside ``schema.table``, then write the target in one statement.
+
+        Trino/Iceberg has no multi-statement transaction, but each statement is
+        one Iceberg commit: the rows are batch-inserted into a stage shaped
+        like the target (a refused row fails there, before the target is
+        touched), then ``final_statement(stage_ref)`` moves them all in one
+        commit. The stage is dropped afterwards, best-effort, so a committed
+        write never reports failure because of its cleanup.
+        """
+        stage_ref = self._create_stage(schema, table, uuid.uuid4().hex)
+        try:
+            logger.info("loading %d row(s) into staging table %s", data.num_rows, stage_ref)
+            self._insert_batches(stage_ref, data.schema.names, data)
+            self._execute(final_statement(stage_ref))
+        finally:
+            self._drop_stage(stage_ref)
+
+    def append(self, schema: str, table: str, data: "pa.Table") -> None:
+        """Insert every row of *data* into ``schema.table`` as one Iceberg commit.
+
+        Stage, then one ``INSERT ... SELECT`` (see ``_write_via_stage``). A
+        0-row *data* creates no stage and writes nothing.
+        """
+        if not data.num_rows:
+            logger.info("append of 0 rows into %s.%s: nothing to write", schema, table)
+            return
+        target_ref = self._table_ref(schema, table)
+        columns = data.schema.names
+        logger.info("appending %d row(s) into %s", data.num_rows, target_ref)
+        self._write_via_stage(
+            schema, table, data, lambda stage_ref: _append_statement(target_ref, stage_ref, columns)
+        )
 
     def close(self) -> None:
         """Release the underlying connection."""

@@ -4,12 +4,14 @@ The live behavior (Iceberg commits, NOT NULL in the stage, MERGE semantics) is
 covered by the integration suites; this file pins which statements run, in
 what order, and what happens when one of them fails.
 """
+import logging
 import re
 
 import pyarrow as pa
 import pytest
 
 from continuo_engine_contract.port import LiveColumn
+import continuo_trino_adapter.adapter as adapter_module
 from continuo_trino_adapter.adapter import TrinoAdapter
 
 
@@ -103,3 +105,52 @@ def test_table_columns_reads_information_schema_with_lowercased_names():
 def test_table_columns_of_a_missing_table_raises_lookup_error():
     with pytest.raises(LookupError, match=r"s\.t"):
         _adapter(_ScriptedConnection()).table_columns("s", "t")
+
+
+def test_append_statement_names_and_quotes_every_column():
+    assert adapter_module._append_statement(
+        '"iceberg"."s"."t"', '"iceberg"."s"."st"', ["order", "Rate", "pct%"]
+    ) == (
+        'INSERT INTO "iceberg"."s"."t" ("order", "Rate", "pct%") '
+        'SELECT "order", "Rate", "pct%" FROM "iceberg"."s"."st"'
+    )
+
+
+def test_append_stages_then_inserts_once_then_drops_the_stage():
+    conn = _ScriptedConnection()
+    _adapter(conn).append("s", "t", pa.table({"id": [1, 2]}))
+    s = conn.statements
+    stage = _ref(s[1], "stage")
+    assert s == [
+        LOCATION_QUERY,
+        f'CREATE TABLE {stage} (LIKE "iceberg"."s"."t" INCLUDING PROPERTIES) '
+        f"WITH (location = 's3://warehouse/s/{_name(stage)}')",
+        f'INSERT INTO {stage} ("id") VALUES (?), (?)',
+        f'INSERT INTO "iceberg"."s"."t" ("id") SELECT "id" FROM {stage}',
+        f"DROP TABLE {stage}",
+    ]
+
+
+def test_append_of_zero_rows_creates_no_stage():
+    conn = _ScriptedConnection()
+    _adapter(conn).append("s", "t", pa.table({"id": pa.array([], pa.int64())}))
+    assert conn.statements == []
+
+
+def test_a_failed_stage_insert_never_touches_the_target_and_drops_the_stage():
+    conn = _ScriptedConnection(fail_on={"VALUES (?": RuntimeError("NOT NULL violated")})
+    with pytest.raises(RuntimeError, match="NOT NULL"):
+        _adapter(conn).append("s", "t", pa.table({"id": [1]}))
+    stage = _ref(conn.statements[1], "stage")
+    assert not any(st.startswith('INSERT INTO "iceberg"."s"."t"') for st in conn.statements)
+    assert conn.statements[-1] == f"DROP TABLE {stage}"
+
+
+def test_a_failed_stage_drop_after_the_commit_is_only_logged(caplog):
+    conn = _ScriptedConnection(
+        fail_on={'DROP TABLE "iceberg"."s"."__continuo_stage_': RuntimeError("catalog hiccup")}
+    )
+    with caplog.at_level(logging.WARNING, logger="continuo_trino_adapter"):
+        _adapter(conn).append("s", "t", pa.table({"id": [1]}))
+    assert any(st.startswith('INSERT INTO "iceberg"."s"."t"') for st in conn.statements)
+    assert "best-effort cleanup of staging table" in caplog.text

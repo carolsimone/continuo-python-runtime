@@ -10,7 +10,15 @@ import pytest
 
 import trino
 
-from continuo_engine_contract.conformance import IntrospectionConformance
+from continuo_engine_contract.conformance import (
+    ARROW,
+    COLUMNS,
+    AppendConformance,
+    ConformanceBase,
+    IntrospectionConformance,
+    bulk_rows,
+    table_of,
+)
 from continuo_trino_adapter.adapter import TrinoAdapter
 
 pytestmark = pytest.mark.integration
@@ -39,3 +47,19 @@ def schema(adapter):
 
 class TestTrinoIntrospection(IntrospectionConformance):
     pass
+
+
+class TestTrinoAppend(AppendConformance):
+    pass
+
+
+def _stage_tables(adapter, schema):
+    rows = adapter._execute(f'SHOW TABLES FROM "iceberg"."{schema}"')
+    return [row[0] for row in rows if row[0].startswith("__continuo_stage_")]
+
+
+def test_a_failed_append_leaves_no_stage_table(adapter, schema):
+    table = ConformanceBase().new_table(adapter, schema, COLUMNS)
+    with pytest.raises(Exception):
+        adapter.append(schema, table, table_of(ARROW, bulk_rows(1)))
+    assert _stage_tables(adapter, schema) == []

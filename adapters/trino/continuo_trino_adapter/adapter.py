@@ -281,6 +281,9 @@ def _arrow_table_from_rows(colnames: list[str], rows: list[Any]) -> "pa.Table":
 # Batch size for multi-row INSERT VALUES statements in load().
 _INSERT_BATCH_SIZE = 500
 
+# Name prefix of the stage tables every write path stages its rows in.
+_STAGE_PREFIX = "__continuo_stage_"
+
 
 class TrinoAdapter(WarehouseAdapter):
     """WarehouseAdapter speaking Trino (Iceberg connector) over the trino DBAPI."""
@@ -532,6 +535,40 @@ class TrinoAdapter(WarehouseAdapter):
         logger.info("ensuring table %s exists", ref)
         self._execute(f"CREATE TABLE IF NOT EXISTS {ref} ({col_defs}){properties}")
 
+    def _create_stage(self, schema: str, table: str, token: str) -> str:
+        """Create an empty stage table shaped exactly like ``schema.table``; return its reference.
+
+        ``LIKE ... INCLUDING PROPERTIES`` copies the target's columns, NOT NULL
+        constraints and Iceberg properties, so a row the target would refuse
+        fails here, before the target is touched. The explicit location, a
+        fresh sibling of the target's, avoids Iceberg's "non-empty location"
+        rejection. The target must exist.
+        """
+        target_ref = self._table_ref(schema, table)
+        stage_table = f"{_STAGE_PREFIX}{token}"
+        stage_ref = self._table_ref(schema, stage_table)
+        stage_location = _sibling_location(self._table_location(schema, table), stage_table)
+        logger.info("creating staging table %s like %s", stage_ref, target_ref)
+        self._execute(
+            f"CREATE TABLE {stage_ref} "
+            f"(LIKE {target_ref} INCLUDING PROPERTIES) "
+            f"WITH (location = {_sql_string(stage_location)})"
+        )
+        return stage_ref
+
+    def _drop_stage(self, stage_ref: str) -> None:
+        """Drop a stage table best-effort: a failure is logged, never raised.
+
+        Callers drop the stage after their write; a write that already
+        committed must not report failure because its cleanup did not.
+        """
+        try:
+            self._execute(f"DROP TABLE {stage_ref}")
+        except Exception:
+            logger.warning(
+                "best-effort cleanup of staging table %s failed", stage_ref, exc_info=True
+            )
+
     def _insert_batches(self, table_ref: str, columns: list[str], data: "pa.Table") -> None:
         """Insert *data*'s rows into *table_ref* in batches of ``_INSERT_BATCH_SIZE``."""
         rows = data.to_pylist()
@@ -558,22 +595,11 @@ class TrinoAdapter(WarehouseAdapter):
         """
         columns = data.schema.names
         target_ref = self._table_ref(schema, table)
-        load_token = uuid.uuid4().hex
-        stage_table = f"__continuo_stage_{load_token}"
-        old_table = f"__continuo_old_{load_token}"
-        stage_ref = self._table_ref(schema, stage_table)
-        old_ref = self._table_ref(schema, old_table)
-        target_location = self._table_location(schema, table)
-        stage_location = _sibling_location(target_location, stage_table)
-        stage_created = False
+        token = uuid.uuid4().hex
+        old_ref = self._table_ref(schema, f"__continuo_old_{token}")
+        stage_ref: str | None = None
         try:
-            logger.info("creating staging table %s like %s", stage_ref, target_ref)
-            self._execute(
-                f"CREATE TABLE {stage_ref} "
-                f"(LIKE {target_ref} INCLUDING PROPERTIES) "
-                f"WITH (location = {_sql_string(stage_location)})"
-            )
-            stage_created = True
+            stage_ref = self._create_stage(schema, table, token)
             if data.num_rows:
                 logger.info("loading %d row(s) into staging table %s", data.num_rows, stage_ref)
                 self._insert_batches(stage_ref, columns, data)
@@ -596,14 +622,11 @@ class TrinoAdapter(WarehouseAdapter):
                     )
                 raise
             else:
-                stage_created = False
+                stage_ref = None  # it is the target now
                 self._execute(f"DROP TABLE {old_ref}")
         finally:
-            if stage_created:
-                try:
-                    self._execute(f"DROP TABLE {stage_ref}")
-                except Exception:
-                    logger.warning("best-effort cleanup of staging table %s failed", stage_ref)
+            if stage_ref is not None:
+                self._drop_stage(stage_ref)
 
     def close(self) -> None:
         """Release the underlying connection."""

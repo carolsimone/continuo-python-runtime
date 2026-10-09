@@ -6,7 +6,11 @@ Run the stack first:
 """
 import pytest
 
-from continuo_engine_contract.conformance import AppendConformance, IntrospectionConformance
+from continuo_engine_contract.conformance import (
+    AppendConformance,
+    IntrospectionConformance,
+    UpsertConformance,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -16,4 +20,8 @@ class TestDuckDBIntrospection(IntrospectionConformance):
 
 
 class TestDuckDBAppend(AppendConformance):
+    pass
+
+
+class TestDuckDBUpsert(UpsertConformance):
     pass

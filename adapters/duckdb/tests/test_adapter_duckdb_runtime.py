@@ -1,6 +1,7 @@
 """Runtime use cases, against the recording FakeLakeGateway (no engine)."""
 import pyarrow as pa
 import pytest
+from continuo_engine_contract.keys import DuplicateKeyError
 from continuo_engine_contract.port import LiveColumn
 
 from continuo_duckdb_adapter.application.ports import LakeConflictError
@@ -134,3 +135,35 @@ def test_append_rolls_back_when_the_insert_fails(warehouse, gateway):
     with pytest.raises(RuntimeError):
         warehouse.append("s", "t", pa.table({"id": [1]}))
     assert gateway.names() == ["begin", "insert_arrow", "rollback"]
+
+
+def test_ensure_table_accepts_and_ignores_a_primary_key(warehouse, gateway):
+    warehouse.ensure_table("s", "t", COLS, config={}, primary_key=("id",))
+    keyed = list(gateway.calls)
+    gateway.calls.clear()
+    warehouse.ensure_table("s", "t", COLS, config={})
+    assert gateway.calls == keyed
+
+
+def test_upsert_merges_in_one_transaction(warehouse, gateway):
+    data = pa.table({"id": [1, 2], "v": ["a", "b"]})
+    warehouse.upsert("s", "t", data, ["id"])
+    assert gateway.calls == [("begin",), ("merge_arrow", T, data, ("id",)), ("commit",)]
+
+
+def test_upsert_of_zero_rows_touches_nothing(warehouse, gateway):
+    warehouse.upsert("s", "t", pa.table({"id": pa.array([], pa.int32())}), ["id"])
+    assert gateway.calls == []
+
+
+def test_upsert_with_a_repeated_key_touches_nothing(warehouse, gateway):
+    with pytest.raises(DuplicateKeyError):
+        warehouse.upsert("s", "t", pa.table({"id": [1, 1]}), ["id"])
+    assert gateway.calls == []
+
+
+def test_upsert_rolls_back_when_the_merge_fails(warehouse, gateway):
+    gateway.fail_on["merge_arrow"] = RuntimeError("NOT NULL violated")
+    with pytest.raises(RuntimeError):
+        warehouse.upsert("s", "t", pa.table({"id": [1]}), ["id"])
+    assert gateway.names() == ["begin", "merge_arrow", "rollback"]

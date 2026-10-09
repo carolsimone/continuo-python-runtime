@@ -351,8 +351,9 @@ executor runs it as a Kubernetes Job:
   a read-only connection surface. The harness calls `ensure_table(...,
   config=...)` as a keyword unconditionally, and the abstract
   `WarehouseAdapter` port in `continuo-engine-contract` declares it:
-  `ensure_table(self, schema, table, columns,
-  *, config)` — required and keyword-only. Adapters implement exactly that
+  `ensure_table(self, schema, table, columns, *, config, primary_key=())` —
+  `config` required and keyword-only; `primary_key` (contract 0.8.0) optional
+  and keyword-only, passed by the harness only for upsert nodes. Adapters implement exactly that
   signature; callers pass `{}` when a node declares no physical layout.
 - **Early `config` tripwire**: `ensure_table` is called only *after* the
   script has run and its result has been conformed, so a bad `config` would

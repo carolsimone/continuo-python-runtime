@@ -18,6 +18,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `primary_key` (authored order) for `upsert`; both are part of
   `config_hash`. Entries of nodes that do not set them, and their hashes, are
   unchanged.
+- `continuo-engine-contract`: opt-in write capabilities on top of
+  `WarehouseAdapter` — `TableIntrospection` (`table_columns`, returning
+  `LiveColumn(name, nullable)`; `LookupError` for a missing table),
+  `AppendCapable` (`append`) and `UpsertCapable` (`upsert`, which runs
+  `ensure_unique_key` and then the engine's `_upsert`). `ensure_table` takes an
+  optional keyword-only `primary_key`. `continuo_engine_contract.keys` holds
+  `ensure_unique_key` and `DuplicateKeyError(ValueError)`.
 
 ### Changed
 

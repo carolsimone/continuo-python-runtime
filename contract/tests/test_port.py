@@ -5,14 +5,24 @@ entry points) into throwaway virtualenvs and run ``discover_adapter`` against th
 real ``importlib.metadata`` machinery — no monkeypatching of ``entry_points``, so the
 tests exercise actual entry-point loading rather than an assumed return shape.
 """
+import dataclasses
 import subprocess
 import textwrap
 
 from pathlib import Path
 
+import pyarrow as pa
 import pytest
 
-from continuo_engine_contract.port import ENTRY_POINT_GROUP, WarehouseAdapter
+from continuo_engine_contract.keys import DuplicateKeyError
+from continuo_engine_contract.port import (
+    ENTRY_POINT_GROUP,
+    AppendCapable,
+    LiveColumn,
+    TableIntrospection,
+    UpsertCapable,
+    WarehouseAdapter,
+)
 
 CONTRACT_ROOT = Path(__file__).resolve().parent.parent  # contract/
 
@@ -181,10 +191,120 @@ def test_ensure_table_signature_declares_config_keyword_only():
 
     sig = inspect.signature(WarehouseAdapter.ensure_table)
     params = list(sig.parameters)
-    assert params == ["self", "schema", "table", "columns", "config"]
+    assert params == ["self", "schema", "table", "columns", "config", "primary_key"]
     config = sig.parameters["config"]
     assert config.kind is inspect.Parameter.KEYWORD_ONLY
     assert config.default is inspect.Parameter.empty
+
+
+def test_ensure_table_accepts_an_optional_keyword_only_primary_key():
+    """The harness passes primary_key only for upsert nodes, so it must default to ()."""
+    import inspect
+
+    primary_key = inspect.signature(WarehouseAdapter.ensure_table).parameters["primary_key"]
+    assert primary_key.kind is inspect.Parameter.KEYWORD_ONLY
+    assert primary_key.default == ()
+
+
+def test_capabilities_declare_exactly_their_own_abstract_methods():
+    """No capability ships a method that exists but raises 'unsupported'."""
+    assert TableIntrospection.__abstractmethods__ == frozenset({"table_columns"})
+    assert AppendCapable.__abstractmethods__ == frozenset({"table_columns", "append"})
+    assert UpsertCapable.__abstractmethods__ == frozenset({"table_columns", "_upsert"})
+
+
+def test_a_partially_implemented_append_capability_cannot_be_instantiated():
+    class NoIntrospection(AppendCapable):
+        def append(self, schema, table, data):
+            ...
+
+    with pytest.raises(TypeError, match="table_columns"):
+        NoIntrospection()  # type: ignore[abstract]
+
+
+def test_a_partially_implemented_upsert_capability_cannot_be_instantiated():
+    class NoEngineWrite(UpsertCapable):
+        def table_columns(self, schema, table):
+            return []
+
+    with pytest.raises(TypeError, match="_upsert"):
+        NoEngineWrite()  # type: ignore[abstract]
+
+
+class _RecordingUpsert(UpsertCapable):
+    def __init__(self):
+        self.writes = []
+
+    def table_columns(self, schema, table):
+        return []
+
+    def _upsert(self, schema, table, data, primary_key):
+        self.writes.append((schema, table, data, tuple(primary_key)))
+
+
+def test_upsert_hands_unique_rows_to_the_engine_write():
+    adapter = _RecordingUpsert()
+    data = pa.table({"id": [1, 2], "v": ["a", "b"]})
+    adapter.upsert("s", "t", data, ["id"])
+    assert adapter.writes == [("s", "t", data, ("id",))]
+
+
+def test_upsert_checks_the_key_before_the_engine_sees_any_row():
+    adapter = _RecordingUpsert()
+    with pytest.raises(DuplicateKeyError):
+        adapter.upsert("s", "t", pa.table({"id": [1, 1]}), ["id"])
+    assert adapter.writes == []
+
+
+class _PortOnly(WarehouseAdapter):
+    @classmethod
+    def required_env(cls):
+        return []
+
+    @classmethod
+    def from_env(cls):
+        return cls()
+
+    def ensure_schema(self, schema):
+        ...
+
+    def drop_schema(self, schema):
+        ...
+
+    def build_empty_from_sql(self, schema, table, compiled_sql):
+        ...
+
+    def clone_empty_from_prod(self, candidate_schema, prod_schema, table):
+        ...
+
+    def build_empty_from_columns(self, schema, table, columns, config):
+        ...
+
+    def check_binds(self, sql):
+        ...
+
+    def fetch(self, sql):
+        ...
+
+    def ensure_table(self, schema, table, columns, *, config, primary_key=()):
+        ...
+
+    def load(self, schema, table, data):
+        ...
+
+    def close(self):
+        ...
+
+
+def test_capabilities_are_opt_in():
+    adapter = _PortOnly()
+    assert not isinstance(adapter, (TableIntrospection, AppendCapable, UpsertCapable))
+
+
+def test_live_column_is_a_frozen_value():
+    assert LiveColumn("id", False) == LiveColumn(name="id", nullable=False)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        LiveColumn("id", False).name = "x"  # type: ignore[misc]
 
 
 # --- Real installed-adapter discovery via throwaway venvs --------------------

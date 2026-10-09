@@ -1,4 +1,4 @@
-"""The warehouse-engine adapter port and entry-point discovery.
+"""The warehouse-engine adapter port, its opt-in write capabilities, and discovery.
 
 One port covers both roles an engine plays in Continuo:
 
@@ -9,6 +9,11 @@ One port covers both roles an engine plays in Continuo:
 * **python-node data-plane I/O** — the runtime harness reads declared inputs and
   writes a node's result (``fetch``, ``ensure_table``, ``load``).
 
+Writing modes beyond replace are opt-in capabilities an adapter declares by
+inheritance (``TableIntrospection``, ``AppendCapable``, ``UpsertCapable``): an
+adapter that declares none still runs every ``replace`` node, and one that
+declares a capability must implement all of it to be instantiated.
+
 Both roles are served by the same connection to the same warehouse, so they are
 one implementation per engine rather than two. Engine packages register a single
 ``continuo_engine.adapters`` entry point; each image installs exactly one, so
@@ -17,8 +22,12 @@ discovery — not configuration — selects the adapter.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from dataclasses import dataclass
 from importlib.metadata import entry_points
 from typing import TYPE_CHECKING
+
+from continuo_engine_contract.keys import ensure_unique_key
 
 ENTRY_POINT_GROUP = "continuo_engine.adapters"
 
@@ -126,7 +135,13 @@ class WarehouseAdapter(ABC):
 
     @abstractmethod
     def ensure_table(
-        self, schema: str, table: str, columns: list[dict], *, config: dict
+        self,
+        schema: str,
+        table: str,
+        columns: list[dict],
+        *,
+        config: dict,
+        primary_key: Sequence[str] = (),
     ) -> None:
         """CREATE TABLE IF NOT EXISTS with the typed DDL compiled from columns.
 
@@ -146,6 +161,13 @@ class WarehouseAdapter(ABC):
         recognize, and MUST validate config values before interpolating
         anything into DDL — the same discipline
         :meth:`build_empty_from_columns` follows.
+
+        *primary_key* names an upsert node's key columns, spelled exactly as in
+        *columns*. The harness passes it only for ``upsert`` nodes, so an
+        adapter that is not :class:`UpsertCapable` never receives it. An engine
+        that can enforce a key declares it on the table it creates (postgres:
+        ``PRIMARY KEY``); an engine without constraints ignores it. Like
+        *config*, it applies only when this call creates the table.
         """
 
     @abstractmethod
@@ -155,6 +177,80 @@ class WarehouseAdapter(ABC):
     @abstractmethod
     def close(self) -> None:
         """Release the underlying connection."""
+
+
+@dataclass(frozen=True)
+class LiveColumn:
+    """One column of an existing table, as the engine reports it."""
+
+    name: str
+    nullable: bool
+
+
+class TableIntrospection(ABC):
+    """Reads the shape of an existing table.
+
+    The base of every write capability: before an append or upsert the
+    harness compares the live table with the node's declared columns.
+    """
+
+    @abstractmethod
+    def table_columns(self, schema: str, table: str) -> list[LiveColumn]:
+        """Columns of an existing table. Raises if the table does not exist.
+
+        Raises ``LookupError`` naming ``schema.table`` when it does not exist.
+        Column order is not part of the contract; callers compare by name.
+        """
+
+
+class AppendCapable(TableIntrospection):
+    """An engine that can add rows to a table and keep the rows already there.
+
+    Declare it by inheritance, e.g. ``class MyAdapter(WarehouseAdapter,
+    AppendCapable)``; the harness runs a ``mode_type: append`` node only on an
+    adapter that is an instance of this class.
+    """
+
+    @abstractmethod
+    def append(self, schema: str, table: str, data: "pyarrow.Table") -> None:
+        """Atomically insert every row of data. All rows or none.
+
+        The insert names *data*'s columns, so their order need not match the
+        table's. A 0-row *data* writes nothing.
+        """
+
+
+class UpsertCapable(TableIntrospection):
+    """An engine that can insert new keys and overwrite existing ones in one write.
+
+    Declare it by inheritance. :meth:`upsert` is a template method: the key
+    invariant is checked here, once for every engine, and the rows then go to
+    the engine's :meth:`_upsert`.
+    """
+
+    def upsert(
+        self, schema: str, table: str, data: "pyarrow.Table", primary_key: Sequence[str]
+    ) -> None:
+        """Atomically insert rows with a new key and overwrite rows whose key exists.
+
+        Rows whose key is not in data are untouched. *primary_key* names
+        columns of *data* exactly as spelled there.
+
+        Raises:
+            DuplicateKeyError: If *data* repeats a key; nothing is written.
+        """
+        ensure_unique_key(data, primary_key)
+        self._upsert(schema, table, data, primary_key)
+
+    @abstractmethod
+    def _upsert(
+        self, schema: str, table: str, data: "pyarrow.Table", primary_key: Sequence[str]
+    ) -> None:
+        """Engine-specific write. Keys in data are already unique.
+
+        All rows or none; a 0-row *data* writes nothing. When every column is
+        in the key there is nothing to overwrite: insert only the new keys.
+        """
 
 
 def discover_adapter() -> tuple[str, type[WarehouseAdapter]]:

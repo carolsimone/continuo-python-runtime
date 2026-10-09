@@ -353,7 +353,10 @@ executor runs it as a Kubernetes Job:
   `primary_key` — and performs the only write, chosen by `mode_type`: `load`
   (replace), `append` or `upsert`. `append` and `upsert` need the adapter to
   declare `AppendCapable` / `UpsertCapable`; the harness checks that right after
-  selecting the node and fails with `LoadError` otherwise. An `upsert` whose rows
+  selecting the node and fails with `LoadError` otherwise. Before an `append` or
+  `upsert` it compares the live target table (`TARGET_SCHEMA.TABLE_NAME`) with
+  `output_columns` — names case-insensitively, nullability exactly, order and
+  types ignored — and fails with `LoadError` on any difference. An `upsert` whose rows
   repeat a key fails with `ConformError` and writes nothing. Scripts get
   a read-only connection surface. The harness calls `ensure_table(...,
   config=...)` as a keyword unconditionally, and the abstract

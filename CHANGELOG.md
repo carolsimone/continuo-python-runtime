@@ -50,7 +50,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `ensure_table`). An adapter without the needed capability fails with
   `LoadError: <Adapter> does not support <mode>` before the script runs; an
   `upsert` whose rows repeat a key fails with `ConformError` and writes
-  nothing. See "Write modes" in the README.
+  nothing. Before an `append` or `upsert` the live table's columns and
+  nullability are compared with `output_columns`; any difference is a
+  `LoadError` naming each one. See "Write modes" in the README.
 
 ### Changed
 

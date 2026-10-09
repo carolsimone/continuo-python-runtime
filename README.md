@@ -212,6 +212,14 @@ produced, never how it is checked or written.
   and is retried stores its rows twice. `upsert` is idempotent.
 - An `upsert` run whose own rows repeat a key fails with `ConformError` and
   writes nothing.
+- Before an `append` or `upsert` the harness compares the live table with
+  `output_columns` — names case-insensitively, nullability exactly; order and
+  types are not compared — and fails with `LoadError` naming every missing
+  column, unexpected column and nullability mismatch. Changing an `append` or
+  `upsert` table (columns, types, nullability, key or mode) needs a new table
+  name (`_v2`) under a new contract; continuo rejects the release otherwise.
+  Adding a nullable column is no exception: the existing rows cannot be
+  backfilled.
 - The installed engine must support the mode; all three shipped adapters do.
   A bring-your-own adapter declares `AppendCapable` / `UpsertCapable` from
   `continuo-engine-contract` (and can run its conformance suite); without them
@@ -311,7 +319,7 @@ text.
 | `ReadError` | `ctx.read()` was called with an undeclared name, or a declared read failed at the warehouse. | The `reads:` map, or the upstream query/warehouse access. |
 | `ScriptError` | `run()` raised, has no callable `run`, or returned a value that isn't Arrow-convertible. | The node script. |
 | `ConformError` | Structural mismatch (extra/missing/duplicate columns), a strict-cast failure, a not-null violation, a VARCHAR/CHAR overflow, or an `upsert` run whose rows repeat a primary key. | The script's output shape, or the `output_columns` declaration. |
-| `LoadError` | Adapter construction failed, the installed engine does not support the node's `mode_type`, or the DDL/INSERT failed at the warehouse during the write. | Warehouse connectivity/permissions, the engine image, or the target table. |
+| `LoadError` | Adapter construction failed, the installed engine does not support the node's `mode_type`, the live table's shape differs from `output_columns` (append/upsert), or the DDL/INSERT failed at the warehouse during the write. | Warehouse connectivity/permissions, the engine image, or the target table. |
 
 ## Engine selection
 

@@ -3,7 +3,7 @@ import json
 
 import yaml
 
-from continuo_engine_contract.port import WarehouseAdapter
+from continuo_engine_contract.port import LiveColumn, WarehouseAdapter
 
 from continuo_python_runtime.harness import run_node
 from tests.conftest import FakeAppendAdapter, FakeUpsertAdapter, FakeWarehouseAdapter
@@ -200,4 +200,60 @@ def test_a_value_error_from_the_engine_is_not_taken_for_a_repeated_key(tmp_path,
     assert run_node(_env(_repo(tmp_path, **UPSERT)), adapter=Overflowing()) == 1
     assert _message(capsys.readouterr().out) == (
         "LoadError: failed to write fx.fx_rates: numeric field overflow"
+    )
+
+
+def test_append_into_a_table_missing_a_declared_column_fails_naming_it(tmp_path, capsys):
+    adapter = FakeAppendAdapter(live_columns=[LiveColumn("rate_date", False), LiveColumn("base", False)])
+    assert run_node(_env(_repo(tmp_path, mode_type="append")), adapter=adapter) == 1
+    assert _message(capsys.readouterr().out) == (
+        "LoadError: table fx.fx_rates does not match the contract's output_columns: "
+        "missing column(s) ['rate']. An append or upsert table keeps its rows, so its shape "
+        "cannot change: write to a new table (a _v2 name) under a new contract"
+    )
+    assert adapter.appended is None
+
+
+def test_upsert_reports_every_shape_difference_at_once(tmp_path, capsys):
+    adapter = FakeUpsertAdapter(live_columns=[
+        LiveColumn("rate_date", True), LiveColumn("base", False),
+        LiveColumn("rate", True), LiveColumn("old_rate", True),
+    ])
+    assert run_node(_env(_repo(tmp_path, **UPSERT)), adapter=adapter) == 1
+    message = _message(capsys.readouterr().out)
+    assert "unexpected column(s) ['old_rate']" in message
+    assert "column rate_date is nullable: true in the table but nullable: false in the contract" in message
+    assert adapter.upserted is None
+
+
+def test_the_shape_check_inspects_the_target_table_not_the_contract_relation(tmp_path, capsys):
+    adapter = FakeAppendAdapter()
+    env = _env(_repo(tmp_path, mode_type="append"), TARGET_SCHEMA="candidate_fx")
+    assert run_node(env, adapter=adapter) == 0
+    assert adapter.introspected == ("candidate_fx", "fx_rates")
+
+
+def test_a_matching_shape_in_another_case_and_order_is_written(tmp_path, capsys):
+    adapter = FakeAppendAdapter(live_columns=[
+        LiveColumn("RATE", True), LiveColumn("Base", False), LiveColumn("RATE_DATE", False),
+    ])
+    assert run_node(_env(_repo(tmp_path, mode_type="append")), adapter=adapter) == 0
+    assert adapter.appended is not None
+
+
+def test_replace_never_inspects_the_table(tmp_path, capsys):
+    adapter = FakeAppendAdapter(live_columns=[])
+    assert run_node(_env(_repo(tmp_path)), adapter=adapter) == 0
+    assert adapter.introspected is None
+    assert adapter.loaded is not None
+
+
+def test_a_table_columns_failure_is_a_load_error(tmp_path, capsys):
+    class Vanished(FakeAppendAdapter):
+        def table_columns(self, schema, table):
+            raise LookupError(f"table {schema}.{table} does not exist")
+
+    assert run_node(_env(_repo(tmp_path, mode_type="append")), adapter=Vanished()) == 1
+    assert _message(capsys.readouterr().out) == (
+        "LoadError: failed to write fx.fx_rates: table fx.fx_rates does not exist"
     )

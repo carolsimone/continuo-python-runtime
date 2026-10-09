@@ -45,6 +45,7 @@ from continuo_python_runtime.errors import (
     LoadError,
     ScriptError,
 )
+from continuo_python_runtime.shape import shape_diff
 
 logger = logging.getLogger("continuo_python_runtime.harness")
 
@@ -294,6 +295,24 @@ def _writer_for(adapter: Any, node: Node) -> _Writer:
     return writer
 
 
+def _check_shape(adapter: Any, node: Node, schema: str, table: str) -> None:
+    """Fail unless the live target table still has the node's declared shape.
+
+    Runs before an append or upsert only: those keep earlier rows, so a table
+    whose columns or nullability drifted (changed outside the contract, or
+    created before the release gate recorded shapes) must not be written. It
+    inspects the table actually written -- ``TARGET_SCHEMA.TABLE_NAME`` -- not
+    ``node.relation``.
+
+    Raises:
+        LoadError: Naming every missing column, unexpected column and
+            nullability mismatch.
+    """
+    diff = shape_diff(node.output_columns, adapter.table_columns(schema, table))
+    if diff:
+        raise LoadError(diff.message(f"{schema}.{table}"))
+
+
 def run_node(
     env: Mapping[str, str], adapter: Any = None, reader: CsvSourceReader | None = None
 ) -> int:
@@ -340,7 +359,7 @@ def run_node(
         _validate_config_early(active_adapter, node)
         writer = _writer_for(active_adapter, node)
 
-        table =_PRODUCERS[node.kind](node, active_adapter, app_root, reader)
+        table = _PRODUCERS[node.kind](node, active_adapter, app_root, reader)
 
         conformed = conform(table, node.output_columns, node.extra_columns)
 
@@ -359,6 +378,8 @@ def run_node(
                 )
             else:
                 active_adapter.ensure_table(target_schema, table_name, columns, config=node.config)
+            if writer.capability is not None:
+                _check_shape(active_adapter, node, target_schema, table_name)
             writer.write(active_adapter, target_schema, table_name, conformed, key)
         except HarnessError:
             raise

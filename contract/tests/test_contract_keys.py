@@ -66,3 +66,30 @@ def test_a_key_column_missing_from_the_data_is_rejected():
     with pytest.raises(ValueError, match=r"primary key column\(s\) \['quote'\]") as caught:
         ensure_unique_key(pa.table({"base": ["EUR"]}), ["base", "quote"])
     assert type(caught.value) is ValueError
+
+
+def test_a_floating_point_key_is_rejected():
+    # Arrow groups 0.0 and -0.0 as distinct; a warehouse treats them as one key.
+    data = pa.table({"id": pa.array([0.0, -0.0], pa.float64())})
+    with pytest.raises(ValueError, match="floating-point") as caught:
+        ensure_unique_key(data, ["id"])
+    assert type(caught.value) is ValueError
+
+
+def test_a_float32_key_is_rejected():
+    data = pa.table({"id": pa.array([1.0, 2.0], pa.float32())})
+    with pytest.raises(ValueError, match="floating-point") as caught:
+        ensure_unique_key(data, ["id"])
+    assert type(caught.value) is ValueError
+
+
+def test_a_composite_key_with_a_float_column_is_rejected():
+    data = pa.table({"base": ["EUR", "USD"], "rate": pa.array([1.5, 2.5], pa.float64())})
+    with pytest.raises(ValueError, match=r"column\(s\) \['rate'\] are floating-point") as caught:
+        ensure_unique_key(data, ["base", "rate"])
+    assert type(caught.value) is ValueError
+
+
+def test_a_decimal_key_is_allowed():
+    data = pa.table({"k": pa.array([Decimal("1.0"), Decimal("2.0")], pa.decimal128(12, 6))})
+    ensure_unique_key(data, ["k"])

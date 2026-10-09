@@ -34,7 +34,9 @@ def ensure_unique_key(data: "pyarrow.Table", primary_key: Sequence[str]) -> None
     needs no pyarrow import.
 
     Raises:
-        ValueError: If *primary_key* is empty or names a column *data* lacks.
+        ValueError: If *primary_key* is empty, names a column *data* lacks, or
+            includes a floating-point column (a warehouse treats ``0.0`` and
+            ``-0.0`` as one key, which this check cannot see).
         DuplicateKeyError: If a key value appears in more than one row.
     """
     key = list(primary_key)
@@ -44,6 +46,17 @@ def ensure_unique_key(data: "pyarrow.Table", primary_key: Sequence[str]) -> None
     if missing:
         raise ValueError(
             f"primary key column(s) {missing} are not in the data's columns {data.column_names}"
+        )
+    floating = [
+        name
+        for name in key
+        if str(data.schema.field(name).type) in {"halffloat", "float", "double"}
+    ]
+    if floating:
+        raise ValueError(
+            f"primary key column(s) {floating} are floating-point; floating-point "
+            "columns cannot be a primary key because the warehouse treats values like "
+            "0.0 and -0.0 as equal while this check would see them as distinct"
         )
     if data.num_rows < 2:
         return

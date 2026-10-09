@@ -19,7 +19,7 @@ dependencies = [
     # directly. Both packages ship from this repo on one v* tag, so a new
     # contract version never exists without a new runtime version to match it;
     # an exact pin therefore costs nothing and keeps the tested pair together.
-    "continuo-engine-contract==0.7.3",
+    "continuo-engine-contract==0.8.0",
     "boto3==1.43.85",
     "pyarrow==25.0.1",
     "PyYAML==6.0.3",

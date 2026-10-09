@@ -39,6 +39,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the trove classifiers and `setup-python` inputs track its major.minor. A new
   consistency guard (`tests/test_python_version_consistency.py`) scans every
   `pyproject.toml`, `Dockerfile*` and workflow and fails on any drift.
+- `continuo-engine-contract` 0.7.3 -> 0.8.0 (the write capabilities above).
+  The runtime and the three adapters pin it exactly, as do the engine images'
+  `image-requirements-*.txt`.
 - **Breaking for newly copied templates.** The `template/` release workflow
   calls continuo's public release API instead of an unauthenticated webhook:
   - `RELEASE_ENDPOINT` keeps its name but is now the origin of continuo's

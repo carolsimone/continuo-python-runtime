@@ -14,8 +14,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from continuo_engine_contract.port import (  # type: ignore[import-untyped]
+    AppendCapable,
     LiveColumn,
-    TableIntrospection,
     WarehouseAdapter,
 )
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
@@ -46,7 +46,7 @@ def _columns(raw: list[dict]) -> list[ColumnDefinition]:
     return [ColumnDefinition.from_mapping(entry) for entry in raw]
 
 
-class LakeWarehouse(WarehouseAdapter, TableIntrospection):
+class LakeWarehouse(WarehouseAdapter, AppendCapable):
     """WarehouseAdapter implemented over a LakeGateway."""
 
     def __init__(
@@ -214,6 +214,20 @@ class LakeWarehouse(WarehouseAdapter, TableIntrospection):
             if data.num_rows:
                 logger.info("loading %d row(s) into %s.%s", data.num_rows, schema, table)
                 self._gateway.insert_arrow(target, data)
+
+    def append(self, schema: str, table: str, data: "pa.Table") -> None:
+        """Atomically insert every row of *data*; earlier rows stay (one transaction).
+
+        The insert names *data*'s columns. A 0-row *data* opens no transaction,
+        so DuckLake records no snapshot for it.
+        """
+        if not data.num_rows:
+            logger.info("append of 0 rows into %s.%s: nothing to write", schema, table)
+            return
+        target = QualifiedTable.of(schema, table)
+        with self._gateway.transaction():
+            logger.info("appending %d row(s) into %s.%s", data.num_rows, schema, table)
+            self._gateway.insert_arrow(target, data)
 
     def close(self) -> None:
         """Release the underlying connection."""

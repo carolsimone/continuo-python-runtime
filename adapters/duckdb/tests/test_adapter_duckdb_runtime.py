@@ -116,3 +116,21 @@ def test_table_columns_returns_the_gateways_columns(warehouse, gateway):
 def test_table_columns_of_a_missing_table_raises_lookup_error(warehouse, gateway):
     with pytest.raises(LookupError, match=r"s\.t"):
         warehouse.table_columns("s", "t")
+
+
+def test_append_inserts_in_one_transaction_without_clearing(warehouse, gateway):
+    data = pa.table({"id": [1, 2]})
+    warehouse.append("s", "t", data)
+    assert gateway.calls == [("begin",), ("insert_arrow", T, data), ("commit",)]
+
+
+def test_append_of_zero_rows_touches_nothing(warehouse, gateway):
+    warehouse.append("s", "t", pa.table({"id": pa.array([], pa.int32())}))
+    assert gateway.calls == []
+
+
+def test_append_rolls_back_when_the_insert_fails(warehouse, gateway):
+    gateway.fail_on["insert_arrow"] = RuntimeError("NOT NULL violated")
+    with pytest.raises(RuntimeError):
+        warehouse.append("s", "t", pa.table({"id": [1]}))
+    assert gateway.names() == ["begin", "insert_arrow", "rollback"]

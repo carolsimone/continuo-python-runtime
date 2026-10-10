@@ -30,6 +30,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `UpsertConformance`). Adapter integration suites subclass the reusable
   classes and run them against their real engine, providing `adapter` and
   `schema` fixtures. Install with `continuo-engine-contract[testing]`.
+- `continuo-postgres-adapter`: `append` (batched inserts in one transaction),
+  `upsert` (`INSERT ... ON CONFLICT (key) DO UPDATE`, `DO NOTHING` when every
+  column is in the key) and `table_columns`; `ensure_table` declares an
+  upsert key as the table's `PRIMARY KEY`. `load` now shares the insert path
+  (no behavior change).
 
 ### Changed
 

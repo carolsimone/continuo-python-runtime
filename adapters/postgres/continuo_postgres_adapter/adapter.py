@@ -8,8 +8,10 @@ One class covers both roles Continuo asks of an engine:
   without scanning data. Schema creation is serialized on a session advisory
   lock because parallel root validation nodes race on ``CREATE SCHEMA``.
 * **Python-node data-plane I/O** — ``fetch`` executes one declared read and
-  returns an Arrow table; ``ensure_table``/``load`` build and atomically
-  replace a table's contents.
+  returns an Arrow table; ``ensure_table`` builds the table (an upsert key as
+  its ``PRIMARY KEY``); ``load`` atomically replaces its contents, ``append``
+  adds rows and ``_upsert`` inserts or overwrites by key, all through one
+  insert helper; ``table_columns`` reads its shape.
 
 The connection runs with ``autocommit = True``: every method owns its
 transaction explicitly rather than relying on psycopg2's implicit
@@ -17,22 +19,29 @@ per-connection transaction. A single-statement method (``drop_schema``,
 ``build_empty_from_sql``, ``clone_empty_from_prod``) needs nothing further —
 under autocommit each statement commits as it runs. A method that must apply
 several statements atomically (``build_empty_from_columns``, ``check_binds``,
-``ensure_table``, ``load``) wraps them in its own explicit
+``ensure_table``, ``load``, ``append``, ``_upsert``) wraps them in its own explicit
 ``BEGIN``/``COMMIT``, with a ``ROLLBACK`` on the error path so a mid-sequence
 failure leaves no partial change and no aborted transaction behind for the
 next call on the same connection.
 """
+import contextlib
 import hashlib
 import logging
 import os
 
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import psycopg2  # type: ignore[import-untyped]
 import pyarrow as pa  # type: ignore[import-untyped]
 
 from continuo_engine_contract.config import ensure_known_keys  # type: ignore[import-untyped]
-from continuo_engine_contract.port import WarehouseAdapter  # type: ignore[import-untyped]
+from continuo_engine_contract.port import (  # type: ignore[import-untyped]
+    AppendCapable,
+    LiveColumn,
+    UpsertCapable,
+    WarehouseAdapter,
+)
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
 from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 from psycopg2 import errors as pg_errors  # type: ignore[import-untyped]
@@ -305,6 +314,65 @@ def _column_ddl(columns: list[dict[str, Any]]) -> "pg_sql.Composed":
     return pg_sql.SQL(", ").join(col_defs)
 
 
+def _primary_key_ddl(primary_key: Sequence[str]) -> "pg_sql.Composed":
+    """``PRIMARY KEY (...)`` for an upsert node's table: enforced and indexed by postgres."""
+    return pg_sql.SQL("PRIMARY KEY ({})").format(
+        pg_sql.SQL(", ").join(pg_sql.Identifier(name) for name in primary_key)
+    )
+
+
+# Rows per INSERT statement on every write path (execute_values' page_size).
+_INSERT_PAGE_SIZE = 1000
+
+
+def _insert_rows(
+    cur: Any,
+    schema: str,
+    table: str,
+    data: "pa.Table",
+    suffix: "pg_sql.Composable | None" = None,
+) -> None:
+    """Insert every row of *data* into ``schema.table`` inside the caller's transaction.
+
+    Batched INSERTs (``execute_values``, ``_INSERT_PAGE_SIZE`` rows per
+    statement) that name *data*'s columns, so the table's own column order
+    does not matter. *suffix* (an ``ON CONFLICT`` clause) follows the VALUES
+    list. ``execute_values`` reparses every percent token after the composable
+    identifiers have rendered, so literal percents in identifiers are escaped
+    and only its one values-list token is left unescaped. The single insert
+    path behind ``load``, ``append`` and ``_upsert``.
+    """
+    columns = data.schema.names
+    values = [tuple(row[c] for c in columns) for row in data.to_pylist()]
+    prefix = pg_sql.SQL("INSERT INTO {}.{} ({})").format(
+        pg_sql.Identifier(schema),
+        pg_sql.Identifier(table),
+        pg_sql.SQL(", ").join(pg_sql.Identifier(c) for c in columns),
+    )
+    statement = prefix.as_string(cur).replace("%", "%%") + " VALUES %s"
+    if suffix is not None:
+        statement += " " + suffix.as_string(cur).replace("%", "%%")
+    execute_values(cur, statement, values, page_size=_INSERT_PAGE_SIZE)
+
+
+def _on_conflict(columns: Sequence[str], primary_key: Sequence[str]) -> "pg_sql.Composed":
+    """The upsert's ``ON CONFLICT`` clause.
+
+    Overwrites every non-key column from ``EXCLUDED``; with every column in
+    the key there is nothing to overwrite, so ``DO NOTHING``.
+    """
+    key = set(primary_key)
+    target = pg_sql.SQL(", ").join(pg_sql.Identifier(name) for name in primary_key)
+    updates = [name for name in columns if name not in key]
+    if not updates:
+        return pg_sql.SQL("ON CONFLICT ({}) DO NOTHING").format(target)
+    assignments = pg_sql.SQL(", ").join(
+        pg_sql.SQL("{} = EXCLUDED.{}").format(pg_sql.Identifier(name), pg_sql.Identifier(name))
+        for name in updates
+    )
+    return pg_sql.SQL("ON CONFLICT ({}) DO UPDATE SET {}").format(target, assignments)
+
+
 def _arrow_table_from_rows(colnames: list[str], rows: list[tuple[Any, ...]]) -> "pa.Table":
     """Build a column-wise Arrow table from cursor description names and fetched rows.
 
@@ -337,7 +405,7 @@ def _arrow_table_from_rows(colnames: list[str], rows: list[tuple[Any, ...]]) -> 
     return pa.table({name: pa.array(values) for name, values in zip(colnames, by_column)})
 
 
-class PostgresAdapter(WarehouseAdapter):
+class PostgresAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
     """WarehouseAdapter speaking postgres over a psycopg2 connection."""
 
     def __init__(self, conn: "psycopg2.extensions.connection") -> None:
@@ -571,6 +639,26 @@ class PostgresAdapter(WarehouseAdapter):
                 raise
         return table
 
+    def table_columns(self, schema: str, table: str) -> list[LiveColumn]:
+        """Names and nullability of ``schema.table`` from ``information_schema.columns``.
+
+        Names are matched exactly: this adapter creates every schema, table and
+        column with quoted identifiers, so the catalog holds them as written.
+
+        Raises:
+            LookupError: If the table does not exist (or this role cannot see it).
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT column_name, is_nullable FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position",
+                (schema, table),
+            )
+            rows = cur.fetchall()
+        if not rows:
+            raise LookupError(f"table {schema}.{table} does not exist")
+        return [LiveColumn(name=name, nullable=is_nullable == "YES") for name, is_nullable in rows]
+
     @classmethod
     def validate_config(
         cls, config: dict[str, Any] | None, column_names: list[str]
@@ -609,6 +697,7 @@ class PostgresAdapter(WarehouseAdapter):
         columns: list[dict[str, Any]],
         *,
         config: dict[str, Any],
+        primary_key: Sequence[str] = (),
     ) -> None:
         """CREATE TABLE IF NOT EXISTS with typed DDL compiled from *columns*.
 
@@ -620,17 +709,33 @@ class PostgresAdapter(WarehouseAdapter):
         keyword-only, matching the contract 0.6.0 port signature. The create
         and every index either all land or none do, in the same explicit
         BEGIN/COMMIT/ROLLBACK shape build_empty_from_columns uses.
+
+        *primary_key* (an upsert node's key, in the declared column spelling)
+        becomes the created table's ``PRIMARY KEY``, which ``_upsert``'s
+        ``ON CONFLICT`` needs. Like the indexes it applies only when this call
+        creates the table: an existing table without the constraint makes the
+        upsert fail at ``ON CONFLICT`` rather than collect duplicate keys.
         """
-        indexes = _validated_indexes(config, table, [col["name"] for col in columns])
+        declared = [col["name"] for col in columns]
+        indexes = _validated_indexes(config, table, declared)
         for col in columns:
             validate_column_type(col["type"])
+        undeclared = [name for name in primary_key if name not in declared]
+        if undeclared:
+            raise ValueError(
+                f"primary key on undeclared column(s) {undeclared!r}; "
+                f"declared columns: {declared!r}"
+            )
 
         self.ensure_schema(schema)
 
+        elements = _column_ddl(columns)
+        if primary_key:
+            elements = pg_sql.SQL(", ").join([elements, _primary_key_ddl(primary_key)])
         stmt = pg_sql.SQL("CREATE TABLE IF NOT EXISTS {}.{} ({})").format(
             pg_sql.Identifier(schema),
             pg_sql.Identifier(table),
-            _column_ddl(columns),
+            elements,
         )
         with self._conn.cursor() as cur:
             cur.execute("BEGIN")
@@ -650,50 +755,85 @@ class PostgresAdapter(WarehouseAdapter):
                     logger.error("ensure_table rollback failed: %s", rollback_exc)
                 raise
 
-    def load(self, schema: str, table: str, data: "pa.Table") -> None:
-        """Atomically replace ``schema.table``'s contents with *data*.
+    @contextlib.contextmanager
+    def _transaction(self, operation: str) -> Iterator[Any]:
+        """Run the body on one cursor inside an explicit ``BEGIN``/``COMMIT``.
 
-        One explicit transaction: TRUNCATE then batched inserts
-        (``execute_values``, page_size 1000) in the Arrow table's column
-        order; commits on success, rolls back and re-raises on any error. A
-        0-row *data* is just a TRUNCATE. The transaction is opened explicitly
-        (``BEGIN``) rather than relying on an implicit one, matching every
-        other multi-statement method on this class under ``autocommit = True``.
+        Any error rolls back and re-raises. A rollback that fails as well is
+        only logged, so the caller sees the original error and the session is
+        never left in an aborted transaction.
         """
-        columns = data.schema.names
         with self._conn.cursor() as cur:
             cur.execute("BEGIN")
             try:
-                cur.execute(
-                    pg_sql.SQL("TRUNCATE {}.{}").format(
-                        pg_sql.Identifier(schema), pg_sql.Identifier(table)
-                    )
-                )
-                if data.num_rows:
-                    rows = data.to_pylist()
-                    values = [tuple(row[c] for c in columns) for row in rows]
-                    insert_prefix = pg_sql.SQL("INSERT INTO {}.{} ({})").format(
-                        pg_sql.Identifier(schema),
-                        pg_sql.Identifier(table),
-                        pg_sql.SQL(", ").join(pg_sql.Identifier(c) for c in columns),
-                    )
-                    # execute_values reparses every percent token after composable
-                    # identifiers have rendered. Escape literal identifier percents,
-                    # then append its one values-list expansion token unescaped.
-                    insert_stmt = (
-                        insert_prefix.as_string(cur).replace("%", "%%") + " VALUES %s"
-                    )
-                    logger.info(
-                        "loading %d row(s) into %s.%s", data.num_rows, schema, table
-                    )
-                    execute_values(cur, insert_stmt, values, page_size=1000)
+                yield cur
                 cur.execute("COMMIT")
             except Exception:
                 try:
                     cur.execute("ROLLBACK")
                 except psycopg2.Error as rollback_exc:
-                    logger.error("load rollback failed: %s", rollback_exc)
+                    logger.error("%s rollback failed: %s", operation, rollback_exc)
                 raise
+
+    def load(self, schema: str, table: str, data: "pa.Table") -> None:
+        """Atomically replace ``schema.table``'s contents with *data*.
+
+        One explicit transaction: TRUNCATE then batched inserts
+        (``_insert_rows``, page size 1000) that name the Arrow table's columns;
+        commits on success, rolls back and re-raises on any error. A 0-row
+        *data* is just a TRUNCATE. The transaction is opened explicitly
+        (``BEGIN``) rather than relying on an implicit one, matching every
+        other multi-statement method on this class under ``autocommit = True``.
+        """
+        with self._transaction("load") as cur:
+            cur.execute(
+                pg_sql.SQL("TRUNCATE {}.{}").format(
+                    pg_sql.Identifier(schema), pg_sql.Identifier(table)
+                )
+            )
+            if data.num_rows:
+                logger.info("loading %d row(s) into %s.%s", data.num_rows, schema, table)
+                _insert_rows(cur, schema, table, data)
+
+    def append(self, schema: str, table: str, data: "pa.Table") -> None:
+        """Atomically insert every row of *data* into ``schema.table``; earlier rows stay.
+
+        One explicit transaction of batched inserts that name *data*'s columns
+        (the same insert path as ``load``, without the TRUNCATE). A 0-row
+        *data* opens no transaction at all.
+        """
+        if not data.num_rows:
+            logger.info("append of 0 rows into %s.%s: nothing to write", schema, table)
+            return
+        with self._transaction("append") as cur:
+            logger.info("appending %d row(s) into %s.%s", data.num_rows, schema, table)
+            _insert_rows(cur, schema, table, data)
+
+    def _upsert(
+        self, schema: str, table: str, data: "pa.Table", primary_key: Sequence[str]
+    ) -> None:
+        """Insert new keys and overwrite existing ones in one transaction.
+
+        Batched ``INSERT ... ON CONFLICT (key) DO UPDATE`` (``DO NOTHING`` when
+        every column is in the key) through the shared insert path. Needs the
+        table's ``PRIMARY KEY`` (see ``ensure_table``): postgres rejects
+        ``ON CONFLICT`` on columns without a matching constraint, so a table
+        created without it fails here instead of collecting duplicates. Keys
+        arrive unique (``UpsertCapable.upsert``), which also keeps one
+        statement from touching a row twice. A 0-row *data* opens no
+        transaction.
+        """
+        if not data.num_rows:
+            logger.info("upsert of 0 rows into %s.%s: nothing to write", schema, table)
+            return
+        with self._transaction("upsert") as cur:
+            logger.info(
+                "upserting %d row(s) into %s.%s on (%s)",
+                data.num_rows, schema, table, ", ".join(primary_key),
+            )
+            _insert_rows(
+                cur, schema, table, data, suffix=_on_conflict(data.schema.names, primary_key)
+            )
 
     def close(self) -> None:
         """Release the underlying connection."""

@@ -549,3 +549,89 @@ def test_config_validation_survives_a_second_recognized_top_level_key(monkeypatc
     conn = _FakeConnection()
     PostgresAdapter(conn).ensure_table("s", "t", _ONE_COL, config={"fillfactor": 90})
     assert conn.committed  # DDL ran; no KeyError on the way in
+
+
+def test_load_of_zero_rows_truncates_in_one_explicit_transaction():
+    """load's transaction shape, pinned across the insert-path refactor."""
+    conn = _FakeConnection()
+    PostgresAdapter(conn).load("s", "t", pa.table({"id": pa.array([], pa.int64())}))
+    (cur,) = conn.cursors
+    assert cur.statements == [
+        "BEGIN",
+        pg_sql.SQL("TRUNCATE {}.{}").format(pg_sql.Identifier("s"), pg_sql.Identifier("t")),
+        "COMMIT",
+    ]
+
+
+def test_append_of_zero_rows_opens_no_transaction():
+    conn = _FakeConnection()
+    PostgresAdapter(conn).append("s", "t", pa.table({"id": pa.array([], pa.int64())}))
+    assert conn.cursors == []
+
+
+_KEYED = [
+    {"name": "rate_date", "type": "DATE", "nullable": False},
+    {"name": "base", "type": "VARCHAR(3)", "nullable": False},
+    {"name": "rate", "type": "DECIMAL(12,6)", "nullable": True},
+]
+
+
+def test_ensure_table_with_a_primary_key_declares_it_in_the_create_table():
+    conn = _FakeConnection()
+    PostgresAdapter(conn).ensure_table(
+        "s", "t", _KEYED, config={}, primary_key=("rate_date", "base")
+    )
+    expected = pg_sql.SQL("CREATE TABLE IF NOT EXISTS {}.{} ({})").format(
+        pg_sql.Identifier("s"),
+        pg_sql.Identifier("t"),
+        pg_sql.SQL(", ").join([
+            adapter_module._column_ddl(_KEYED),
+            pg_sql.SQL("PRIMARY KEY ({})").format(
+                pg_sql.SQL(", ").join([pg_sql.Identifier("rate_date"), pg_sql.Identifier("base")])
+            ),
+        ]),
+    )
+    assert conn.cursors[-1].statements[1] == expected
+
+
+def test_ensure_table_without_a_primary_key_emits_todays_create_table():
+    conn = _FakeConnection()
+    PostgresAdapter(conn).ensure_table("s", "t", _KEYED, config={})
+    expected = pg_sql.SQL("CREATE TABLE IF NOT EXISTS {}.{} ({})").format(
+        pg_sql.Identifier("s"), pg_sql.Identifier("t"), adapter_module._column_ddl(_KEYED)
+    )
+    assert conn.cursors[-1].statements[1] == expected
+
+
+def test_ensure_table_rejects_a_primary_key_on_an_undeclared_column_and_emits_no_ddl():
+    conn = _FakeConnection()
+    with pytest.raises(ValueError, match=r"primary key on undeclared column\(s\) \['quote'\]"):
+        PostgresAdapter(conn).ensure_table(
+            "s", "t", _KEYED, config={}, primary_key=("rate_date", "quote")
+        )
+    assert conn.cursors == []
+
+
+def test_on_conflict_overwrites_every_non_key_column():
+    assert adapter_module._on_conflict(["rate_date", "base", "rate"], ["rate_date", "base"]) == (
+        pg_sql.SQL("ON CONFLICT ({}) DO UPDATE SET {}").format(
+            pg_sql.SQL(", ").join([pg_sql.Identifier("rate_date"), pg_sql.Identifier("base")]),
+            pg_sql.SQL(", ").join([
+                pg_sql.SQL("{} = EXCLUDED.{}").format(
+                    pg_sql.Identifier("rate"), pg_sql.Identifier("rate")
+                )
+            ]),
+        )
+    )
+
+
+def test_on_conflict_does_nothing_when_every_column_is_in_the_key():
+    assert adapter_module._on_conflict(["a", "b"], ["a", "b"]) == pg_sql.SQL(
+        "ON CONFLICT ({}) DO NOTHING"
+    ).format(pg_sql.SQL(", ").join([pg_sql.Identifier("a"), pg_sql.Identifier("b")]))
+
+
+def test_upsert_of_zero_rows_opens_no_transaction():
+    conn = _FakeConnection()
+    PostgresAdapter(conn).upsert("s", "t", pa.table({"id": pa.array([], pa.int64())}), ["id"])
+    assert conn.cursors == []

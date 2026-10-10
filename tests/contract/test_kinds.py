@@ -1,7 +1,7 @@
 import pytest
 
 from continuo_python_runtime.contract.kinds import RULES, CsvRead, NoReads, SqlReads, rules_for
-from continuo_python_runtime.contract.model import KINDS
+from continuo_python_runtime.contract.model import KINDS, MODE_TYPES
 from continuo_python_runtime.contract.secret_ref import validate_secret_ref
 from continuo_python_runtime.errors import ContractError
 
@@ -94,3 +94,18 @@ def test_secret_ref_accepts_valid_names(name):
 def test_secret_ref_rejects_invalid_names(name):
     with pytest.raises(ContractError, match="'secret_ref'"):
         validate_secret_ref(name, "L")
+
+
+def test_python_csv_only_replaces():
+    assert RULES["python-csv"].mode_types == frozenset({"replace"})
+
+
+@pytest.mark.parametrize("kind", ["python-node", "python-api"])
+def test_script_kinds_allow_every_mode(kind):
+    assert RULES[kind].mode_types == MODE_TYPES
+
+
+def test_every_kind_allows_replace_and_nothing_outside_the_vocabulary():
+    for rules in RULES.values():
+        assert "replace" in rules.mode_types
+        assert rules.mode_types <= MODE_TYPES

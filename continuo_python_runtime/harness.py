@@ -29,7 +29,7 @@ from continuo_engine_contract.result import result_block  # type: ignore[import-
 from continuo_python_runtime.conform import conform, to_arrow
 from continuo_python_runtime.context import RunContext
 from continuo_python_runtime.contract.loader import load_contract_dir
-from continuo_python_runtime.contract.model import Node
+from continuo_python_runtime.contract.model import DEFAULT_MODE_TYPE, Node
 from continuo_python_runtime.contract.paths import resolve_script_path
 from continuo_python_runtime.csv_loader import produce_csv
 from continuo_python_runtime.csv_source import CsvSourceReader
@@ -264,6 +264,16 @@ def run_node(
         # Every other loader validation still runs at container start.
         nodes = load_contract_dir(contract_dir, check_reads=False)
         node = select_node(nodes, node_id)
+
+        # Interim: the harness writes every node with load() (replace) until the
+        # per-mode write dispatch lands. Until then, reject append/upsert before
+        # the script runs or anything is written, so an accepted contract cannot
+        # silently replace a table it meant to append to or upsert into.
+        if node.mode_type != DEFAULT_MODE_TYPE:
+            raise LoadError(
+                f"write mode {node.mode_type!r} is not supported by the harness yet "
+                f"(node {target_schema}.{table_name}); only {DEFAULT_MODE_TYPE!r} is available"
+            )
 
         if adapter is not None:
             active_adapter = adapter

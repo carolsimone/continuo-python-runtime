@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM python:3.14.2-slim
 # One dual-role image per engine — the python-node runtime harness (default
 # command `run`) and the blue/green validation runner (`validation-op`). It
 # installs the PUBLISHED, versioned libraries, never the repo source:

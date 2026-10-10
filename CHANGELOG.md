@@ -21,6 +21,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The Python version is pinned in one place, `.python-version` (`3.14.2`), the
+  single source of truth: the engine images' `Dockerfile`s pin the same exact
+  patch (`python:3.14.2-slim`), and `requires-python`, mypy `python_version`,
+  the trove classifiers and `setup-python` inputs track its major.minor. A new
+  consistency guard (`tests/test_python_version_consistency.py`) scans every
+  `pyproject.toml`, `Dockerfile*` and workflow and fails on any drift.
 - **Breaking for newly copied templates.** The `template/` release workflow
   calls continuo's public release API instead of an unauthenticated webhook:
   - `RELEASE_ENDPOINT` keeps its name but is now the origin of continuo's

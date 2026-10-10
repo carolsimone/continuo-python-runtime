@@ -18,6 +18,18 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `primary_key` (authored order) for `upsert`; both are part of
   `config_hash`. Entries of nodes that do not set them, and their hashes, are
   unchanged.
+- `continuo-engine-contract`: opt-in write capabilities on top of
+  `WarehouseAdapter` — `TableIntrospection` (`table_columns`, returning
+  `LiveColumn(name, nullable)`; `LookupError` for a missing table),
+  `AppendCapable` (`append`) and `UpsertCapable` (`upsert`, which runs
+  `ensure_unique_key` and then the engine's `_upsert`). `ensure_table` takes an
+  optional keyword-only `primary_key`. `continuo_engine_contract.keys` holds
+  `ensure_unique_key` and `DuplicateKeyError(ValueError)`.
+- `continuo_engine_contract.testing.conformance`: a pytest conformance suite for the
+  write capabilities (`IntrospectionConformance`, `AppendConformance`,
+  `UpsertConformance`). Adapter integration suites subclass the reusable
+  classes and run them against their real engine, providing `adapter` and
+  `schema` fixtures. Install with `continuo-engine-contract[testing]`.
 
 ### Changed
 
@@ -27,6 +39,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the trove classifiers and `setup-python` inputs track its major.minor. A new
   consistency guard (`tests/test_python_version_consistency.py`) scans every
   `pyproject.toml`, `Dockerfile*` and workflow and fails on any drift.
+- `continuo-engine-contract` 0.7.3 -> 0.8.0 (the write capabilities above).
+  The runtime and the three adapters pin it exactly, as do the engine images'
+  `image-requirements-*.txt`.
 - **Breaking for newly copied templates.** The `template/` release workflow
   calls continuo's public release API instead of an unauthenticated webhook:
   - `RELEASE_ENDPOINT` keeps its name but is now the origin of continuo's

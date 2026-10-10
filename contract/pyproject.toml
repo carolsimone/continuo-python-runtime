@@ -1,5 +1,5 @@
 [project]
-version = "0.7.3"
+version = "0.8.0"
 name = "continuo-engine-contract"
 description = "The contract a Continuo warehouse engine must satisfy: the WarehouseAdapter port and the result-block wire format."
 authors = [{ name = "Simone Carolini" }]
@@ -12,6 +12,12 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3.14",
 ]
+
+[project.optional-dependencies]
+# The conformance suite (continuo_engine_contract.testing.conformance) for adapter test
+# suites, this repo's and bring-your-own: pytest, plus pyarrow to build the rows.
+# Pinned exactly, like every in-repo dependency.
+testing = ["pytest==9.1.1", "pyarrow==25.0.1"]
 
 [build-system]
 requires = ["hatchling"]

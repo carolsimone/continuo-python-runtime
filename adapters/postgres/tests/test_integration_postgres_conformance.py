@@ -10,7 +10,7 @@ import uuid
 import psycopg2
 import pytest
 
-from continuo_engine_contract.conformance import (
+from continuo_engine_contract.testing.conformance import (
     ARROW,
     COLUMNS,
     FX_COLUMNS,

@@ -6,7 +6,7 @@ Run the stack first:
 """
 import pytest
 
-from continuo_engine_contract.conformance import (
+from continuo_engine_contract.testing.conformance import (
     AppendConformance,
     IntrospectionConformance,
     UpsertConformance,

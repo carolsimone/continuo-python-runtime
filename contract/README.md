@@ -11,7 +11,7 @@ validation runner alike — and every engine adapter library. Seven modules:
 | `continuo_engine_contract.sql` | `ensure_single_read`, the parse-backed gate `check_binds` runs before it lets a declared read near an engine |
 | `continuo_engine_contract.config` | `ensure_known_keys`, the fail-closed gate `build_empty_from_columns` runs before it lets a node's physical-layout `config` block reach DDL |
 | `continuo_engine_contract.result` | The sentinel-framed result-block wire format the runner emits and the k8s-controller parses |
-| `continuo_engine_contract.conformance` | The pytest conformance suite for the write capabilities — `IntrospectionConformance`, `AppendConformance`, `UpsertConformance` — that an adapter's integration tests subclass, providing `adapter` and `schema` fixtures. Needs the `testing` extra |
+| `continuo_engine_contract.testing.conformance` | The pytest conformance suite for the write capabilities — `IntrospectionConformance`, `AppendConformance`, `UpsertConformance` — that an adapter's integration tests subclass, providing `adapter` and `schema` fixtures. Needs the `testing` extra |
 
 Each `continuo-python-runtime-<engine>` library depends on this package and
 implements the port.

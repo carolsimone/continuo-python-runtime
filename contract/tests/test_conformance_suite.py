@@ -7,17 +7,17 @@ loses rows.
 """
 import pytest
 
-from continuo_engine_contract.conformance import (
-    AppendConformance,
-    IntrospectionConformance,
-    UpsertConformance,
-    canonical,
-)
 from continuo_engine_contract.port import (
     AppendCapable,
     LiveColumn,
     UpsertCapable,
     WarehouseAdapter,
+)
+from continuo_engine_contract.testing.conformance import (
+    AppendConformance,
+    IntrospectionConformance,
+    UpsertConformance,
+    canonical,
 )
 
 

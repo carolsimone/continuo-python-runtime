@@ -18,7 +18,8 @@ def test_wheel_ships_the_conformance_suite_and_the_testing_extra(tmp_path):
         names = set(archive.namelist())
         (metadata_name,) = [n for n in names if n.endswith(".dist-info/METADATA")]
         metadata = archive.read(metadata_name).decode()
-    assert "continuo_engine_contract/conformance.py" in names
+    assert "continuo_engine_contract/testing/__init__.py" in names
+    assert "continuo_engine_contract/testing/conformance.py" in names
     assert "continuo_engine_contract/keys.py" in names
     assert "Provides-Extra: testing" in metadata
     assert re.search(r"Requires-Dist: pytest==9\.1\.1; extra == ['\"]testing['\"]", metadata)

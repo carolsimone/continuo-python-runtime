@@ -4,7 +4,7 @@ One test class per capability. An adapter's integration suite subclasses the
 classes for exactly the capabilities it declares and runs them against its
 real engine; a bring-your-own adapter can do the same::
 
-    from continuo_engine_contract.conformance import AppendConformance
+    from continuo_engine_contract.testing.conformance import AppendConformance
 
     class TestMyEngineAppend(AppendConformance):
         pass

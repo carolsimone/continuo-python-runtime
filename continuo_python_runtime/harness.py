@@ -3,7 +3,8 @@
 ``run_node`` is the sole write sink for a python node. It resolves the
 node from the contract, loads and executes its script inside a
 :class:`~continuo_python_runtime.context.RunContext`, conforms the result to
-the declared schema, and writes it through the runtime adapter. Exactly one
+the declared schema, and writes it through the runtime adapter with the
+node's ``mode_type``: ``load`` (replace), ``append`` or ``upsert``. Exactly one
 sentinel-framed result block is printed to stdout per run; every other
 diagnostic goes to stderr via ``logging``.
 """
@@ -17,11 +18,15 @@ import os
 import sys
 import uuid
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from continuo_engine_contract.keys import DuplicateKeyError  # type: ignore[import-untyped]
 from continuo_engine_contract.port import (  # type: ignore[import-untyped]
+    AppendCapable,
+    UpsertCapable,
     discover_adapter,
 )
 from continuo_engine_contract.result import result_block  # type: ignore[import-untyped]
@@ -29,11 +34,18 @@ from continuo_engine_contract.result import result_block  # type: ignore[import-
 from continuo_python_runtime.conform import conform, to_arrow
 from continuo_python_runtime.context import RunContext
 from continuo_python_runtime.contract.loader import load_contract_dir
-from continuo_python_runtime.contract.model import DEFAULT_MODE_TYPE, Node
+from continuo_python_runtime.contract.model import Node
 from continuo_python_runtime.contract.paths import resolve_script_path
 from continuo_python_runtime.csv_loader import produce_csv
 from continuo_python_runtime.csv_source import CsvSourceReader
-from continuo_python_runtime.errors import ContractError, HarnessError, LoadError, ScriptError
+from continuo_python_runtime.errors import (
+    ConformError,
+    ContractError,
+    HarnessError,
+    LoadError,
+    ScriptError,
+)
+from continuo_python_runtime.shape import shape_diff
 
 logger = logging.getLogger("continuo_python_runtime.harness")
 
@@ -232,6 +244,75 @@ _PRODUCERS: dict[str, Callable[[Node, Any, Path, CsvSourceReader | None], Any]] 
 }
 
 
+def _write_replace(adapter: Any, schema: str, table: str, data: Any, key: tuple[str, ...]) -> None:
+    adapter.load(schema, table, data)
+
+
+def _write_append(adapter: Any, schema: str, table: str, data: Any, key: tuple[str, ...]) -> None:
+    adapter.append(schema, table, data)
+
+
+def _write_upsert(adapter: Any, schema: str, table: str, data: Any, key: tuple[str, ...]) -> None:
+    adapter.upsert(schema, table, data, key)
+
+
+@dataclass(frozen=True)
+class _Writer:
+    """How one ``mode_type`` is written.
+
+    ``capability`` is the engine-contract interface the adapter must declare
+    (``None``: every ``WarehouseAdapter`` can, through ``load``). Every
+    capability extends ``TableIntrospection``, so a capability-gated write is
+    also a shape-checked one.
+    """
+
+    capability: type | None
+    write: Callable[[Any, str, str, Any, tuple[str, ...]], None]
+
+
+# One entry per mode_type, beside _PRODUCERS: a new mode is one capability
+# interface in the engine contract plus one entry here.
+_WRITERS: dict[str, _Writer] = {
+    "replace": _Writer(capability=None, write=_write_replace),
+    "append": _Writer(capability=AppendCapable, write=_write_append),
+    "upsert": _Writer(capability=UpsertCapable, write=_write_upsert),
+}
+
+
+def _writer_for(adapter: Any, node: Node) -> _Writer:
+    """The node's writer, if the adapter declares the capability its mode needs.
+
+    Called right after the config tripwire, before the script runs or the
+    warehouse is touched: an engine that cannot append fails in the first
+    second, not after the whole run.
+
+    Raises:
+        LoadError: ``<Adapter> does not support <mode>``.
+    """
+    writer = _WRITERS[node.mode_type]
+    if writer.capability is not None and not isinstance(adapter, writer.capability):
+        raise LoadError(f"{type(adapter).__name__} does not support {node.mode_type}")
+    return writer
+
+
+def _check_shape(adapter: Any, node: Node, schema: str, table: str) -> None:
+    """Fail unless the live target table still has the node's declared shape.
+
+    Runs before an append or upsert only: those keep earlier rows, so a table
+    whose columns or nullability drifted (changed outside the contract, or
+    created before the release gate recorded shapes) must not be written. It
+    inspects the table actually written -- ``TARGET_SCHEMA.TABLE_NAME`` -- not
+    ``node.relation``.
+
+    Raises:
+        LoadError: Naming every missing column, unexpected column and
+            nullability mismatch.
+    """
+    diff = shape_diff(node.output_columns, adapter.table_columns(schema, table))
+    if diff:
+        raise LoadError(diff.message(f"{schema}.{table}"))
+
+
 def run_node(
     env: Mapping[str, str], adapter: Any = None, reader: CsvSourceReader | None = None
 ) -> int:
@@ -265,16 +346,6 @@ def run_node(
         nodes = load_contract_dir(contract_dir, check_reads=False)
         node = select_node(nodes, node_id)
 
-        # Interim: the harness writes every node with load() (replace) until the
-        # per-mode write dispatch lands. Until then, reject append/upsert before
-        # the script runs or anything is written, so an accepted contract cannot
-        # silently replace a table it meant to append to or upsert into.
-        if node.mode_type != DEFAULT_MODE_TYPE:
-            raise LoadError(
-                f"write mode {node.mode_type!r} is not supported by the harness yet "
-                f"(node {target_schema}.{table_name}); only {DEFAULT_MODE_TYPE!r} is available"
-            )
-
         if adapter is not None:
             active_adapter = adapter
         else:
@@ -286,6 +357,7 @@ def run_node(
                 raise LoadError(f"adapter construction failed: {exc}") from exc
 
         _validate_config_early(active_adapter, node)
+        writer = _writer_for(active_adapter, node)
 
         table = _PRODUCERS[node.kind](node, active_adapter, app_root, reader)
 
@@ -295,11 +367,25 @@ def run_node(
             {"name": c.name, "type": c.type, "nullable": c.nullable}
             for c in node.output_columns
         ]
+        # Spelled exactly as in output_columns (the loader enforces it). Empty
+        # for every mode but upsert, so primary_key reaches ensure_table only
+        # for upsert nodes.
+        key = node.primary_key
         try:
-            active_adapter.ensure_table(target_schema, table_name, columns, config=node.config)
-            active_adapter.load(target_schema, table_name, conformed)
+            if key:
+                active_adapter.ensure_table(
+                    target_schema, table_name, columns, config=node.config, primary_key=key
+                )
+            else:
+                active_adapter.ensure_table(target_schema, table_name, columns, config=node.config)
+            if writer.capability is not None:
+                _check_shape(active_adapter, node, target_schema, table_name)
+            writer.write(active_adapter, target_schema, table_name, conformed, key)
         except HarnessError:
             raise
+        except DuplicateKeyError as exc:
+            # The script's rows repeat a key: its output is at fault, not the warehouse.
+            raise ConformError(str(exc)) from exc
         except Exception as exc:
             raise LoadError(f"failed to write {target_schema}.{table_name}: {exc}") from exc
 

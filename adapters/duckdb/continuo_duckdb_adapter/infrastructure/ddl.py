@@ -229,6 +229,12 @@ class DdlRenderer:
         statement has no WHEN MATCHED branch. Every column is named, so the
         source's column order does not matter.
         """
+        if not key:
+            # An empty key renders ``ON ()`` — invalid SQL. The port's
+            # ``ensure_unique_key`` already rejects an empty key before any
+            # engine is reached; this keeps the renderer self-defending if it
+            # is ever called directly.
+            raise ValueError("merge_from needs a non-empty key")
         key_set = set(key)
         on = " AND ".join(
             f"t.{quote_identifier(name)} = s.{quote_identifier(name)}" for name in key

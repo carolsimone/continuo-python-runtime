@@ -322,3 +322,8 @@ def test_merge_from_quotes_a_reserved_word_key():
     assert R.merge_from(T, ["order", "x"], ["order"], 'we"ird').startswith(
         'MERGE INTO "lake"."s"."t" AS t USING "we""ird" AS s ON (t."order" = s."order")'
     )
+
+
+def test_merge_from_rejects_an_empty_key():
+    with pytest.raises(ValueError, match="non-empty key"):
+        R.merge_from(T, ["id", "v"], [], "src")

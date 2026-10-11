@@ -155,7 +155,10 @@ def _validate_primary_key(
     output column (postgres quotes identifiers, so ``Rate_Date`` is not
     ``rate_date``) declared ``nullable: false``, because a NULL key never
     matches an existing row. Repeats are refused case-insensitively too, so a
-    key cannot name two columns that differ only in case.
+    key cannot name two columns that differ only in case. A floating-point
+    column is refused as well: the warehouse treats ``0.0`` and ``-0.0`` as
+    one key, so ``ensure_unique_key`` would reject the rows at write time --
+    failing here instead keeps an unwritable upsert out of the contract.
     """
     if mode_type != "upsert":
         if "primary_key" in raw:
@@ -193,6 +196,11 @@ def _validate_primary_key(
         if column.nullable:
             raise ContractError(
                 f"{label}: 'primary_key' column {name!r} must be declared nullable: false"
+            )
+        if parse_sql_type(column.type).base == "DOUBLE_PRECISION":
+            raise ContractError(
+                f"{label}: 'primary_key' column {name!r} is floating-point "
+                f"({column.type}); a floating-point column cannot be a primary key"
             )
     return tuple(raw_key)
 

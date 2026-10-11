@@ -6,9 +6,11 @@ from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING
 
-from ..domain.columns import ColumnDefinition
-from ..domain.identifiers import Identifier, QualifiedTable
-from ..domain.layout import TableLayout
+from continuo_engine_contract.port import LiveColumn  # type: ignore[import-untyped]
+
+from continuo_duckdb_adapter.domain.columns import ColumnDefinition
+from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
+from continuo_duckdb_adapter.domain.layout import TableLayout
 
 if TYPE_CHECKING:  # pragma: no cover
     import pyarrow  # type: ignore[import-untyped]
@@ -34,6 +36,10 @@ class LakeGateway(ABC):
 
     @abstractmethod
     def table_exists(self, table: QualifiedTable) -> bool: ...
+
+    @abstractmethod
+    def columns(self, table: QualifiedTable) -> "list[LiveColumn]":
+        """Name and nullability of every column of *table*, in table order; [] when absent."""
 
     @abstractmethod
     def drop_table_if_exists(self, table: QualifiedTable) -> None: ...
@@ -72,6 +78,12 @@ class LakeGateway(ABC):
     @abstractmethod
     def insert_arrow(self, table: QualifiedTable, data: "pyarrow.Table") -> None:
         """Append *data* in its own column order."""
+
+    @abstractmethod
+    def merge_arrow(
+        self, table: QualifiedTable, data: "pyarrow.Table", key: Sequence[str]
+    ) -> None:
+        """Insert *data*'s rows with a new *key*, overwrite rows whose key exists."""
 
     @abstractmethod
     def close(self) -> None: ...

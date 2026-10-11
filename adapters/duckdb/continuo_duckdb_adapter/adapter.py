@@ -6,9 +6,9 @@ port leaves to the concrete engine, ``required_env`` and ``from_env``.
 """
 from __future__ import annotations
 
-from .application.warehouse import LakeWarehouse
-from .infrastructure.session import DuckLakeSession
-from .infrastructure.settings import REQUIRED_ENV, DuckLakeSettings
+from continuo_duckdb_adapter.application.warehouse import LakeWarehouse
+from continuo_duckdb_adapter.infrastructure.session import DuckLakeSession
+from continuo_duckdb_adapter.infrastructure.settings import REQUIRED_ENV, DuckLakeSettings
 
 
 class DuckDBAdapter(LakeWarehouse):

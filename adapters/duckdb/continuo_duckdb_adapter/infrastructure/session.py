@@ -19,12 +19,13 @@ from collections.abc import Callable, Iterator, Sequence
 from typing import TYPE_CHECKING
 
 import duckdb
+from continuo_engine_contract.port import LiveColumn  # type: ignore[import-untyped]
 
-from ..application.ports import LakeConflictError, LakeGateway
-from ..domain.columns import ColumnDefinition
-from ..domain.identifiers import Identifier, QualifiedTable
-from ..domain.layout import TableLayout
-from .ddl import (
+from continuo_duckdb_adapter.application.ports import LakeConflictError, LakeGateway
+from continuo_duckdb_adapter.domain.columns import ColumnDefinition
+from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
+from continuo_duckdb_adapter.domain.layout import TableLayout
+from continuo_duckdb_adapter.infrastructure.ddl import (
     BEGIN,
     BEGIN_READ_ONLY,
     COMMIT,
@@ -40,9 +41,9 @@ from .ddl import (
     set_temp_directory,
     use_catalog,
 )
-from .extensions import extensions_to_load
-from .passfile import Passfile, open_passfile
-from .settings import DuckLakeSettings
+from continuo_duckdb_adapter.infrastructure.extensions import extensions_to_load
+from continuo_duckdb_adapter.infrastructure.passfile import Passfile, open_passfile
+from continuo_duckdb_adapter.infrastructure.settings import DuckLakeSettings
 
 if TYPE_CHECKING:  # pragma: no cover
     import pyarrow as pa  # type: ignore[import-untyped]
@@ -220,6 +221,19 @@ class DuckLakeSession(LakeGateway):
             for schema, name in rows
         )
 
+    def columns(self, table: QualifiedTable) -> list[LiveColumn]:
+        with self._guarded():
+            rows = self._run(
+                DdlRenderer.COLUMNS_QUERY,
+                [self._renderer.catalog_name, table.schema.name, table.table.name],
+            ).fetchall()
+        return [
+            LiveColumn(name=name, nullable=bool(nullable))
+            for schema, table_name, name, nullable in rows
+            if same_identifier(schema, table.schema.name)
+            and same_identifier(table_name, table.table.name)
+        ]
+
     def drop_table_if_exists(self, table: QualifiedTable) -> None:
         self._run(self._renderer.drop_table_if_exists(table))
 
@@ -269,6 +283,16 @@ class DuckLakeSession(LakeGateway):
             self._con.register(view, data)
         try:
             self._run(self._renderer.insert_select(table, data.schema.names, view))
+        finally:
+            with contextlib.suppress(duckdb.Error):
+                self._con.unregister(view)
+
+    def merge_arrow(self, table: QualifiedTable, data: "pa.Table", key: Sequence[str]) -> None:
+        view = f"__continuo_merge_{uuid.uuid4().hex}"
+        with self._guarded():
+            self._con.register(view, data)
+        try:
+            self._run(self._renderer.merge_from(table, data.schema.names, key, view))
         finally:
             with contextlib.suppress(duckdb.Error):
                 self._con.unregister(view)

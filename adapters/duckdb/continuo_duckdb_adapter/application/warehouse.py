@@ -10,16 +10,21 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
-from continuo_engine_contract.port import WarehouseAdapter  # type: ignore[import-untyped]
+from continuo_engine_contract.port import (  # type: ignore[import-untyped]
+    AppendCapable,
+    LiveColumn,
+    UpsertCapable,
+    WarehouseAdapter,
+)
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
 
-from ..domain.columns import ColumnDefinition, column_types
-from ..domain.identifiers import Identifier, QualifiedTable
-from ..domain.layout import TableLayout
-from .ports import LakeConflictError, LakeGateway
+from continuo_duckdb_adapter.domain.columns import ColumnDefinition, column_types
+from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
+from continuo_duckdb_adapter.domain.layout import TableLayout
+from continuo_duckdb_adapter.application.ports import LakeConflictError, LakeGateway
 
 if TYPE_CHECKING:  # pragma: no cover
     import pyarrow as pa  # type: ignore[import-untyped]
@@ -42,7 +47,7 @@ def _columns(raw: list[dict]) -> list[ColumnDefinition]:
     return [ColumnDefinition.from_mapping(entry) for entry in raw]
 
 
-class LakeWarehouse(WarehouseAdapter):
+class LakeWarehouse(WarehouseAdapter, AppendCapable, UpsertCapable):
     """WarehouseAdapter implemented over a LakeGateway."""
 
     def __init__(
@@ -159,6 +164,17 @@ class LakeWarehouse(WarehouseAdapter):
         """
         TableLayout.from_config(config, {name: None for name in column_names})
 
+    def table_columns(self, schema: str, table: str) -> list[LiveColumn]:
+        """Columns of ``schema.table`` as the DuckLake catalog reports them.
+
+        Raises:
+            LookupError: If the table does not exist.
+        """
+        columns = self._gateway.columns(QualifiedTable.of(schema, table))
+        if not columns:
+            raise LookupError(f"table {schema}.{table} does not exist")
+        return columns
+
     def ensure_table(
         self,
         schema: str,
@@ -166,6 +182,7 @@ class LakeWarehouse(WarehouseAdapter):
         columns: list[dict[str, Any]],
         *,
         config: dict[str, Any],
+        primary_key: Sequence[str] = (),
     ) -> None:
         """Create the table if absent; layout is applied only when this call creates it.
 
@@ -173,7 +190,12 @@ class LakeWarehouse(WarehouseAdapter):
         existence check and the create share one transaction; a concurrent
         creator makes one side fail with a conflict, and the retry then finds
         the table and returns.
+
+        *primary_key* is accepted and ignored: DuckLake rejects PRIMARY KEY and
+        UNIQUE constraints, so an upsert node's key is guaranteed by ``upsert``
+        (the port's duplicate check, then MERGE), not by the table.
         """
+        del primary_key
         defs = _columns(columns)
         layout = TableLayout.from_config(config, column_types(defs))
         self.ensure_schema(schema)
@@ -199,6 +221,41 @@ class LakeWarehouse(WarehouseAdapter):
             if data.num_rows:
                 logger.info("loading %d row(s) into %s.%s", data.num_rows, schema, table)
                 self._gateway.insert_arrow(target, data)
+
+    def append(self, schema: str, table: str, data: "pa.Table") -> None:
+        """Atomically insert every row of *data*; earlier rows stay (one transaction).
+
+        The insert names *data*'s columns. A 0-row *data* opens no transaction,
+        so DuckLake records no snapshot for it.
+        """
+        if not data.num_rows:
+            logger.info("append of 0 rows into %s.%s: nothing to write", schema, table)
+            return
+        target = QualifiedTable.of(schema, table)
+        with self._gateway.transaction():
+            logger.info("appending %d row(s) into %s.%s", data.num_rows, schema, table)
+            self._gateway.insert_arrow(target, data)
+
+    def _upsert(
+        self, schema: str, table: str, data: "pa.Table", primary_key: Sequence[str]
+    ) -> None:
+        """MERGE *data* into ``schema.table`` on *primary_key*, in one transaction.
+
+        DuckLake's MERGE does not detect a key repeated within *data* (it
+        inserts both rows of a new key and keeps the last of an existing one);
+        the port's ``upsert`` has already rejected that. A 0-row *data* opens
+        no transaction.
+        """
+        if not data.num_rows:
+            logger.info("upsert of 0 rows into %s.%s: nothing to write", schema, table)
+            return
+        target = QualifiedTable.of(schema, table)
+        with self._gateway.transaction():
+            logger.info(
+                "upserting %d row(s) into %s.%s on (%s)",
+                data.num_rows, schema, table, ", ".join(primary_key),
+            )
+            self._gateway.merge_arrow(target, data, list(primary_key))
 
     def close(self) -> None:
         """Release the underlying connection."""

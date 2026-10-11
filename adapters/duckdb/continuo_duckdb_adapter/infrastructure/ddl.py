@@ -11,10 +11,10 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-from ..domain.columns import ColumnDefinition
-from ..domain.identifiers import Identifier, QualifiedTable
-from ..domain.layout import PartitionKey, SortKey
-from .settings import DuckLakeSettings
+from continuo_duckdb_adapter.domain.columns import ColumnDefinition
+from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
+from continuo_duckdb_adapter.domain.layout import PartitionKey, SortKey
+from continuo_duckdb_adapter.infrastructure.settings import DuckLakeSettings
 
 _LIBPQ_BARE = re.compile(r"[A-Za-z0-9_.:/\-]+")
 
@@ -149,6 +149,14 @@ class DdlRenderer:
         "AND lower(table_name) = lower(?)"
     )
 
+    # Same pre-filter-then-confirm shape as TABLE_EXISTS_QUERY: the session keeps
+    # only the rows whose schema and table pass ``same_identifier``.
+    COLUMNS_QUERY = (
+        "SELECT schema_name, table_name, column_name, is_nullable FROM duckdb_columns() "
+        "WHERE lower(database_name) = lower(?) AND lower(schema_name) = lower(?) "
+        "AND lower(table_name) = lower(?) ORDER BY column_index"
+    )
+
     def __init__(self, catalog: str) -> None:
         self._catalog = catalog
 
@@ -211,6 +219,38 @@ class DdlRenderer:
     def insert_select(self, table: QualifiedTable, column_names: Sequence[str], source: str) -> str:
         cols = ", ".join(quote_identifier(name) for name in column_names)
         return f"INSERT INTO {self.table_ref(table)} ({cols}) SELECT {cols} FROM {quote_identifier(source)}"
+
+    def merge_from(
+        self, table: QualifiedTable, column_names: Sequence[str], key: Sequence[str], source: str
+    ) -> str:
+        """MERGE *source* into *table* on *key*: overwrite a matched row's other columns, insert the rest.
+
+        With every column in the key there is nothing to overwrite, so the
+        statement has no WHEN MATCHED branch. Every column is named, so the
+        source's column order does not matter.
+        """
+        if not key:
+            # An empty key renders ``ON ()`` — invalid SQL. The port's
+            # ``ensure_unique_key`` already rejects an empty key before any
+            # engine is reached; this keeps the renderer self-defending if it
+            # is ever called directly.
+            raise ValueError("merge_from needs a non-empty key")
+        key_set = set(key)
+        on = " AND ".join(
+            f"t.{quote_identifier(name)} = s.{quote_identifier(name)}" for name in key
+        )
+        updates = [name for name in column_names if name not in key_set]
+        matched = ""
+        if updates:
+            matched = " WHEN MATCHED THEN UPDATE SET " + ", ".join(
+                f"{quote_identifier(name)} = s.{quote_identifier(name)}" for name in updates
+            )
+        cols = ", ".join(quote_identifier(name) for name in column_names)
+        values = ", ".join(f"s.{quote_identifier(name)}" for name in column_names)
+        return (
+            f"MERGE INTO {self.table_ref(table)} AS t USING {quote_identifier(source)} AS s "
+            f"ON ({on}){matched} WHEN NOT MATCHED THEN INSERT ({cols}) VALUES ({values})"
+        )
 
     @staticmethod
     def _partition(key: PartitionKey) -> str:

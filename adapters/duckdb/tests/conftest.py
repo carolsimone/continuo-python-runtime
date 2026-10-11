@@ -35,6 +35,7 @@ class FakeLakeGateway(LakeGateway):
         self.conflicts: dict[str, int] = {}
         self.fail_on: dict[str, Exception] = {}
         self.fetch_result = None
+        self.live_columns: list = []
 
     def names(self) -> list[str]:
         return [call[0] for call in self.calls]
@@ -67,6 +68,10 @@ class FakeLakeGateway(LakeGateway):
         self._do("table_exists", table)
         return (table.schema.name, table.table.name) in self.existing
 
+    def columns(self, table):
+        self._do("columns", table)
+        return list(self.live_columns)
+
     def drop_table_if_exists(self, table):
         self._do("drop_table_if_exists", table)
 
@@ -94,6 +99,9 @@ class FakeLakeGateway(LakeGateway):
 
     def insert_arrow(self, table, data):
         self._do("insert_arrow", table, data)
+
+    def merge_arrow(self, table, data, key):
+        self._do("merge_arrow", table, data, tuple(key))
 
     def close(self):
         self._do("close")

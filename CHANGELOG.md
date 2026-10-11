@@ -35,6 +35,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   column is in the key) and `table_columns`; `ensure_table` declares an
   upsert key as the table's `PRIMARY KEY`. `load` now shares the insert path
   (no behavior change).
+- `continuo-duckdb-adapter`: `append` (one transaction), `upsert` (`MERGE`
+  from the registered Arrow data, one transaction) and `table_columns`.
+  `ensure_table` accepts and ignores an upsert key: DuckLake has no
+  constraints, so the key is guaranteed by the write path.
 
 ### Changed
 

@@ -6,6 +6,7 @@ import stat
 
 import duckdb
 import pytest
+from continuo_engine_contract.port import LiveColumn
 
 from continuo_duckdb_adapter.application.ports import LakeConflictError
 from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
@@ -456,3 +457,56 @@ def test_table_exists_does_not_fold_non_ascii_case():
 def test_table_exists_is_false_when_the_catalog_returns_nothing():
     session, _ = make_session(FakeConnection())
     assert not session.table_exists(T)
+
+
+def test_columns_keeps_only_the_rows_of_the_same_table_by_duckdb_casing():
+    connection = FakeConnection()
+    connection.rows = [
+        ("Analytics", "Orders", "id", False),
+        ("Analytics", "Orders", "note", True),
+        ("analytics", "Other", "x", True),
+    ]
+    session, _ = make_session(connection)
+    assert session.columns(QualifiedTable.of("analytics", "orders")) == [
+        LiveColumn("id", False),
+        LiveColumn("note", True),
+    ]
+    assert connection.statements == [DdlRenderer.COLUMNS_QUERY]
+
+
+def test_columns_of_a_missing_table_is_empty():
+    session, _ = make_session(FakeConnection())
+    assert session.columns(T) == []
+
+
+def test_columns_errors_are_redacted():
+    session, connection = make_session()
+    connection.errors["SELECT schema_name, table_name, column_name"] = leaky(
+        duckdb.IOException, PASSWORD
+    )
+    with pytest.raises(duckdb.IOException) as caught:
+        session.columns(T)
+    assert PASSWORD not in str(caught.value)
+
+
+def test_merge_arrow_registers_merges_and_unregisters():
+    import pyarrow as pa
+
+    session, connection = make_session()
+    session.merge_arrow(T, pa.table({"id": [1], "v": ["a"]}), ["id"])
+    register, merge, unregister = connection.statements
+    view = register.removeprefix("register ")
+    assert view.startswith("__continuo_merge_")
+    assert merge == DdlRenderer("lake").merge_from(T, ["id", "v"], ["id"], view)
+    assert unregister == f"unregister {view}"
+
+
+def test_merge_arrow_errors_are_redacted_and_the_view_is_still_unregistered():
+    import pyarrow as pa
+
+    session, connection = make_session()
+    connection.errors["MERGE"] = leaky(duckdb.IOException, PASSWORD)
+    with pytest.raises(duckdb.IOException) as caught:
+        session.merge_arrow(T, pa.table({"id": [1]}), ["id"])
+    assert PASSWORD not in str(caught.value)
+    assert connection.statements[-1].startswith("unregister __continuo_merge_")

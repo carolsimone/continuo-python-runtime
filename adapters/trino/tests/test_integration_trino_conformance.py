@@ -10,7 +10,7 @@ import pytest
 
 import trino
 
-from continuo_engine_contract.conformance import (
+from continuo_engine_contract.testing.conformance import (
     ARROW,
     COLUMNS,
     AppendConformance,

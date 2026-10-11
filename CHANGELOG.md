@@ -39,6 +39,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   from the registered Arrow data, one transaction) and `table_columns`.
   `ensure_table` accepts and ignores an upsert key: DuckLake has no
   constraints, so the key is guaranteed by the write path.
+- `continuo-trino-adapter`: `append` and `upsert` through a stage table
+  shaped like the target, then one `INSERT ... SELECT` or one `MERGE` — one
+  Iceberg commit per write; the stage is dropped best-effort afterwards.
+  `table_columns` reads `information_schema`. `ensure_table` accepts an
+  upsert key (no constraint DDL) and rejects it with `format_version: 1`.
+  `load` now shares the stage helpers (no behavior change).
 
 ### Changed
 

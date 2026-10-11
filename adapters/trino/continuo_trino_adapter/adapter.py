@@ -3,7 +3,8 @@
 One class covers both roles Continuo asks of an engine: validation DDL
 (``ensure_schema``/``drop_schema``, the empty builds and clones, ``check_binds``)
 and python-node data-plane I/O (``fetch`` executes one declared read and returns
-an Arrow table; ``ensure_table``/``load`` build and replace a table's contents).
+an Arrow table; ``ensure_table``/``load`` build and replace a table's contents;
+``append`` and ``_upsert`` add or merge rows; ``table_columns`` reads a table's shape).
 
 Trino's namespace is catalog.schema: the catalog comes from TRINO_CATALOG and
 every statement is fully qualified, so the contract's ``schema`` argument stays
@@ -46,6 +47,14 @@ re-raising. A staging relation created by this load is dropped best-effort in
 ``finally``. If recovery fails, the private old relation is deliberately retained
 because it contains the original target data.
 
+``append`` and ``_upsert`` write through the same kind of stage (created LIKE
+the target, batch-inserted) and then touch the target with exactly one
+statement — ``INSERT ... SELECT`` or ``MERGE INTO ... USING stage`` — so each
+write is one Iceberg commit: all of its rows or none. The stage is dropped
+afterwards, best-effort and only logged, so a committed write never reports
+failure. A 0-row write creates no stage. ``MERGE`` needs Iceberg format
+version 2 (Trino's default).
+
 ``load`` assumes a single writer per table: Continuo's scheduler runs at most
 one Job per node at a time. Concurrent ``load()`` calls against the same table
 are unsupported because their target renames would race. Swap relations use a
@@ -65,13 +74,19 @@ import logging
 import os
 import uuid
 
+from collections.abc import Callable, Sequence
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import pyarrow as pa  # type: ignore[import-untyped]
 
 from continuo_engine_contract.config import ensure_known_keys  # type: ignore[import-untyped]
-from continuo_engine_contract.port import WarehouseAdapter  # type: ignore[import-untyped]
+from continuo_engine_contract.port import (  # type: ignore[import-untyped]
+    AppendCapable,
+    LiveColumn,
+    UpsertCapable,
+    WarehouseAdapter,
+)
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
 from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 
@@ -246,6 +261,34 @@ def _sibling_location(location: str, name: str) -> str:
     )
 
 
+def _append_statement(target_ref: str, stage_ref: str, columns: Sequence[str]) -> str:
+    """The append's one write to the target: ``INSERT ... SELECT`` every staged row."""
+    col_list = ", ".join(_quote(name) for name in columns)
+    return f"INSERT INTO {target_ref} ({col_list}) SELECT {col_list} FROM {stage_ref}"
+
+
+def _merge_statement(
+    target_ref: str, stage_ref: str, columns: Sequence[str], primary_key: Sequence[str]
+) -> str:
+    """The upsert's one write to the target: ``MERGE INTO target USING stage`` on the key.
+
+    A matched row gets every non-key column from the stage; unmatched stage
+    rows are inserted. With every column in the key there is nothing to
+    overwrite, so there is no ``WHEN MATCHED`` branch.
+    """
+    key = set(primary_key)
+    on = " AND ".join(f"t.{_quote(name)} = s.{_quote(name)}" for name in primary_key)
+    statement = f"MERGE INTO {target_ref} AS t USING {stage_ref} AS s ON ({on})"
+    updates = [name for name in columns if name not in key]
+    if updates:
+        statement += " WHEN MATCHED THEN UPDATE SET " + ", ".join(
+            f"{_quote(name)} = s.{_quote(name)}" for name in updates
+        )
+    col_list = ", ".join(_quote(name) for name in columns)
+    values = ", ".join(f"s.{_quote(name)}" for name in columns)
+    return statement + f" WHEN NOT MATCHED THEN INSERT ({col_list}) VALUES ({values})"
+
+
 def _arrow_table_from_rows(colnames: list[str], rows: list[Any]) -> "pa.Table":
     """Build a column-wise Arrow table from cursor description names and fetched rows.
 
@@ -281,8 +324,11 @@ def _arrow_table_from_rows(colnames: list[str], rows: list[Any]) -> "pa.Table":
 # Batch size for multi-row INSERT VALUES statements in load().
 _INSERT_BATCH_SIZE = 500
 
+# Name prefix of the stage tables every write path stages its rows in.
+_STAGE_PREFIX = "__continuo_stage_"
 
-class TrinoAdapter(WarehouseAdapter):
+
+class TrinoAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
     """WarehouseAdapter speaking Trino (Iceberg connector) over the trino DBAPI."""
 
     def __init__(self, conn: "trino.dbapi.Connection", catalog: str) -> None:
@@ -465,6 +511,25 @@ class TrinoAdapter(WarehouseAdapter):
         finally:
             cur.close()
 
+    def table_columns(self, schema: str, table: str) -> list[LiveColumn]:
+        """Names and nullability of ``schema.table`` from ``information_schema.columns``.
+
+        Trino stores schema, table and column names lowercased, so the lookup
+        lowercases *schema* and *table*; callers compare column names
+        case-insensitively.
+
+        Raises:
+            LookupError: If the table does not exist.
+        """
+        rows = self._execute(
+            f"SELECT column_name, is_nullable FROM {_quote(self._catalog)}.information_schema.columns "
+            "WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position",
+            [schema.lower(), table.lower()],
+        )
+        if not rows:
+            raise LookupError(f"table {schema}.{table} does not exist in catalog {self._catalog}")
+        return [LiveColumn(name=row[0], nullable=row[1] == "YES") for row in rows]
+
     @classmethod
     def validate_config(
         cls, config: dict[str, Any] | None, column_names: list[str]
@@ -506,6 +571,7 @@ class TrinoAdapter(WarehouseAdapter):
         columns: list[dict[str, Any]],
         *,
         config: dict[str, Any],
+        primary_key: Sequence[str] = (),
     ) -> None:
         """CREATE TABLE IF NOT EXISTS with typed DDL compiled from *columns*.
 
@@ -520,8 +586,20 @@ class TrinoAdapter(WarehouseAdapter):
         table behind (fail closed), then rendered into the CREATE TABLE's
         ``WITH`` clause. Required and keyword-only, matching the contract 0.6.0
         port signature.
+
+        *primary_key* declares nothing: Trino has no constraint syntax, so an
+        upsert node's key is guaranteed by ``upsert`` (the port's duplicate
+        check, then one MERGE). It does gate one config value: Trino's MERGE
+        needs Iceberg format version 2, so a key with ``format_version`` below
+        2 is rejected before any DDL.
         """
         properties = _table_properties(config)
+        format_version = (config or {}).get("format_version")
+        if primary_key and isinstance(format_version, int) and format_version < 2:
+            raise ValueError(
+                f"config 'format_version' {format_version} cannot hold an upsert table: "
+                "Trino's MERGE needs Iceberg format version 2 or later"
+            )
         for col in columns:
             validate_column_type(col["type"])
 
@@ -531,6 +609,40 @@ class TrinoAdapter(WarehouseAdapter):
         ref = self._table_ref(schema, table)
         logger.info("ensuring table %s exists", ref)
         self._execute(f"CREATE TABLE IF NOT EXISTS {ref} ({col_defs}){properties}")
+
+    def _create_stage(self, schema: str, table: str, token: str) -> str:
+        """Create an empty stage table shaped exactly like ``schema.table``; return its reference.
+
+        ``LIKE ... INCLUDING PROPERTIES`` copies the target's columns, NOT NULL
+        constraints and Iceberg properties, so a row the target would refuse
+        fails here, before the target is touched. The explicit location, a
+        fresh sibling of the target's, avoids Iceberg's "non-empty location"
+        rejection. The target must exist.
+        """
+        target_ref = self._table_ref(schema, table)
+        stage_table = f"{_STAGE_PREFIX}{token}"
+        stage_ref = self._table_ref(schema, stage_table)
+        stage_location = _sibling_location(self._table_location(schema, table), stage_table)
+        logger.info("creating staging table %s like %s", stage_ref, target_ref)
+        self._execute(
+            f"CREATE TABLE {stage_ref} "
+            f"(LIKE {target_ref} INCLUDING PROPERTIES) "
+            f"WITH (location = {_sql_string(stage_location)})"
+        )
+        return stage_ref
+
+    def _drop_stage(self, stage_ref: str) -> None:
+        """Drop a stage table best-effort: a failure is logged, never raised.
+
+        Callers drop the stage after their write; a write that already
+        committed must not report failure because its cleanup did not.
+        """
+        try:
+            self._execute(f"DROP TABLE {stage_ref}")
+        except Exception:
+            logger.warning(
+                "best-effort cleanup of staging table %s failed", stage_ref, exc_info=True
+            )
 
     def _insert_batches(self, table_ref: str, columns: list[str], data: "pa.Table") -> None:
         """Insert *data*'s rows into *table_ref* in batches of ``_INSERT_BATCH_SIZE``."""
@@ -558,22 +670,11 @@ class TrinoAdapter(WarehouseAdapter):
         """
         columns = data.schema.names
         target_ref = self._table_ref(schema, table)
-        load_token = uuid.uuid4().hex
-        stage_table = f"__continuo_stage_{load_token}"
-        old_table = f"__continuo_old_{load_token}"
-        stage_ref = self._table_ref(schema, stage_table)
-        old_ref = self._table_ref(schema, old_table)
-        target_location = self._table_location(schema, table)
-        stage_location = _sibling_location(target_location, stage_table)
-        stage_created = False
+        token = uuid.uuid4().hex
+        old_ref = self._table_ref(schema, f"__continuo_old_{token}")
+        stage_ref: str | None = None
         try:
-            logger.info("creating staging table %s like %s", stage_ref, target_ref)
-            self._execute(
-                f"CREATE TABLE {stage_ref} "
-                f"(LIKE {target_ref} INCLUDING PROPERTIES) "
-                f"WITH (location = {_sql_string(stage_location)})"
-            )
-            stage_created = True
+            stage_ref = self._create_stage(schema, table, token)
             if data.num_rows:
                 logger.info("loading %d row(s) into staging table %s", data.num_rows, stage_ref)
                 self._insert_batches(stage_ref, columns, data)
@@ -596,14 +697,72 @@ class TrinoAdapter(WarehouseAdapter):
                     )
                 raise
             else:
-                stage_created = False
+                stage_ref = None  # it is the target now
                 self._execute(f"DROP TABLE {old_ref}")
         finally:
-            if stage_created:
-                try:
-                    self._execute(f"DROP TABLE {stage_ref}")
-                except Exception:
-                    logger.warning("best-effort cleanup of staging table %s failed", stage_ref)
+            if stage_ref is not None:
+                self._drop_stage(stage_ref)
+
+    def _write_via_stage(
+        self, schema: str, table: str, data: "pa.Table", final_statement: Callable[[str], str]
+    ) -> None:
+        """Stage *data* beside ``schema.table``, then write the target in one statement.
+
+        Trino/Iceberg has no multi-statement transaction, but each statement is
+        one Iceberg commit: the rows are batch-inserted into a stage shaped
+        like the target (a refused row fails there, before the target is
+        touched), then ``final_statement(stage_ref)`` moves them all in one
+        commit. The stage is dropped afterwards, best-effort, so a committed
+        write never reports failure because of its cleanup.
+        """
+        stage_ref = self._create_stage(schema, table, uuid.uuid4().hex)
+        try:
+            logger.info("loading %d row(s) into staging table %s", data.num_rows, stage_ref)
+            self._insert_batches(stage_ref, data.schema.names, data)
+            self._execute(final_statement(stage_ref))
+        finally:
+            self._drop_stage(stage_ref)
+
+    def append(self, schema: str, table: str, data: "pa.Table") -> None:
+        """Insert every row of *data* into ``schema.table`` as one Iceberg commit.
+
+        Stage, then one ``INSERT ... SELECT`` (see ``_write_via_stage``). A
+        0-row *data* creates no stage and writes nothing.
+        """
+        if not data.num_rows:
+            logger.info("append of 0 rows into %s.%s: nothing to write", schema, table)
+            return
+        target_ref = self._table_ref(schema, table)
+        columns = data.schema.names
+        logger.info("appending %d row(s) into %s", data.num_rows, target_ref)
+        self._write_via_stage(
+            schema, table, data, lambda stage_ref: _append_statement(target_ref, stage_ref, columns)
+        )
+
+    def _upsert(
+        self, schema: str, table: str, data: "pa.Table", primary_key: Sequence[str]
+    ) -> None:
+        """Insert new keys and overwrite existing ones as one Iceberg commit.
+
+        Stage, then one ``MERGE INTO target USING stage`` (see
+        ``_write_via_stage``). Keys arrive unique (``UpsertCapable.upsert``);
+        Trino itself fails only when two stage rows match one existing row. A
+        0-row *data* creates no stage.
+        """
+        if not data.num_rows:
+            logger.info("upsert of 0 rows into %s.%s: nothing to write", schema, table)
+            return
+        target_ref = self._table_ref(schema, table)
+        columns = data.schema.names
+        logger.info(
+            "upserting %d row(s) into %s on (%s)", data.num_rows, target_ref, ", ".join(primary_key)
+        )
+        self._write_via_stage(
+            schema,
+            table,
+            data,
+            lambda stage_ref: _merge_statement(target_ref, stage_ref, columns, primary_key),
+        )
 
     def close(self) -> None:
         """Release the underlying connection."""

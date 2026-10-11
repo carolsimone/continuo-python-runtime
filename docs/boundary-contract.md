@@ -138,7 +138,9 @@ parse time.
   - **trino (Iceberg)** → `partitioning` and `sorted_by` (each a
     non-empty list of non-empty strings — column names or Iceberg
     partition transforms like `day(event_ts)`), and `format` (one of
-    `PARQUET`/`ORC`/`AVRO`, case-insensitive).
+    `PARQUET`/`ORC`/`AVRO`, case-insensitive). An `upsert` node cannot set
+    `format_version: 1`: Trino's `MERGE` needs Iceberg format version 2 (the
+    default), and `ensure_table` rejects the combination before any DDL.
   - **duckdb (DuckLake)** → `partitioned_by` and `sorted_by`.
     `partitioned_by` is a non-empty list whose entries are a declared column
     name (identity partitioning) or `{column, transform, buckets}` with

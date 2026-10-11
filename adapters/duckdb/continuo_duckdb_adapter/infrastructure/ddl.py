@@ -11,10 +11,10 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-from ..domain.columns import ColumnDefinition
-from ..domain.identifiers import Identifier, QualifiedTable
-from ..domain.layout import PartitionKey, SortKey
-from .settings import DuckLakeSettings
+from continuo_duckdb_adapter.domain.columns import ColumnDefinition
+from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
+from continuo_duckdb_adapter.domain.layout import PartitionKey, SortKey
+from continuo_duckdb_adapter.infrastructure.settings import DuckLakeSettings
 
 _LIBPQ_BARE = re.compile(r"[A-Za-z0-9_.:/\-]+")
 

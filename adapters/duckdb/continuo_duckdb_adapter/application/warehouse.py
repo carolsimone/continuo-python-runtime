@@ -21,10 +21,10 @@ from continuo_engine_contract.port import (  # type: ignore[import-untyped]
 )
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
 
-from ..domain.columns import ColumnDefinition, column_types
-from ..domain.identifiers import Identifier, QualifiedTable
-from ..domain.layout import TableLayout
-from .ports import LakeConflictError, LakeGateway
+from continuo_duckdb_adapter.domain.columns import ColumnDefinition, column_types
+from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
+from continuo_duckdb_adapter.domain.layout import TableLayout
+from continuo_duckdb_adapter.application.ports import LakeConflictError, LakeGateway
 
 if TYPE_CHECKING:  # pragma: no cover
     import pyarrow as pa  # type: ignore[import-untyped]

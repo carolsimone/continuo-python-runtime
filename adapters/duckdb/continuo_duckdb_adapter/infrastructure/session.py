@@ -21,11 +21,11 @@ from typing import TYPE_CHECKING
 import duckdb
 from continuo_engine_contract.port import LiveColumn  # type: ignore[import-untyped]
 
-from ..application.ports import LakeConflictError, LakeGateway
-from ..domain.columns import ColumnDefinition
-from ..domain.identifiers import Identifier, QualifiedTable
-from ..domain.layout import TableLayout
-from .ddl import (
+from continuo_duckdb_adapter.application.ports import LakeConflictError, LakeGateway
+from continuo_duckdb_adapter.domain.columns import ColumnDefinition
+from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
+from continuo_duckdb_adapter.domain.layout import TableLayout
+from continuo_duckdb_adapter.infrastructure.ddl import (
     BEGIN,
     BEGIN_READ_ONLY,
     COMMIT,
@@ -41,9 +41,9 @@ from .ddl import (
     set_temp_directory,
     use_catalog,
 )
-from .extensions import extensions_to_load
-from .passfile import Passfile, open_passfile
-from .settings import DuckLakeSettings
+from continuo_duckdb_adapter.infrastructure.extensions import extensions_to_load
+from continuo_duckdb_adapter.infrastructure.passfile import Passfile, open_passfile
+from continuo_duckdb_adapter.infrastructure.settings import DuckLakeSettings
 
 if TYPE_CHECKING:  # pragma: no cover
     import pyarrow as pa  # type: ignore[import-untyped]

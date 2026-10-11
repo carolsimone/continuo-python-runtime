@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 
 from continuo_engine_contract.port import LiveColumn  # type: ignore[import-untyped]
 
-from ..domain.columns import ColumnDefinition
-from ..domain.identifiers import Identifier, QualifiedTable
-from ..domain.layout import TableLayout
+from continuo_duckdb_adapter.domain.columns import ColumnDefinition
+from continuo_duckdb_adapter.domain.identifiers import Identifier, QualifiedTable
+from continuo_duckdb_adapter.domain.layout import TableLayout
 
 if TYPE_CHECKING:  # pragma: no cover
     import pyarrow  # type: ignore[import-untyped]

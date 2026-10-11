@@ -8,7 +8,7 @@ from typing import Any
 
 from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 
-from .identifiers import Identifier
+from continuo_duckdb_adapter.domain.identifiers import Identifier
 
 _TEMPORAL = re.compile(r"^(TIMESTAMP|DATE)\Z", re.IGNORECASE | re.ASCII)
 

@@ -13,8 +13,8 @@ from typing import Any
 
 from continuo_engine_contract.config import ensure_known_keys  # type: ignore[import-untyped]
 
-from .columns import is_temporal_type
-from .identifiers import Identifier
+from continuo_duckdb_adapter.domain.columns import is_temporal_type
+from continuo_duckdb_adapter.domain.identifiers import Identifier
 
 ENGINE = "duckdb"
 KNOWN_CONFIG_KEYS: tuple[str, ...] = ("partitioned_by", "sorted_by")

@@ -10,8 +10,8 @@ import logging
 
 import duckdb
 
-from .settings import DuckLakeSettings
-from .ddl import (
+from continuo_duckdb_adapter.infrastructure.settings import DuckLakeSettings
+from continuo_duckdb_adapter.infrastructure.ddl import (
     disable_extension_autoinstall,
     load_extension,
     set_extension_directory,

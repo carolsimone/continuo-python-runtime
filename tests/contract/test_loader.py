@@ -853,6 +853,16 @@ def test_primary_key_column_must_be_not_null():
         parse_node(_upsert_entry(primary_key=["rate_date", "rate"]), "c.yml")
 
 
+def test_primary_key_column_cannot_be_floating_point():
+    """ensure_unique_key rejects float keys at write time; refuse them at validation."""
+    entry = _upsert_entry(primary_key=["rate_date", "score"])
+    entry["output_columns"].append({"name": "score", "type": "DOUBLE PRECISION", "nullable": False})
+    with pytest.raises(
+        ContractError, match="'primary_key' column 'score' is floating-point"
+    ):
+        parse_node(entry, "c.yml")
+
+
 def test_primary_key_names_must_match_output_columns_exactly():
     """Review Focus 2: postgres quotes identifiers, so Rate_Date is not rate_date."""
     with pytest.raises(

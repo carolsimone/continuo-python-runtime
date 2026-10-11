@@ -786,7 +786,7 @@ def test_python_csv_only_allows_replace(mode):
     entry = _csv_entry(mode_type=mode)
     if mode == "upsert":
         entry["primary_key"] = ["order_id"]
-    with pytest.raises(ContractError, match=f"'mode_type' {mode} is not allowed for kind python-csv"):
+    with pytest.raises(ContractError, match=f"'mode_type' '{mode}' is not allowed for kind 'python-csv'"):
         parse_node(entry, "f.yml", check_reads=False)
 
 

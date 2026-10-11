@@ -29,9 +29,9 @@ def ensure_unique_key(data: "pyarrow.Table", primary_key: Sequence[str]) -> None
     Groups the rows by the key columns. NULL counts as a value here; the
     contract requires every key column to be ``nullable: false`` and the
     harness's ``conform()`` rejects NULLs in such columns before this runs.
-    The message names the first repeated keys, in order of first appearance,
-    with their row counts. Only methods of *data* are called, so this module
-    needs no pyarrow import.
+    The message names up to a fixed number of the repeated keys with their row
+    counts; their order follows pyarrow's grouping and is not contractual. Only
+    methods of *data* are called, so this module needs no pyarrow import.
 
     Raises:
         ValueError: If *primary_key* is empty, names a column *data* lacks, or

@@ -5,6 +5,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The "mode_type not allowed for kind" contract error now quotes the offending
+  `mode_type` and `kind` (`repr`), matching the sibling "must be one of" error,
+  so an empty or whitespace value is legible. Docstring fixes only alongside:
+  the postgres `ensure_table` port-signature reference (0.6.0 → 0.8.0) and the
+  `ensure_unique_key` message-order claim (pyarrow grouping order is not
+  contractual).
+
 ## [0.9.0] - 2026-10-11
 
 ### Added

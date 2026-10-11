@@ -706,7 +706,7 @@ class PostgresAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
         this engine's physical-layout vocabulary — ``indexes`` — validated by
         :func:`_validated_indexes` before any DDL runs, so a malformed config
         never leaves a half-built table behind (fail closed). Required and
-        keyword-only, matching the contract 0.6.0 port signature. The create
+        keyword-only, matching the contract 0.8.0 port signature. The create
         and every index either all land or none do, in the same explicit
         BEGIN/COMMIT/ROLLBACK shape build_empty_from_columns uses.
 

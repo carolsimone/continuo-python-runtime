@@ -302,7 +302,7 @@ def parse_node(
         )
     if mode_type not in rules.mode_types:
         raise ContractError(
-            f"{label}: 'mode_type' {mode_type} is not allowed for kind {kind} "
+            f"{label}: 'mode_type' {mode_type!r} is not allowed for kind {kind!r} "
             f"(allowed: {sorted(rules.mode_types)})"
         )
 

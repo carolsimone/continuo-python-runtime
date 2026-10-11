@@ -162,7 +162,7 @@ wheels = [
 
 [[package]]
 name = "continuo-duckdb-adapter"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "adapters/duckdb" }
 dependencies = [
     { name = "continuo-engine-contract" },
@@ -225,7 +225,7 @@ provides-extras = ["testing"]
 
 [[package]]
 name = "continuo-postgres-adapter"
-version = "0.2.2"
+version = "0.3.0"
 source = { editable = "adapters/postgres" }
 dependencies = [
     { name = "continuo-engine-contract" },
@@ -262,7 +262,7 @@ test = [
 
 [[package]]
 name = "continuo-python-runtime"
-version = "0.8.0"
+version = "0.9.0"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
@@ -305,7 +305,7 @@ test = [
 
 [[package]]
 name = "continuo-trino-adapter"
-version = "0.2.1"
+version = "0.3.0"
 source = { editable = "adapters/trino" }
 dependencies = [
     { name = "continuo-engine-contract" },

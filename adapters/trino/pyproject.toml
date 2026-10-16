@@ -14,7 +14,7 @@ dependencies = [
     # directly, so the pair must stay the tested one.
     "continuo-engine-contract==0.8.0",
     "trino==0.339.0",
-    "pyarrow==25.0.1",
+    "pyarrow==26.0.0",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

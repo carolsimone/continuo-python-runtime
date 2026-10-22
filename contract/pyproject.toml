@@ -17,7 +17,7 @@ classifiers = [
 # The conformance suite (continuo_engine_contract.testing.conformance) for adapter test
 # suites, this repo's and bring-your-own: pytest, plus pyarrow to build the rows.
 # Pinned exactly, like every in-repo dependency.
-testing = ["pytest==9.1.1", "pyarrow==25.0.1"]
+testing = ["pytest==9.1.1", "pyarrow==26.0.0"]
 
 [build-system]
 requires = ["hatchling"]

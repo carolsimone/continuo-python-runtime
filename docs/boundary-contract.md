@@ -425,6 +425,7 @@ inject the names below instead:
 | `NODE_ID` | **required** | Any identifier whose trailing two dot-separated segments MUST be `<schema>.<table>` of the declared node (e.g. `python-node.<service>.<schema>.<table>`); the harness splits on `.` and matches the last two segments against the merged contract's nodes. |
 | `TABLE_NAME` | **required** | The target table name; must match the `table` of the node selected via `NODE_ID`. |
 | `TARGET_SCHEMA` | **required** | The target schema name; must match the `schema` of the node selected via `NODE_ID`. There is no fallback — `SCHEMA` and `DBT_TARGET_SCHEMA` are **not** recognized. |
+| `TASK_ATTEMPT` | set by the executor, not read by the harness | The 0-based number of the task's attempt: `0` on a task's first run, `1` on its first retry, and so on. The executor sets it on every production Job, dbt and python alike, so a node script can read it; the harness neither requires nor interprets it. |
 | `CONTRACT_DIR` | optional | Path to the directory of merged contract YAML files baked into the image. Defaults to `/app/contracts`. |
 | `APP_ROOT` | optional | Repository root the node's `script:` path is resolved against. Defaults to `CONTRACT_DIR`'s parent directory. |
 | engine-native vars | **required**, per adapter | Whatever the installed `WarehouseAdapter.required_env()` declares (e.g. `POSTGRES_HOST`/`POSTGRES_DB`/`POSTGRES_USER`, optionally `POSTGRES_PORT`/`POSTGRES_PASSWORD`) — missing any of these is a `LoadError`. |
@@ -433,7 +434,8 @@ The executor's python-kind dispatch (continuo PR 8) **must** inject
 `NODE_ID`/`TABLE_NAME`/`TARGET_SCHEMA` under exactly these names; they
 intentionally differ from the dbt job env (`SCHEMA`/`DBT_TARGET_SCHEMA`/dbt
 `UniqueID`) because the python-node harness has a different selection model
-(a merged contract keyed by `schema.table`, not a dbt manifest node).
+(a merged contract keyed by `schema.table`, not a dbt manifest node). It also
+sets `TASK_ATTEMPT` on the same Jobs, under the same name as on a dbt Job.
 
 ## 13.5 Surface 5 — what the domain repo's CI/CD does per merge
 

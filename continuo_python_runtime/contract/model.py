@@ -45,6 +45,7 @@ class Node:
     secret_ref: str = ""
     mode_type: str = DEFAULT_MODE_TYPE
     primary_key: tuple[str, ...] = ()
+    timeout_minutes: int | None = None
 
     @property
     def relation(self) -> str:

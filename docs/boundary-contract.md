@@ -61,6 +61,16 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   node's wire entry or `config_hash` changes), and it is part of
   `config_hash`, so `content_hash` changes when the referenced Secret name
   changes. `source_hash` does not.
+- **`timeout_minutes`** is additive and optional, valid on every `kind`: an
+  integer from 1 to 10,080 (one week) that is the node's task timeout. Any
+  other value (zero, above the bound, a string, a float, a boolean) fails
+  `ContractError` naming the node and the key. On the merged wire entry it
+  appears only when the node declares it, and it is the one wire key **outside
+  `config_hash`**: it is written after the hash parts are computed and is
+  excluded from the `config_hash` basis, so changing it alone changes none of
+  the four hashes and is not a code change. A node that does not declare it
+  has the wire entry, `config_hash` and `content_hash` it always had, and
+  `contract_version` stays 1.
 - **`mode_type`** and **`primary_key`** are additive and optional. `mode_type`
   (`replace`, the default; `append`; `upsert`) says how the harness writes
   the node's table on each run; `python-csv` allows only `replace`.
@@ -222,7 +232,8 @@ content_hash     = "sha256:" + sha256(source_hash + "|" + shared_code_hash
   collapse to a single space, then stripped); `content_hash` **and all
   three part fields** (`source_hash`, `shared_code_hash`, `config_hash`)
   are excluded from the basis — `config_hash` cannot include itself, and
-  none of the four hash fields participates in another's basis. Every
+  none of the four hash fields participates in another's basis. So is
+  `timeout_minutes`, the one non-hash wire key left out of the basis. Every
   other field, including `config`, participates verbatim.
 
 Invariant: formatting-only edits (spaces in SQL, yaml indentation/key

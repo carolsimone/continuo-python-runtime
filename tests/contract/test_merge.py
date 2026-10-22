@@ -617,3 +617,25 @@ def test_a_replace_entry_hashes_exactly_as_it_did_before_write_modes(extra):
     entry = node_entry(parse_node({**_REPLACE_NODE, **extra}, "f.yml"))
     assert "mode_type" not in entry and "primary_key" not in entry
     assert config_hash(entry) == _PRE_WRITE_MODES_CONFIG_HASH
+
+
+# --- timeout_minutes ----------------------------------------------------------
+
+
+def test_timeout_minutes_is_outside_the_config_hash(tmp_path):
+    without = _only_entry(_modes_repo(tmp_path / "a"))
+    short = _only_entry(_modes_repo(tmp_path / "b", timeout_minutes=120))
+    long = _only_entry(_modes_repo(tmp_path / "c", timeout_minutes=480))
+    assert short["config_hash"] == long["config_hash"] == without["config_hash"]
+    assert short["content_hash"] == long["content_hash"] == without["content_hash"]
+    # The wire entry hashes exactly as the same entry would without the key.
+    assert config_hash(short) == short["config_hash"]
+
+
+def test_the_wire_entry_carries_timeout_minutes_only_when_set(tmp_path):
+    without = _only_entry(_modes_repo(tmp_path / "a"))
+    declared = _only_entry(_modes_repo(tmp_path / "b", timeout_minutes=120))
+    assert "timeout_minutes" not in without
+    assert set(without) == WIRE_ENTRY_KEYS
+    assert declared["timeout_minutes"] == 120
+    assert set(declared) == WIRE_ENTRY_KEYS | {"timeout_minutes"}

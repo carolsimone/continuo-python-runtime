@@ -878,3 +878,22 @@ def test_primary_key_names_a_column_that_differs_only_in_case_from_another():
     entry["output_columns"].append({"name": "Base", "type": "VARCHAR(3)", "nullable": False})
     node = parse_node(entry, "c.yml")
     assert node.primary_key == ("rate_date", "Base")
+
+
+# --- timeout_minutes ------------------------------------------------------------
+
+
+def test_timeout_minutes_is_read():
+    assert parse_node({**VALID, "timeout_minutes": 120}, "f.yml").timeout_minutes == 120
+    assert parse_node({**VALID, "timeout_minutes": 1}, "f.yml").timeout_minutes == 1
+    assert parse_node({**VALID, "timeout_minutes": 10080}, "f.yml").timeout_minutes == 10080
+
+
+def test_timeout_minutes_defaults_to_none():
+    assert parse_node(VALID, "f.yml").timeout_minutes is None
+
+
+@pytest.mark.parametrize("bad", [0, 10081, "2h", 1.5, True])
+def test_a_bad_timeout_minutes_is_refused(bad):
+    with pytest.raises(ContractError, match=r"f\.yml \(analytics\.t\): 'timeout_minutes'"):
+        parse_node({**VALID, "timeout_minutes": bad}, "f.yml")

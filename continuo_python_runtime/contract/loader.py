@@ -44,7 +44,12 @@ _ALLOWED_KEYS = {
     "secret_ref",
     "mode_type",
     "primary_key",
+    "timeout_minutes",
 }
+
+# Bounds of a node's declared task timeout, in minutes (one minute to one week).
+MIN_TIMEOUT_MINUTES = 1
+MAX_TIMEOUT_MINUTES = 10_080
 
 _REQUIRED_STRING_FIELDS = ("schema", "table", "owner", "schedule")
 
@@ -295,6 +300,16 @@ def parse_node(
             raise ContractError(f"{label}: 'secret_ref' is not allowed for kind {kind}")
         secret_ref = validate_secret_ref(raw["secret_ref"], label)
 
+    timeout_minutes = raw.get("timeout_minutes")
+    if "timeout_minutes" in raw and (
+        type(timeout_minutes) is not int
+        or not MIN_TIMEOUT_MINUTES <= timeout_minutes <= MAX_TIMEOUT_MINUTES
+    ):
+        raise ContractError(
+            f"{label}: 'timeout_minutes' must be an integer between "
+            f"{MIN_TIMEOUT_MINUTES} and {MAX_TIMEOUT_MINUTES}, got {timeout_minutes!r}"
+        )
+
     mode_type = raw.get("mode_type", DEFAULT_MODE_TYPE)
     if not isinstance(mode_type, str) or mode_type not in MODE_TYPES:
         raise ContractError(
@@ -375,6 +390,7 @@ def parse_node(
         secret_ref=secret_ref,
         mode_type=mode_type,
         primary_key=primary_key,
+        timeout_minutes=timeout_minutes,
     )
 
 

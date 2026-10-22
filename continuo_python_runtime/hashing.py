@@ -21,6 +21,10 @@ from json import dumps
 
 HASH_PART_FIELDS = ("source_hash", "shared_code_hash", "config_hash")
 CONTENT_HASH_FIELD = "content_hash"
+# A wire key that is not part of the config_hash basis: it tunes how the node
+# runs (the task timeout) and says nothing about what the node computes, so
+# changing it alone is not a code change.
+NON_HASHED_FIELDS = ("timeout_minutes",)
 
 
 def canonical_entry(entry: dict) -> dict:
@@ -28,13 +32,14 @@ def canonical_entry(entry: dict) -> dict:
 
     Drops ``content_hash`` and all three of ``HASH_PART_FIELDS`` from the
     basis, and whitespace-normalizes every ``str`` value in ``reads`` via
-    ``" ".join(sql.split())``. Everything else is preserved verbatim,
-    including ``config``.
+    ``" ".join(sql.split())``. ``timeout_minutes`` is the one other wire key
+    left out of the basis (``NON_HASHED_FIELDS``). Everything else is
+    preserved verbatim, including ``config``.
     """
     canonical = deepcopy(entry)
 
     canonical.pop(CONTENT_HASH_FIELD, None)
-    for field in HASH_PART_FIELDS:
+    for field in (*HASH_PART_FIELDS, *NON_HASHED_FIELDS):
         canonical.pop(field, None)
 
     reads = canonical.get("reads")

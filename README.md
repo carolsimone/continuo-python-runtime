@@ -176,6 +176,15 @@ produced, never how it is checked or written.
   script reads with `os.environ[...]`. The contract never holds a secret value
   or env var name; the Secret itself is created in the cluster by the operator.
 
+### Task timeout
+
+Any node may set `timeout_minutes:` — an integer from 1 to 10,080 (one week) —
+to declare how long its task may run before continuo gives up on it. A value
+outside that range, or one that is not an integer, fails
+`continuo-runtime validate`/`merge`/`lint`. It is the one key that is not part
+of `config_hash`, so changing only the timeout never changes the node's
+`content_hash`.
+
 ## Write modes
 
 `mode_type:` chooses how the harness writes a node's table on each run:

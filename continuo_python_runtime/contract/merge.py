@@ -170,6 +170,10 @@ def build_wire_contract(
 
         primary_bytes, member_bytes = _HASH_INPUTS[node.kind](node, repo_root)
         entry.update(hash_parts(entry, primary_bytes, member_bytes))
+        # The one wire key outside config_hash: it is written after the hashes
+        # are computed, so changing it alone never changes content_hash.
+        if node.timeout_minutes is not None:
+            entry["timeout_minutes"] = node.timeout_minutes
 
         wire_nodes.append(entry)
 

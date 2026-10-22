@@ -186,3 +186,10 @@ def test_hash_parts_returns_four_keys_and_consistent_fold():
     assert parts["content_hash"] == content_hash_fold(
         parts["source_hash"], parts["shared_code_hash"], parts["config_hash"]
     )
+
+
+def test_timeout_minutes_is_outside_the_config_hash_basis():
+    with_timeout = {**ENTRY, "timeout_minutes": 120}
+    assert "timeout_minutes" not in canonical_entry(with_timeout)
+    assert config_hash(with_timeout) == config_hash(ENTRY)
+    assert config_hash({**ENTRY, "timeout_minutes": 480}) == config_hash(ENTRY)

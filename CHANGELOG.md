@@ -5,6 +5,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Contracts may set `timeout_minutes` on any node: an integer from 1 to 10,080
+  that is the node's task timeout. Other values are refused as a contract
+  error naming the node. The merged wire entry carries the key only when set,
+  and it is the one wire key outside `config_hash`: changing it alone leaves
+  `config_hash` and `content_hash` unchanged. A node that does not set it has
+  the wire entry it always had.
+
 ### Changed
 
 - The "mode_type not allowed for kind" contract error now quotes the offending

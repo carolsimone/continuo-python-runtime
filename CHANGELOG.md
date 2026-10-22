@@ -24,6 +24,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the postgres `ensure_table` port-signature reference (0.6.0 → 0.8.0) and the
   `ensure_unique_key` message-order claim (pyarrow grouping order is not
   contractual).
+- The trino adapter (0.3.1) and duckdb adapter (0.2.1) release with their
+  `continuo-engine-contract` pin moved to 0.8.1; no behavior change.
 
 ## [0.9.0] - 2026-10-11
 

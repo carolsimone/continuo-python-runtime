@@ -162,7 +162,7 @@ wheels = [
 
 [[package]]
 name = "continuo-duckdb-adapter"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "adapters/duckdb" }
 dependencies = [
     { name = "continuo-engine-contract" },
@@ -305,7 +305,7 @@ test = [
 
 [[package]]
 name = "continuo-trino-adapter"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "adapters/trino" }
 dependencies = [
     { name = "continuo-engine-contract" },

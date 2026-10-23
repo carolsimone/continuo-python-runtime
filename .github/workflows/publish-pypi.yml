@@ -250,7 +250,7 @@ jobs:
         # Pinned to a commit SHA. release/v1 is a moving branch, and this job
         # holds id-token: write for PyPI Trusted Publishing — a compromised
         # revision could mint a token and publish under this project's name.
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
           packages-dir: dist
@@ -263,7 +263,7 @@ jobs:
       # guard in `prepare` is what catches that case.
       - name: Publish to PyPI
         if: needs.prepare.outputs.mode == 'real'
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
         with:
           packages-dir: dist
           skip-existing: true

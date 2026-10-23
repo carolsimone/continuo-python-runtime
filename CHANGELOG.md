@@ -16,6 +16,10 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pyarrow` is pinned at `26.0.0` (was `25.0.1`) in the runtime, the engine
   contract's `testing` extra and the three adapters, so they keep resolving
   together.
+- Dependency pins move together across the workspace: `ruff` 0.17.1, `mypy`
+  2.4.0, `boto3` 1.43.114, `sqlglot` 30.23.0 (runtime and engine contract),
+  `trino` 0.340.0 and `psycopg2-binary` 2.9.13. `urllib3` moves to 2.8.0 in
+  `uv.lock` (CVE-2026-97687, CVE-2026-97689).
 
 ## [0.10.0] - 2026-10-22
 

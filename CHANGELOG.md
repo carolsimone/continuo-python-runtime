@@ -5,6 +5,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The python-node env contract in `docs/boundary-contract.md` lists
+  `TASK_ATTEMPT`, the 0-based number of the task's attempt, which the executor
+  sets on every production Job. The harness does not read it; a node script
+  may. Documentation only: no package changes.
+
 ## [0.10.0] - 2026-10-22
 
 ### Added

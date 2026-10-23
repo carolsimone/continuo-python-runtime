@@ -20,7 +20,7 @@ dependencies = [
     # contract version never exists without a new runtime version to match it;
     # an exact pin therefore costs nothing and keeps the tested pair together.
     "continuo-engine-contract==0.8.1",
-    "boto3==1.43.114",
+    "boto3==1.43.115",
     "pyarrow==26.0.0",
     "PyYAML==6.0.3",
     # Pinned in lockstep with continuo-engine-contract's OWN sqlglot pin

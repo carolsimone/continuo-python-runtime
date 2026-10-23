@@ -3,7 +3,7 @@
 # requirements file (regenerate with the command in template/README.md).
 # Shape 1 (FROM the engine image, see template/Dockerfile) is simpler; use this
 # only when you must control the base image.
-FROM python:3.14.2-slim
+FROM python:3.14.8-slim
 COPY requirements.lock /tmp/requirements.lock
 RUN pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock \
     && rm -f /tmp/requirements.lock

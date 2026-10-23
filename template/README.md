@@ -52,7 +52,7 @@ any extra dependency your script needs). Pin by tag or digest
 specific reason not to.
 
 **Shape 2 — `Dockerfile.pip`, your own base (hash-locked).** Builds
-`FROM python:3.14.2-slim` (or another base you control) and installs
+`FROM python:3.14.8-slim` (or another base you control) and installs
 `continuo-python-runtime` plus one `continuo-<engine>-adapter` from PyPI via
 `pip install --require-hashes -r requirements.lock`. Use this when you must
 control the base image yourself — e.g. your org mandates a specific base,

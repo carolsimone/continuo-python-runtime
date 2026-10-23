@@ -11,6 +11,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `TASK_ATTEMPT`, the 0-based number of the task's attempt, which the executor
   sets on every production Job. The harness does not read it; a node script
   may. Documentation only: no package changes.
+- The engine images build on `python:3.14.8-slim` (was `3.14.2`), and
+  `.python-version` and the `template/` Dockerfile follow.
 
 ## [0.10.0] - 2026-10-22
 

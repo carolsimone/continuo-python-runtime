@@ -69,7 +69,7 @@ def test_image_requirements_follow_the_package_versions(tree):
 def test_third_party_pins_are_untouched(tree):
     rehearsal.apply(tree, ".dev1201")
     text = (tree / "pyproject.toml").read_text()
-    assert '"boto3==' in text and "boto3==1.43.85" in text
+    assert '"boto3==' in text and "boto3==1.43.114" in text
 
 
 def test_the_rewritten_tree_still_passes_the_consistency_guards(tree):

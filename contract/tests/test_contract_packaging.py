@@ -23,4 +23,4 @@ def test_wheel_ships_the_conformance_suite_and_the_testing_extra(tmp_path):
     assert "continuo_engine_contract/keys.py" in names
     assert "Provides-Extra: testing" in metadata
     assert re.search(r"Requires-Dist: pytest==9\.1\.1; extra == ['\"]testing['\"]", metadata)
-    assert re.search(r"Requires-Dist: pyarrow==25\.0\.1; extra == ['\"]testing['\"]", metadata)
+    assert re.search(r"Requires-Dist: pyarrow==26\.0\.0; extra == ['\"]testing['\"]", metadata)

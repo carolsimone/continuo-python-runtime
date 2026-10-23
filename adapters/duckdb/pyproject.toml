@@ -12,7 +12,7 @@ dependencies = [
     # metadata, and this adapter subclasses the contract's port directly.
     "continuo-engine-contract==0.8.1",
     "duckdb==1.5.6",
-    "pyarrow==25.0.1",
+    "pyarrow==26.0.0",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

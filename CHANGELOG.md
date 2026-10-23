@@ -13,6 +13,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   may. Documentation only: no package changes.
 - The engine images build on `python:3.14.8-slim` (was `3.14.2`), and
   `.python-version` and the `template/` Dockerfile follow.
+- `pyarrow` is pinned at `26.0.0` (was `25.0.1`) in the runtime, the engine
+  contract's `testing` extra and the three adapters, so they keep resolving
+  together.
 
 ## [0.10.0] - 2026-10-22
 

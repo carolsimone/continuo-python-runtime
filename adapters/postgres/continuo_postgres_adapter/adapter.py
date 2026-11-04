@@ -28,8 +28,10 @@ import contextlib
 import hashlib
 import logging
 import os
+import re
+import time
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
 import psycopg2  # type: ignore[import-untyped]
@@ -78,6 +80,35 @@ _DEFAULT_INDEX_TYPE = "btree"
 # truncated here too, or the emitted DDL's name would not match the name
 # postgres actually stores.
 _MAX_IDENTIFIER_BYTES = 63
+
+# A Job pod's first connection can be refused for a few seconds after the pod
+# starts, until the cluster's NetworkPolicy engine has admitted the pod: an
+# engine that rejects (k3s's kube-router) refuses at once instead of dropping
+# the packets. So a connection the server never answered, refused or
+# unroutable, is tried again. A connect timeout is not: an engine that drops
+# packets only delays the first connection, which TCP's own retransmissions
+# carry through, so a timeout means the server stayed silent for the whole
+# timeout and every retry would wait that long again.
+_CONNECT_ATTEMPTS = 5
+_CONNECT_RETRY_SECONDS = 2.0
+# libpq gives the reason after "failed: " (libpq 14 and later) or after "could
+# not connect to server: " (libpq 13 and earlier); pgcode is None for every
+# connection failure, so the text is all there is.
+_UNREACHABLE_REASON = re.compile(
+    r"(?:failed|could not connect to server): "
+    r"(?:Connection refused|No route to host|Network is unreachable)"
+)
+
+
+def _is_unreachable(exc: "psycopg2.OperationalError") -> bool:
+    """Whether *exc* says no server answered the connection.
+
+    A message with a FATAL line came from a server that did answer (a failed
+    authentication, an unknown database), even when another address of the
+    same host name refused.
+    """
+    message = str(exc)
+    return "FATAL:" not in message and _UNREACHABLE_REASON.search(message) is not None
 
 
 def _truncate_explicit_identifier(name: str) -> str:
@@ -418,16 +449,35 @@ class PostgresAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
         return ["POSTGRES_HOST", "POSTGRES_DB", "POSTGRES_USER"]
 
     @classmethod
-    def from_env(cls) -> "PostgresAdapter":
-        """Connect from POSTGRES_* env (port defaults 5432, password empty)."""
-        conn = psycopg2.connect(
-            host=os.environ["POSTGRES_HOST"],
-            port=os.environ.get("POSTGRES_PORT", "5432"),
-            dbname=os.environ["POSTGRES_DB"],
-            user=os.environ["POSTGRES_USER"],
-            password=os.environ.get("POSTGRES_PASSWORD", ""),
-        )
-        return cls(conn)
+    def from_env(cls, *, sleep: Callable[[float], None] = time.sleep) -> "PostgresAdapter":
+        """Connect from POSTGRES_* env (port defaults 5432, password empty).
+
+        A connection no server answered (refused, no route, network
+        unreachable) is tried again, up to ``_CONNECT_ATTEMPTS`` times in all,
+        ``_CONNECT_RETRY_SECONDS`` apart, each retry logged; the last failure
+        is raised. Every other failure is raised at once.
+        """
+        params = {
+            "host": os.environ["POSTGRES_HOST"],
+            "port": os.environ.get("POSTGRES_PORT", "5432"),
+            "dbname": os.environ["POSTGRES_DB"],
+            "user": os.environ["POSTGRES_USER"],
+            "password": os.environ.get("POSTGRES_PASSWORD", ""),
+        }
+        for attempt in range(1, _CONNECT_ATTEMPTS + 1):
+            try:
+                conn = psycopg2.connect(**params)
+            except psycopg2.OperationalError as exc:
+                if attempt == _CONNECT_ATTEMPTS or not _is_unreachable(exc):
+                    raise
+                logger.warning(
+                    "postgres not reachable yet (attempt %d of %d), retrying in %.0f s: %s",
+                    attempt, _CONNECT_ATTEMPTS, _CONNECT_RETRY_SECONDS, str(exc).strip(),
+                )
+                sleep(_CONNECT_RETRY_SECONDS)
+                continue
+            return cls(conn)
+        raise AssertionError("unreachable")  # pragma: no cover
 
     # --- Schema lifecycle ---------------------------------------------------
 

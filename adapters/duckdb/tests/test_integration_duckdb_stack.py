@@ -20,14 +20,26 @@ def test_ensure_schema_creates_a_schema_visible_to_another_connection(adapter, a
     assert other.fetch(f'SELECT count(*) AS n FROM "{schema}"."t"').to_pylist() == [{"n": 0}]
 
 
-def test_unreachable_catalog_raises_a_clear_error(adapter_factory):
-    with pytest.raises(duckdb.Error):
-        adapter_factory(DUCKDB_CATALOG_PORT="1")
+def _connect(lake_env, sleeps, **overrides):
+    """DuckDBAdapter.from_env's session, with its retry waits recorded instead of slept."""
+    from continuo_duckdb_adapter.infrastructure.session import DuckLakeSession
+    from continuo_duckdb_adapter.infrastructure.settings import DuckLakeSettings
+
+    return DuckLakeSession.connect(DuckLakeSettings.from_env({**lake_env, **overrides}), sleep=sleeps.append)
 
 
-def test_wrong_catalog_password_raises_a_clear_error(adapter_factory):
-    with pytest.raises(duckdb.Error):
-        adapter_factory(DUCKDB_CATALOG_PASSWORD="definitely-wrong")
+def test_unreachable_catalog_is_retried_then_raises_a_clear_error(lake_env):
+    sleeps: list[float] = []
+    with pytest.raises(duckdb.Error, match="Connection refused"):
+        _connect(lake_env, sleeps, DUCKDB_CATALOG_PORT="1")
+    assert sleeps == [2.0, 2.0, 2.0, 2.0]
+
+
+def test_wrong_catalog_password_raises_a_clear_error_at_once(lake_env):
+    sleeps: list[float] = []
+    with pytest.raises(duckdb.Error, match="password authentication failed"):
+        _connect(lake_env, sleeps, DUCKDB_CATALOG_PASSWORD="definitely-wrong")
+    assert sleeps == []
 
 
 def test_failed_attach_does_not_echo_the_password(adapter_factory):

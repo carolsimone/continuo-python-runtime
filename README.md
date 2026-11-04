@@ -320,7 +320,10 @@ declared `output_columns` on the table `run()` returned, in this order:
 Every runtime failure is one of five `HarnessError` subclasses
 (`continuo_python_runtime/errors.py`). The sentinel result block's message
 is prefixed `<ErrorClass>: ` so failures can be triaged without parsing free
-text.
+text. The harness also logs the same message at ERROR on stderr, with the
+traceback of the exception it wraps (a driver error, the script's own
+exception), so the stored log of a failed run names its failure: Continuo cuts
+the result block out of the log before storing it.
 
 | Class | Meaning | Typical fix target |
 | --- | --- | --- |

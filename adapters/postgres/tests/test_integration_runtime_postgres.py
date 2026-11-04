@@ -85,6 +85,35 @@ def _seed(schema: str, table: str, ddl: str, rows_sql: str) -> None:
     conn.close()
 
 
+@pytest.fixture()
+def pg_env(monkeypatch):
+    monkeypatch.setenv("POSTGRES_HOST", PG["host"])
+    monkeypatch.setenv("POSTGRES_PORT", str(PG["port"]))
+    monkeypatch.setenv("POSTGRES_DB", PG["dbname"])
+    monkeypatch.setenv("POSTGRES_USER", PG["user"])
+    monkeypatch.setenv("POSTGRES_PASSWORD", PG["password"])
+
+
+@pytest.mark.integration
+def test_from_env_connects_on_the_first_try(pg_env):
+    sleeps: list[float] = []
+    a = PostgresAdapter.from_env(sleep=sleeps.append)
+    try:
+        assert a.fetch("SELECT 1 AS one").to_pylist() == [{"one": 1}]
+    finally:
+        a.close()
+    assert sleeps == []
+
+
+@pytest.mark.integration
+def test_from_env_raises_a_failed_authentication_at_once(pg_env, monkeypatch):
+    monkeypatch.setenv("POSTGRES_PASSWORD", "not-the-password")
+    sleeps: list[float] = []
+    with pytest.raises(psycopg2.OperationalError, match="password authentication failed"):
+        PostgresAdapter.from_env(sleep=sleeps.append)
+    assert sleeps == []
+
+
 @pytest.mark.integration
 def test_ensure_table_creates_typed_table_with_not_null(clean_schema):
     """ensure_table creates a typed table; NOT NULL columns show up in the DDL."""

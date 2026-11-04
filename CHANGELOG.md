@@ -5,6 +5,22 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed python node's stored log names its failure. The harness logs every
+  runtime error at ERROR on stderr, with the traceback of the exception it
+  wraps, as well as printing it in the result block. Continuo cuts the result
+  block out of the pod log before storing it, so a failure only printed there,
+  such as `LoadError: adapter construction failed: … Connection refused`, was
+  missing from the stored log.
+- The postgres adapter, and the duckdb adapter's catalog attach, retry a
+  connection that no server answered (refused, no route to host, network
+  unreachable) up to 5 times, 2 s apart, logging each retry. A Job pod's first
+  connection can be refused for a few seconds after the pod starts, until the
+  cluster's NetworkPolicy engine (k3s's kube-router rejects) has admitted the
+  pod; that cost a task retry and a failed Job. An authentication failure, a
+  connect timeout and every other failure are still raised at once.
+
 ### Changed
 
 - The python-node env contract in `docs/boundary-contract.md` lists

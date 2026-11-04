@@ -1,6 +1,7 @@
 """Tests for the harness: script dispatch, sentinel envelope, error taxonomy."""
 
 import json
+import logging
 import sys
 
 import pyarrow as pa
@@ -666,6 +667,104 @@ def test_adapter_construction_failure_emits_single_load_error_block(monkeypatch,
     out = capsys.readouterr().out
     assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
     assert '"message":"LoadError:' in out
+
+
+# --- every failure is logged, not only printed in the result block -----------
+#
+# The executor cuts the result block out of the pod log before it stores the
+# log, so a failure that is only printed in the block is missing from the
+# stored log.
+
+_LIBPQ_REFUSED = (
+    'connection to server at "continuo-pg-rw" (10.43.101.94), port 5432 failed: '
+    "Connection refused\n\tIs the server running on that host and accepting TCP/IP connections?\n"
+)
+
+
+class _OperationalError(Exception):
+    """Stands in for the driver's own error class (psycopg2.OperationalError)."""
+
+
+def _harness_errors(caplog):
+    return [
+        r for r in caplog.records
+        if r.name == "continuo_python_runtime.harness" and r.levelno == logging.ERROR
+    ]
+
+
+def test_a_refused_warehouse_connection_is_logged_with_its_cause(monkeypatch, harness_repo, capsys, caplog):
+    import continuo_python_runtime.harness as harness_mod
+
+    refused = _OperationalError(_LIBPQ_REFUSED)
+
+    class RefusedAdapter(FakeWarehouseAdapter):
+        @classmethod
+        def from_env(cls):
+            raise refused
+
+    monkeypatch.setattr(harness_mod, "discover_adapter", lambda: ("dummy", RefusedAdapter))
+    caplog.set_level(logging.INFO)
+
+    assert run_node(_env(harness_repo)) == 1
+
+    errors = _harness_errors(caplog)
+    assert len(errors) == 1
+    assert (
+        "LoadError: adapter construction failed: connection to server at \"continuo-pg-rw\" "
+        "(10.43.101.94), port 5432 failed: Connection refused" in errors[0].getMessage()
+    )
+    assert errors[0].exc_info is not None and errors[0].exc_info[1].__cause__ is refused
+    assert _sentinel_body(capsys.readouterr().out)["message"].startswith(
+        "LoadError: adapter construction failed:"
+    )
+
+
+def _write_failure(repo):
+    class BadLoad(FakeWarehouseAdapter):
+        def load(self, schema, table, data):
+            raise RuntimeError("disk full")
+
+    return BadLoad({"select id from analytics.a": pa.table({"id": [1]})})
+
+
+def _unknown_node(repo):
+    return FakeWarehouseAdapter()
+
+
+def _undeclared_read(repo):
+    (repo / "scripts" / "t.py").write_text("def run(ctx):\n    return ctx.read('nope')\n")
+    return FakeWarehouseAdapter()
+
+
+def _script_raises(repo):
+    (repo / "scripts" / "t.py").write_text("def run(ctx):\n    raise ValueError('x')\n")
+    return FakeWarehouseAdapter()
+
+
+def _conform_violation(repo):
+    return FakeWarehouseAdapter({"select id from analytics.a": pa.table({"wrong": [1]})})
+
+
+@pytest.mark.parametrize("arrange, node_id, error_class", [
+    (_unknown_node, "python-node.svc.analytics.nope", "ContractError"),
+    (_undeclared_read, None, "ReadError"),
+    (_script_raises, None, "ScriptError"),
+    (_conform_violation, None, "ConformError"),
+    (_write_failure, None, "LoadError"),
+])
+def test_every_harness_error_is_logged_with_the_result_block_message(
+    harness_repo, capsys, caplog, arrange, node_id, error_class
+):
+    adapter = arrange(harness_repo)
+    env = _env(harness_repo) | ({"NODE_ID": node_id} if node_id else {})
+    caplog.set_level(logging.INFO)
+
+    assert run_node(env, adapter=adapter) == 1
+
+    message = _sentinel_body(capsys.readouterr().out)["message"]
+    assert message.startswith(f"{error_class}: ")
+    errors = _harness_errors(caplog)
+    assert len(errors) == 1 and message in errors[0].getMessage()
 
 
 def _api_repo(tmp_path, script_body):

@@ -12,30 +12,17 @@ FROM python:3.14.8-slim
 #                           package names, so it is never an extra index.
 #                           Any other value fails the build.
 # The pinned versions live in image-requirements-duckdb.txt, kept equal to the
-# repo's pyproject versions by tests/test_image_requirements_sync.py. See
-# Dockerfile.postgres for the full reasoning behind the two-step wheelhouse
-# install (exact local files first, --no-index --no-deps, then PyPI for the
-# third-party dependencies).
+# repo's pyproject versions by tests/test_image_requirements_sync.py.
+# scripts/install_image_pins.py runs the installs for each WHEEL_SOURCE (and
+# says why the wheelhouse wheels are installed by exact file first). It
+# retries an index install while the index does not serve a just-uploaded
+# pin yet: a release builds its images right after the upload.
 ARG WHEEL_SOURCE=pypi
 COPY image-requirements-duckdb.txt /tmp/req.txt
 COPY wheelhous[e] /tmp/wheelhouse
-RUN set -eu; \
-    if [ "$WHEEL_SOURCE" = "wheelhouse" ]; then \
-      pip install --no-cache-dir --no-index --no-deps \
-        /tmp/wheelhouse/continuo_engine_contract-*.whl \
-        /tmp/wheelhouse/continuo_python_runtime-*.whl \
-        /tmp/wheelhouse/continuo_duckdb_adapter-*.whl; \
-      pip install --no-cache-dir -r /tmp/req.txt; \
-    elif [ "$WHEEL_SOURCE" = "testpypi" ]; then \
-      pip install --no-cache-dir --no-deps --only-binary=:all: --index-url https://test.pypi.org/simple/ \
-        -r /tmp/req.txt; \
-      pip install --no-cache-dir -r /tmp/req.txt; \
-    elif [ "$WHEEL_SOURCE" = "pypi" ]; then \
-      pip install --no-cache-dir -r /tmp/req.txt; \
-    else \
-      echo "unknown WHEEL_SOURCE=$WHEEL_SOURCE (pypi|testpypi|wheelhouse)" >&2; exit 1; \
-    fi; \
-    rm -rf /tmp/req.txt /tmp/wheelhouse
+COPY scripts/install_image_pins.py /tmp/install_image_pins.py
+RUN python /tmp/install_image_pins.py --source "$WHEEL_SOURCE" --adapter duckdb --requirements /tmp/req.txt --wheelhouse /tmp/wheelhouse \
+    && rm -rf /tmp/req.txt /tmp/wheelhouse /tmp/install_image_pins.py
 # The adapter LOADs ducklake/postgres/httpfs/aws from this directory. They are
 # installed now, as root, because the runtime user below has no home directory
 # and the container may have no network. HOME=/tmp gives DuckDB a writable

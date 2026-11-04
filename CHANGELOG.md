@@ -5,6 +5,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A release's image build no longer fails when PyPI still serves an index
+  page from before the upload. The engine images install their pins through
+  `scripts/install_image_pins.py`, which retries an install while pip says a
+  pinned version is not served yet (up to 10 minutes) and fails any other
+  error at once. The v0.11.0 trino amd64 build hit this 40 s after the upload,
+  although the runner's own probe had seen the new version. No package
+  changes.
+
 ## [0.11.0] - 2026-11-04
 
 **TL;DR**

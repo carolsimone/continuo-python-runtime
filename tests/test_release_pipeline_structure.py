@@ -109,11 +109,21 @@ def test_candidates_are_pushed_by_digest_never_by_tag():
 def test_rehearsals_build_images_from_testpypi_and_real_tags_from_pypi():
     text = (WORKFLOWS / "publish-pypi.yml").read_text()
     assert "wheel_source=testpypi" in text and "wheel_source=pypi" in text
+
+
+def test_every_image_installs_its_pins_through_install_image_pins():
+    """scripts/install_image_pins.py owns the per-source installs (tested in
+    tests/test_install_image_pins.py), including the retry of an index that
+    lags its own upload. A pip install of the pins written into a Dockerfile
+    would bypass both."""
     for engine in ENGINES:
         dockerfile = (ROOT / f"Dockerfile.{engine}").read_text()
-        # First-party only from TestPyPI: never an extra index for third parties.
-        # --only-binary: an sdist would pull its build backend from this index too.
-        assert "--no-deps --only-binary=:all: --index-url https://test.pypi.org/simple/" in dockerfile
+        assert "COPY scripts/install_image_pins.py /tmp/install_image_pins.py" in dockerfile
+        assert (
+            f'python /tmp/install_image_pins.py --source "$WHEEL_SOURCE" --adapter {engine}'
+            " --requirements /tmp/req.txt --wheelhouse /tmp/wheelhouse"
+        ) in dockerfile
+        assert "pip install" not in dockerfile
         assert "--extra-index-url" not in dockerfile
 
 

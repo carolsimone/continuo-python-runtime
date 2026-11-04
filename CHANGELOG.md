@@ -5,6 +5,29 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-04
+
+**TL;DR**
+
+- A failed python node's log now says why it failed.
+- Every engine adapter waits up to about 10 s for a warehouse that refuses
+  the first connections, as a new Kubernetes pod sees until the cluster's
+  network policy admits it. That used to fail the attempt at once.
+- The trino adapter now connects when it is created, so a wrong Trino
+  password fails at start-up instead of at the first read.
+- Adapter authors: `StartupConformance` is a new conformance class every
+  adapter's integration suite runs.
+
+**Upgrade**
+
+1. Build your domain image `FROM` the `v0.11.0` engine image (or pin
+   `continuo-python-runtime==0.11.0` and your adapter's new version).
+2. Bring-your-own adapter: subclass `StartupConformance` in your integration
+   suite and provide the `warehouse_address` and `adapter_from_env` fixtures.
+
+Versions: runtime 0.11.0, engine contract 0.9.0, postgres adapter 0.3.2,
+trino adapter 0.4.0, duckdb adapter 0.2.2.
+
 ### Fixed
 
 - A failed python node's stored log names its failure. The harness logs every

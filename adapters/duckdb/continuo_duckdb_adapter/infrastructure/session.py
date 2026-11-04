@@ -72,13 +72,11 @@ CATALOG_ALIAS = "lake"
 _ATTACH_ATTEMPTS = 5
 _ATTACH_BACKOFF_SECONDS = 0.2
 _UNREACHABLE_RETRY_SECONDS = 2.0
-# The ATTACH error carries libpq's text for the catalog connection, which gives
-# the reason after "failed: " (libpq 14 and later) or after "could not connect
-# to server: " (libpq 13 and earlier).
-_UNREACHABLE_REASON = re.compile(
-    r"(?:failed|could not connect to server): "
-    r"(?:Connection refused|No route to host|Network is unreachable)"
-)
+# The ATTACH error carries libpq's text for the catalog connection: one line per
+# address it tried, the reason after "failed: " (libpq 14 and later) or after
+# "could not connect to server: " (libpq 13 and earlier).
+_ADDRESS_FAILURE = re.compile(r"(?:failed|could not connect to server): ([^\n]*)")
+_UNREACHABLE_REASONS = frozenset({"Connection refused", "No route to host", "Network is unreachable"})
 
 
 def _is_first_attach_race(exc: duckdb.Error) -> bool:
@@ -89,14 +87,22 @@ def _is_first_attach_race(exc: duckdb.Error) -> bool:
 
 
 def _is_catalog_unreachable(exc: duckdb.Error) -> bool:
-    """Whether *exc* says no catalog server answered the connection.
+    """Whether *exc* says that every address of the catalog host refused or could not be routed to.
 
-    A message with a FATAL line came from a server that did answer (a failed
-    authentication, an unknown database), even when another address of the
-    same host name refused.
+    A host name can have several addresses, and libpq reports each one it
+    tried. One that timed out means a retry would wait out its timeout again;
+    a FATAL line came from a server that answered (a failed authentication, an
+    unknown database). libpq 13 and earlier print a timeout as a bare
+    "timeout expired" line, with no prefix.
     """
     message = str(exc)
-    return "FATAL:" not in message and _UNREACHABLE_REASON.search(message) is not None
+    reasons = [reason.strip() for reason in _ADDRESS_FAILURE.findall(message)]
+    return (
+        bool(reasons)
+        and all(reason in _UNREACHABLE_REASONS for reason in reasons)
+        and "FATAL:" not in message
+        and "timeout expired" not in message
+    )
 
 
 def _load_extension(con: "duckdb.DuckDBPyConnection", name: str) -> None:

@@ -57,6 +57,31 @@ REFUSED_THEN_AUTH_FAILED = (
     'connection to server at "localhost" (127.0.0.1), port 5432 failed: '
     'FATAL:  password authentication failed for user "continuo"\n'
 )
+# libpq reports every address it tried in one message. One address that stayed
+# silent means the host is not just unadmitted yet, and a retry would wait out
+# its timeout again (libpq 17's text, a real dual-stack localhost).
+REFUSED_THEN_TIMED_OUT = (
+    'connection to server at "localhost" (::1), port 5432 failed: Connection refused\n'
+    "\tIs the server running on that host and accepting TCP/IP connections?\n"
+    'connection to server at "localhost" (127.0.0.1), port 5432 failed: timeout expired\n'
+)
+TIMED_OUT_THEN_REFUSED = (
+    'connection to server at "localhost" (127.0.0.1), port 5432 failed: timeout expired\n'
+    'connection to server at "localhost" (::1), port 5432 failed: Connection refused\n'
+    "\tIs the server running on that host and accepting TCP/IP connections?\n"
+)
+# libpq 13 and earlier print a timeout as a bare line.
+REFUSED_THEN_TIMED_OUT_LIBPQ_13 = (
+    "could not connect to server: Connection refused\n\tIs the server running on host "
+    '"localhost" (::1) and accepting\n\tTCP/IP connections on port 5432?\n'
+    "timeout expired\n"
+)
+REFUSED_TWICE = (
+    'connection to server at "localhost" (::1), port 5432 failed: Connection refused\n'
+    "\tIs the server running on that host and accepting TCP/IP connections?\n"
+    'connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused\n'
+    "\tIs the server running on that host and accepting TCP/IP connections?\n"
+)
 
 
 class _Connection:
@@ -102,8 +127,8 @@ def connect_with(monkeypatch, postgres_env):
     return run
 
 
-@pytest.mark.parametrize("message", [REFUSED, REFUSED_LIBPQ_13, NO_ROUTE, NET_UNREACHABLE],
-                         ids=["refused", "refused-libpq-13", "no-route", "net-unreachable"])
+@pytest.mark.parametrize("message", [REFUSED, REFUSED_LIBPQ_13, NO_ROUTE, NET_UNREACHABLE, REFUSED_TWICE],
+                         ids=["refused", "refused-libpq-13", "no-route", "net-unreachable", "refused-twice"])
 def test_an_unreachable_server_is_retried_until_it_answers(connect_with, message):
     script = connect_with([message, message, None])
     sleeps: list[float] = []
@@ -148,7 +173,9 @@ def test_each_retry_is_logged_with_the_drivers_message(connect_with, caplog):
 
 @pytest.mark.parametrize("message", [
     AUTH_FAILED, NO_DATABASE, TIMED_OUT, UNKNOWN_HOST, REFUSED_THEN_AUTH_FAILED,
-], ids=["auth-failed", "no-database", "timed-out", "unknown-host", "refused-then-auth-failed"])
+    REFUSED_THEN_TIMED_OUT, TIMED_OUT_THEN_REFUSED, REFUSED_THEN_TIMED_OUT_LIBPQ_13,
+], ids=["auth-failed", "no-database", "timed-out", "unknown-host", "refused-then-auth-failed",
+        "refused-then-timed-out", "timed-out-then-refused", "refused-then-timed-out-libpq-13"])
 def test_every_other_connection_failure_is_raised_at_once(connect_with, message):
     script = connect_with([message, None])
     sleeps: list[float] = []

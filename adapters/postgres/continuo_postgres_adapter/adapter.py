@@ -91,24 +91,31 @@ _MAX_IDENTIFIER_BYTES = 63
 # timeout and every retry would wait that long again.
 _CONNECT_ATTEMPTS = 5
 _CONNECT_RETRY_SECONDS = 2.0
-# libpq gives the reason after "failed: " (libpq 14 and later) or after "could
-# not connect to server: " (libpq 13 and earlier); pgcode is None for every
-# connection failure, so the text is all there is.
-_UNREACHABLE_REASON = re.compile(
-    r"(?:failed|could not connect to server): "
-    r"(?:Connection refused|No route to host|Network is unreachable)"
-)
+# libpq writes one line per address it tried, the reason after "failed: "
+# (libpq 14 and later) or after "could not connect to server: " (libpq 13 and
+# earlier); pgcode is None for every connection failure, so the text is all
+# there is.
+_ADDRESS_FAILURE = re.compile(r"(?:failed|could not connect to server): ([^\n]*)")
+_UNREACHABLE_REASONS = frozenset({"Connection refused", "No route to host", "Network is unreachable"})
 
 
 def _is_unreachable(exc: "psycopg2.OperationalError") -> bool:
-    """Whether *exc* says no server answered the connection.
+    """Whether *exc* says that every address of the host refused or could not be routed to.
 
-    A message with a FATAL line came from a server that did answer (a failed
-    authentication, an unknown database), even when another address of the
-    same host name refused.
+    A host name can have several addresses, and libpq reports each one it
+    tried. One that timed out means a retry would wait out its timeout again;
+    a FATAL line came from a server that answered (a failed authentication, an
+    unknown database). libpq 13 and earlier print a timeout as a bare
+    "timeout expired" line, with no prefix.
     """
     message = str(exc)
-    return "FATAL:" not in message and _UNREACHABLE_REASON.search(message) is not None
+    reasons = [reason.strip() for reason in _ADDRESS_FAILURE.findall(message)]
+    return (
+        bool(reasons)
+        and all(reason in _UNREACHABLE_REASONS for reason in reasons)
+        and "FATAL:" not in message
+        and "timeout expired" not in message
+    )
 
 
 def _truncate_explicit_identifier(name: str) -> str:

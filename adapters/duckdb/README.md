@@ -51,13 +51,14 @@ The attach is retried, up to 5 attempts in all, for two failures only:
 
 - a first attach to a brand-new catalog from several Jobs at once can race on
   DuckLake's metadata creation;
-- a catalog connection that no server answered (refused, no route to host,
-  network unreachable) is tried again 2 s later, each retry logged: a Job pod's
-  first connection can be refused for a few seconds after the pod starts,
-  until the cluster's NetworkPolicy engine has admitted the pod.
+- a catalog connection that no server answered (every address of the host
+  refused, had no route or sat on an unreachable network) is tried again 2 s
+  later, each retry logged: a Job pod's first connection can be refused for a
+  few seconds after the pod starts, until the cluster's NetworkPolicy engine
+  has admitted the pod.
 
 Every other connection error, an authentication failure or a connect timeout
-among them, surfaces immediately.
+on any address among them, surfaces immediately.
 
 ## Physical layout (`config`)
 

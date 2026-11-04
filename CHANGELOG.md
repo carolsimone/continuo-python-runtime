@@ -13,13 +13,29 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   block out of the pod log before storing it, so a failure only printed there,
   such as `LoadError: adapter construction failed: … Connection refused`, was
   missing from the stored log.
-- The postgres adapter, and the duckdb adapter's catalog attach, retry a
-  connection that no server answered (refused, no route to host, network
-  unreachable) up to 5 times, 2 s apart, logging each retry. A Job pod's first
-  connection can be refused for a few seconds after the pod starts, until the
-  cluster's NetworkPolicy engine (k3s's kube-router rejects) has admitted the
-  pod; that cost a task retry and a failed Job. An authentication failure, a
-  connect timeout and every other failure are still raised at once.
+- Every adapter's `from_env` waits out a warehouse that refuses connections
+  for the first few seconds. A Job pod's first connection can be refused until
+  the cluster's NetworkPolicy engine (k3s's kube-router rejects) has admitted
+  the pod; that cost a task retry and a failed Job. A connection that no server
+  answered (every address refused, had no route or sat on an unreachable
+  network) is tried up to 5 times, 2 s apart, each retry logged. An
+  authentication failure, a timeout on any address and every other failure are
+  raised at once.
+  - postgres: around `psycopg2.connect`.
+  - duckdb: around the catalog attach.
+  - trino: `from_env` now sends `SELECT 1`, since the trino DBAPI opens no
+    connection until the first request. A refusal is retried only if it failed
+    within 5 s: urllib3 reports only the last address it tried, so a slower
+    one hides an address that timed out. A failed authentication now fails
+    `from_env` (a harness `LoadError`) rather than the first read or write.
+
+### Added
+
+- `StartupConformance` in `continuo_engine_contract.testing.conformance`: every
+  adapter's integration suite runs it. It puts the real engine behind a
+  loopback port that refuses connections for 3 s (`LateOpeningPort`), then
+  checks that `from_env` returns an adapter that answers `SELECT 1`. The new
+  fixtures are `warehouse_address` and `adapter_from_env`.
 
 ### Changed
 

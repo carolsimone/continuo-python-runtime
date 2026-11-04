@@ -13,6 +13,17 @@ Connection env: `TRINO_HOST`, `TRINO_CATALOG` (required); `TRINO_PORT` (default
 8080), `TRINO_USER` (default `continuo`), `TRINO_HTTP_SCHEME` (default `http`),
 `TRINO_PASSWORD` (optional; requires `TRINO_HTTP_SCHEME=https`).
 
+The trino DBAPI opens no connection until the first request, so `from_env`
+sends `SELECT 1` and returns a connected adapter. A request the coordinator
+never answered (refused, no route to host, network unreachable) that failed
+within 5 s is tried again, up to 5 times, 2 s apart, logging each retry: a Job
+pod's first connection can be refused for a few seconds after the pod starts,
+until the cluster's NetworkPolicy engine has admitted the pod, and the
+client's own retry of it lasts under a second. Every other failure, an
+authentication failure or a timeout among them, is raised at once. A slower
+refusal is not retried either: urllib3 reports only the last address it tried,
+so a refusal that took a timeout to arrive hides an address that stayed silent.
+
 The `config:` vocabulary is the union of the two vocabularies this adapter
 inherited from the merge: `partitioning`, `sorted_by`, `format`, and
 `format_version`. `format` takes the `PARQUET` / `ORC` / `AVRO` allowlist on

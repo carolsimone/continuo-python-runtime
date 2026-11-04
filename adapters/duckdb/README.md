@@ -47,9 +47,18 @@ contains a line break, when `PGPASSWORD` is set in the environment (libpq would
 prefer it to any passfile), or when no temp file can be created. The `aws`
 extension is only loaded for the AWS credential-chain S3 path.
 
-A first attach to a brand-new catalog from several Jobs at once can race on
-DuckLake's metadata creation; the adapter retries exactly that failure a few
-times, and surfaces every other connection error immediately.
+The attach is retried, up to 5 attempts in all, for two failures only:
+
+- a first attach to a brand-new catalog from several Jobs at once can race on
+  DuckLake's metadata creation;
+- a catalog connection that no server answered (every address of the host
+  refused, had no route or sat on an unreachable network) is tried again 2 s
+  later, each retry logged: a Job pod's first connection can be refused for a
+  few seconds after the pod starts, until the cluster's NetworkPolicy engine
+  has admitted the pod.
+
+Every other connection error, an authentication failure or a connect timeout
+on any address among them, surfaces immediately.
 
 ## Physical layout (`config`)
 

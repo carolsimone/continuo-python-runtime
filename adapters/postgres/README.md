@@ -12,6 +12,13 @@ registers itself under entry-point group `continuo_engine.adapters` as
 Connection env: `POSTGRES_HOST`, `POSTGRES_DB`, `POSTGRES_USER` (required);
 `POSTGRES_PORT` (default 5432), `POSTGRES_PASSWORD` (default empty).
 
+`from_env` tries a connection that no server answered (every address of the
+host refused, had no route or sat on an unreachable network) up to 5 times,
+2 s apart, logging each retry: a Job pod's first connection can be refused
+for a few seconds after the pod starts, until the cluster's NetworkPolicy
+engine has admitted the pod. Every other failure, an authentication failure or
+a connect timeout on any address among them, is raised at once.
+
 The connection runs with `autocommit = True`; every method owns its
 transaction explicitly. `load()` and `ensure_table()` open an explicit
 `BEGIN` around their statements and `COMMIT`/`ROLLBACK` themselves, so a

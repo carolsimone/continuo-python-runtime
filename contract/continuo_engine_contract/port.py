@@ -58,7 +58,15 @@ class WarehouseAdapter(ABC):
     @classmethod
     @abstractmethod
     def from_env(cls) -> "WarehouseAdapter":
-        """Construct a connected adapter from environment variables."""
+        """Construct a connected adapter from environment variables.
+
+        A warehouse that refuses connections for the first few seconds does not
+        fail it: a Job pod's first connections can be refused until the
+        cluster's NetworkPolicy engine has admitted the pod. A connection that
+        timed out is not waited out again. ``StartupConformance`` in
+        ``continuo_engine_contract.testing.conformance`` checks this against the
+        real engine.
+        """
 
     @abstractmethod
     def ensure_schema(self, schema: str) -> None:

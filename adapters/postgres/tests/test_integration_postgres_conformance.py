@@ -18,6 +18,7 @@ from continuo_engine_contract.testing.conformance import (
     AppendConformance,
     ConformanceBase,
     IntrospectionConformance,
+    StartupConformance,
     UpsertConformance,
     table_of,
 )
@@ -46,6 +47,28 @@ def schema(adapter):
     name = f"conf_{uuid.uuid4().hex[:10]}"
     yield name
     adapter.drop_schema(name)
+
+
+@pytest.fixture
+def warehouse_address():
+    return "127.0.0.1", int(PG["port"])
+
+
+@pytest.fixture
+def adapter_from_env(monkeypatch):
+    def build(host, port):
+        monkeypatch.setenv("POSTGRES_HOST", host)
+        monkeypatch.setenv("POSTGRES_PORT", str(port))
+        monkeypatch.setenv("POSTGRES_DB", PG["dbname"])
+        monkeypatch.setenv("POSTGRES_USER", PG["user"])
+        monkeypatch.setenv("POSTGRES_PASSWORD", PG["password"])
+        return PostgresAdapter.from_env()
+
+    return build
+
+
+class TestPostgresStartup(StartupConformance):
+    pass
 
 
 class TestPostgresIntrospection(IntrospectionConformance):

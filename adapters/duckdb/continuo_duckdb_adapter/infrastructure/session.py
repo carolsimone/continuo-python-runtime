@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import time
 import uuid
 from collections.abc import Callable, Iterator, Sequence
@@ -52,19 +53,55 @@ logger = logging.getLogger("continuo_duckdb_adapter")
 
 CATALOG_ALIAS = "lake"
 
+# An ATTACH is retried on a fresh connection, up to _ATTACH_ATTEMPTS in all, for
+# two failures only; every other failure is raised at once.
+#
 # DuckLake creates its metadata tables on the first ATTACH of a fresh catalog
 # and does not guard that against a concurrent first ATTACH (several Jobs of one
 # run starting together): all but one fail on the duplicate CREATE. The loser
-# retries on a fresh connection and then finds the catalog initialised. Bounded,
-# and only this failure class is retried.
+# retries and then finds the catalog initialised.
+#
+# A Job pod's first connection to the catalog can be refused for a few seconds
+# after the pod starts, until the cluster's NetworkPolicy engine has admitted
+# the pod: an engine that rejects (k3s's kube-router) refuses at once instead
+# of dropping the packets. So a connection no server answered, refused or
+# unroutable, is retried. A connect timeout is not: an engine that drops
+# packets only delays the first connection, which TCP's own retransmissions
+# carry through, so a timeout means the catalog stayed silent for the whole
+# timeout and every retry would wait that long again.
 _ATTACH_ATTEMPTS = 5
 _ATTACH_BACKOFF_SECONDS = 0.2
+_UNREACHABLE_RETRY_SECONDS = 2.0
+# The ATTACH error carries libpq's text for the catalog connection: one line per
+# address it tried, the reason after "failed: " (libpq 14 and later) or after
+# "could not connect to server: " (libpq 13 and earlier).
+_ADDRESS_FAILURE = re.compile(r"(?:failed|could not connect to server): ([^\n]*)")
+_UNREACHABLE_REASONS = frozenset({"Connection refused", "No route to host", "Network is unreachable"})
 
 
 def _is_first_attach_race(exc: duckdb.Error) -> bool:
     message = str(exc)
     return "Failed to initialize DuckLake" in message and (
         "duplicate" in message.lower() or "already exists" in message.lower()
+    )
+
+
+def _is_catalog_unreachable(exc: duckdb.Error) -> bool:
+    """Whether *exc* says that every address of the catalog host refused or could not be routed to.
+
+    A host name can have several addresses, and libpq reports each one it
+    tried. One that timed out means a retry would wait out its timeout again;
+    a FATAL line came from a server that answered (a failed authentication, an
+    unknown database). libpq 13 and earlier print a timeout as a bare
+    "timeout expired" line, with no prefix.
+    """
+    message = str(exc)
+    reasons = [reason.strip() for reason in _ADDRESS_FAILURE.findall(message)]
+    return (
+        bool(reasons)
+        and all(reason in _UNREACHABLE_REASONS for reason in reasons)
+        and "FATAL:" not in message
+        and "timeout expired" not in message
     )
 
 
@@ -134,6 +171,14 @@ class DuckLakeSession(LakeGateway):
                     if attempt < _ATTACH_ATTEMPTS and _is_first_attach_race(exc):
                         logger.info("first attach of a fresh catalog raced (attempt %d); retrying", attempt)
                         sleep(_ATTACH_BACKOFF_SECONDS * attempt)
+                        continue
+                    if attempt < _ATTACH_ATTEMPTS and _is_catalog_unreachable(exc):
+                        logger.warning(
+                            "catalog not reachable yet (attempt %d of %d), retrying in %.0f s: %s",
+                            attempt, _ATTACH_ATTEMPTS, _UNREACHABLE_RETRY_SECONDS,
+                            _redact(exc, secrets).strip(),
+                        )
+                        sleep(_UNREACHABLE_RETRY_SECONDS)
                         continue
                     raise _translate(exc, secrets) from None
                 return cls(con, DdlRenderer(CATALOG_ALIAS), secrets=secrets, passfile=passfile)

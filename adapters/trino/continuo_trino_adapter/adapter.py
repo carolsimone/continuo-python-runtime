@@ -70,8 +70,10 @@ injection-shaped. Every other grammar token (``BIGINT``, ``INT``, ``INTEGER``,
 ``BOOLEAN``, ``TIMESTAMP``, ``DATE``, ``VARCHAR(n)``, ``CHAR(n)``,
 ``DECIMAL(p,s)``) is valid Trino DDL unchanged (verified live).
 """
+import errno
 import logging
 import os
+import time
 import uuid
 
 from collections.abc import Callable, Sequence
@@ -327,6 +329,44 @@ _INSERT_BATCH_SIZE = 500
 # Name prefix of the stage tables every write path stages its rows in.
 _STAGE_PREFIX = "__continuo_stage_"
 
+# A Job pod's first connection can be refused for a few seconds after the pod
+# starts, until the cluster's NetworkPolicy engine has admitted the pod: an
+# engine that rejects (k3s's kube-router) refuses at once instead of dropping
+# the packets. The client's own retry of a refused request (three attempts,
+# under a second in all) is too short for that, so from_env's first request is
+# tried again when the coordinator never answered it, refused or unroutable. A
+# connect timeout is not: an engine that drops packets only delays the first
+# connection, which TCP's own retransmissions carry through, so a timeout means
+# the coordinator stayed silent for the whole timeout and every retry would
+# wait that long again.
+_CONNECT_ATTEMPTS = 5
+_CONNECT_RETRY_SECONDS = 2.0
+_UNREACHABLE_ERRNOS = frozenset({errno.ECONNREFUSED, errno.EHOSTUNREACH, errno.ENETUNREACH})
+# urllib3 tries every address of the host and raises only the last one's error,
+# so a refusal can hide an address that timed out before it. A refused request
+# fails well under a second, the client's own three tries included; one that
+# waited out a timeout took the client's request timeout (30 s by default). A
+# failure slower than this is not retried.
+_FAST_FAILURE_SECONDS = 5.0
+
+
+def _is_unreachable(exc: BaseException) -> bool:
+    """Whether *exc* comes from a connection the coordinator never answered.
+
+    The client wraps the socket error several times (``TrinoConnectionError``,
+    raised while handling ``requests``' ``ConnectionError``, raised from
+    urllib3's errors, raised from the ``OSError``), so the chain is walked down
+    to the ``OSError`` and its errno decides.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, OSError) and current.errno in _UNREACHABLE_ERRNOS:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
 
 class TrinoAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
     """WarehouseAdapter speaking Trino (Iceberg connector) over the trino DBAPI."""
@@ -341,8 +381,50 @@ class TrinoAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
         return ["TRINO_HOST", "TRINO_CATALOG"]
 
     @classmethod
-    def from_env(cls) -> "TrinoAdapter":
-        """Connect from TRINO_* env (port 8080, user continuo, http; password optional)."""
+    def from_env(
+        cls,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> "TrinoAdapter":
+        """Connect from TRINO_* env (port 8080, user continuo, http; password optional).
+
+        The trino DBAPI opens no connection until the first request, so this
+        sends one (``SELECT 1``) and returns a connected adapter. A request the
+        coordinator never answered (refused, no route, network unreachable)
+        and that failed within ``_FAST_FAILURE_SECONDS`` is tried again, up to
+        ``_CONNECT_ATTEMPTS`` times in all, ``_CONNECT_RETRY_SECONDS`` apart,
+        each retry logged; the last failure is raised. Every other failure is
+        raised at once.
+        """
+        adapter = cls._from_env_unconnected()
+        try:
+            for attempt in range(1, _CONNECT_ATTEMPTS + 1):
+                started = clock()
+                try:
+                    adapter._execute("SELECT 1")
+                except Exception as exc:
+                    if (
+                        attempt == _CONNECT_ATTEMPTS
+                        or not _is_unreachable(exc)
+                        or clock() - started > _FAST_FAILURE_SECONDS
+                    ):
+                        raise
+                    logger.warning(
+                        "trino not reachable yet (attempt %d of %d), retrying in %.0f s: %s",
+                        attempt, _CONNECT_ATTEMPTS, _CONNECT_RETRY_SECONDS, exc,
+                    )
+                    sleep(_CONNECT_RETRY_SECONDS)
+                    continue
+                return adapter
+        except BaseException:
+            adapter.close()
+            raise
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    @classmethod
+    def _from_env_unconnected(cls) -> "TrinoAdapter":
+        """The adapter over a trino DBAPI connection that has sent no request yet."""
         catalog = os.environ["TRINO_CATALOG"]
         user = os.environ.get("TRINO_USER", "continuo")
         http_scheme = os.environ.get("TRINO_HTTP_SCHEME", "http")

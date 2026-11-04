@@ -28,15 +28,17 @@ merged PRs before adding anything new.
 conformance suite for engine adapter authors. Its dependencies are installed
 with `continuo-engine-contract[testing]`.
 
-- Every adapter MUST satisfy the engine contract and pass the shared
-  conformance classes for every capability it declares: `IntrospectionConformance`
-  for `TableIntrospection`, `AppendConformance` for `AppendCapable`, and
-  `UpsertConformance` for `UpsertCapable`. Append and upsert adapters must also
-  run the introspection class. An adapter need not declare capabilities its
-  engine cannot support.
+- Every adapter MUST satisfy the engine contract and pass `StartupConformance`
+  (`from_env` waits out a warehouse that refuses connections at first) and the
+  shared conformance classes for every capability it declares:
+  `IntrospectionConformance` for `TableIntrospection`, `AppendConformance` for
+  `AppendCapable`, and `UpsertConformance` for `UpsertCapable`. Append and
+  upsert adapters must also run the introspection class. An adapter need not
+  declare capabilities its engine cannot support.
 - Each adapter's integration suite MUST subclass the applicable classes,
-  supply connected `adapter` and temporary `schema` fixtures, and run them
-  against its real warehouse in CI. In-memory reference tests alone do not
+  supply connected `adapter` and temporary `schema` fixtures (and, for
+  `StartupConformance`, `warehouse_address` and `adapter_from_env`), and run
+  them against its real warehouse in CI. In-memory reference tests alone do not
   establish an adapter's conformance. Do not skip or weaken shared checks to
   accommodate an adapter that violates the contract.
 - Every new or changed engine-independent contract requirement, including

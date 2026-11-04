@@ -405,7 +405,8 @@ executor runs it as a Kubernetes Job:
   (built in this repo, published to PyPI) rather than reimplementing the
   markers. That wire format is frozen against Continuo's Go parser
   (`pkg/validationresult`). All diagnostics
-  go to stderr via stdlib `logging`. Non-zero exit on failure.
+  go to stderr via stdlib `logging`, including the failure the result block
+  reports, which is logged at ERROR. Non-zero exit on failure.
 - The image embeds the same contract files CI merged — `content_hash` is
   what ties the promoted topology to the image actually running.
 

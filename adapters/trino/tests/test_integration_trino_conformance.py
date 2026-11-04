@@ -16,6 +16,7 @@ from continuo_engine_contract.testing.conformance import (
     AppendConformance,
     ConformanceBase,
     IntrospectionConformance,
+    StartupConformance,
     UpsertConformance,
     bulk_rows,
     table_of,
@@ -44,6 +45,29 @@ def schema(adapter):
     name = f"conf_{uuid.uuid4().hex[:10]}"
     yield name
     adapter.drop_schema(name)
+
+
+@pytest.fixture
+def warehouse_address():
+    return "127.0.0.1", int(os.environ.get("VR_IT_TRINO_PORT", "18080"))
+
+
+@pytest.fixture
+def adapter_from_env(monkeypatch):
+    def build(host, port):
+        monkeypatch.setenv("TRINO_HOST", host)
+        monkeypatch.setenv("TRINO_PORT", str(port))
+        monkeypatch.setenv("TRINO_USER", "continuo")
+        monkeypatch.setenv("TRINO_CATALOG", "iceberg")
+        monkeypatch.setenv("TRINO_HTTP_SCHEME", "http")
+        monkeypatch.delenv("TRINO_PASSWORD", raising=False)
+        return TrinoAdapter.from_env()
+
+    return build
+
+
+class TestTrinoStartup(StartupConformance):
+    pass
 
 
 class TestTrinoIntrospection(IntrospectionConformance):

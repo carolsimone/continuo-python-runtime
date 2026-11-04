@@ -298,12 +298,75 @@ def test_a_persistent_init_race_surfaces_after_bounded_attempts(connect_with):
     assert all(c.closed for c in script.connections)
 
 
+# --- a catalog the pod cannot reach yet --------------------------------------
+#
+# A Job pod's first connection can be refused for a few seconds after the pod
+# starts, while the cluster's NetworkPolicy engine has not yet admitted it. The
+# ATTACH reports libpq's text for the catalog connection; these are DuckDB's
+# messages as it prints them.
+
+
+def _catalog_unreachable(reason: str) -> duckdb.IOException:
+    conninfo = "host=catalog port=5432 dbname=catalog user=continuo"
+    return duckdb.IOException(
+        f'IO Error: Failed to attach DuckLake MetaData "__ducklake_metadata_lake" at path + '
+        f'"postgres:{conninfo}"Unable to connect to Postgres at "{conninfo}": connection to '
+        f'server at "catalog" (10.43.0.7), port 5432 failed: {reason}\n'
+    )
+
+
+REFUSED = "Connection refused\n\tIs the server running on that host and accepting TCP/IP connections?"
+
+
+@pytest.mark.parametrize("reason", [
+    REFUSED, "No route to host", "Network is unreachable",
+    f'{REFUSED}\nconnection to server at "catalog" (10.43.0.8), port 5432 failed: {REFUSED}',
+], ids=["refused", "no-route", "net-unreachable", "refused-twice"])
+def test_an_unreachable_catalog_is_retried_on_a_fresh_connection(connect_with, reason):
+    script, sleeps, connect = connect_with([_catalog_unreachable(reason)] * 2 + [None])
+    session = connect()
+    assert len(script.connections) == 3
+    assert [c.closed for c in script.connections] == [True, True, False]
+    assert sleeps == [2.0, 2.0]
+    session.close()
+
+
+def test_a_catalog_that_stays_unreachable_fails_after_bounded_attempts(connect_with):
+    from continuo_duckdb_adapter.infrastructure import session as session_module
+
+    script, sleeps, connect = connect_with([_catalog_unreachable(REFUSED)] * 50)
+    with pytest.raises(duckdb.IOException, match="Connection refused"):
+        connect()
+    assert len(script.connections) == session_module._ATTACH_ATTEMPTS == 5
+    assert sleeps == [2.0, 2.0, 2.0, 2.0]
+    assert all(c.closed for c in script.connections)
+
+
+def test_each_catalog_retry_is_logged_redacted(connect_with, caplog):
+    leaking = duckdb.IOException(f"{_catalog_unreachable(REFUSED)} password={PASSWORD}")
+    _, _, connect = connect_with([leaking, leaking, None])
+    caplog.set_level(logging.INFO, logger="continuo_duckdb_adapter")
+    connect().close()
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2
+    assert all("port 5432 failed: Connection refused" in r.getMessage() for r in warnings)
+    assert PASSWORD not in caplog.text
+
+
+# A catalog host with two addresses, one refused and one silent: the ATTACH
+# error carries both of libpq's lines.
+REFUSED_THEN_TIMED_OUT = (
+    f'{REFUSED}\nconnection to server at "catalog" (10.43.0.8), port 5432 failed: timeout expired'
+)
+
+
 @pytest.mark.parametrize("error", [
-    duckdb.IOException('Unable to connect to Postgres at "host=h": Connection refused'),
-    duckdb.IOException('Failed to attach DuckLake: FATAL:  password authentication failed'),
+    _catalog_unreachable('FATAL:  password authentication failed for user "continuo"'),
+    _catalog_unreachable("timeout expired"),
+    _catalog_unreachable(REFUSED_THEN_TIMED_OUT),
     duckdb.Error("Failed to initialize DuckLake: disk full"),
     duckdb.CatalogException("something else"),
-])
+], ids=["auth-failed", "timed-out", "refused-then-timed-out", "init-failed", "catalog-error"])
 def test_every_other_attach_error_is_not_retried(connect_with, error):
     script, sleeps, connect = connect_with([error])
     with pytest.raises(type(error)):

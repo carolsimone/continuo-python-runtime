@@ -1,21 +1,25 @@
-"""Conformance tests for the engine contract's write capabilities.
+"""Conformance tests for the engine contract.
 
-One test class per capability. An adapter's integration suite subclasses the
-classes for exactly the capabilities it declares and runs them against its
-real engine; a bring-your-own adapter can do the same::
+One test class per capability, plus :class:`StartupConformance`, which every
+adapter runs. An adapter's integration suite subclasses ``StartupConformance``
+and the classes for exactly the capabilities it declares, and runs them against
+its real engine; a bring-your-own adapter can do the same::
 
     from continuo_engine_contract.testing.conformance import AppendConformance
 
     class TestMyEngineAppend(AppendConformance):
         pass
 
-The subclass's module (or a conftest.py above it) provides two fixtures:
+The subclass's module (or a conftest.py above it) provides two fixtures for the
+capability classes:
 
 ``adapter``
     A connected adapter instance that declares the capability under test.
 ``schema``
     A schema name the tests may create tables in (``ensure_table`` creates
     it). The fixture drops it after the test.
+
+``StartupConformance`` takes two others, described on the class.
 
 Rows are read back through ``adapter.fetch`` with ANSI double-quoted
 identifiers; an engine that quotes differently overrides
@@ -26,7 +30,10 @@ Needs the ``testing`` extra: ``pip install "continuo-engine-contract[testing]"``
 """
 from __future__ import annotations
 
+import contextlib
 import datetime
+import socket
+import threading
 import uuid
 from collections.abc import Iterable, Sequence
 from decimal import Decimal
@@ -98,6 +105,124 @@ def bulk_rows(start: int) -> list[tuple[Any, ...]]:
 def canonical(rows: Iterable[Sequence[Any]]) -> list[tuple[Any, ...]]:
     """*rows* as tuples in a deterministic order, for comparing a table's contents."""
     return sorted((tuple(row) for row in rows), key=repr)
+
+
+# A Job pod's first connections can be refused for a few seconds after the pod
+# starts, until the cluster's NetworkPolicy engine has admitted the pod: an
+# engine that rejects (k3s's kube-router) refuses at once instead of dropping
+# the packets. ``from_env`` must wait out a refusal this long.
+REFUSAL_SECONDS = 3.0
+
+
+class LateOpeningPort:
+    """A loopback port that refuses connections for a while, then forwards them.
+
+    For *refuse_for* seconds no socket holds the port, so the kernel refuses
+    every connection to it, as a NetworkPolicy engine that rejects does; then
+    it listens and forwards each connection to *upstream*. A port that Docker
+    publishes cannot stand in for the refusal: Docker accepts the connection
+    and then closes it, which a client reports as a dropped connection, not a
+    refused one.
+    """
+
+    def __init__(self, upstream: tuple[str, int], refuse_for: float) -> None:
+        self._upstream = upstream
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            self.port: int = probe.getsockname()[1]
+        self._lock = threading.Lock()
+        self._closed = False
+        self._listener: socket.socket | None = None
+        self._sockets: list[socket.socket] = []
+        self._timer = threading.Timer(refuse_for, self._open)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def __enter__(self) -> LateOpeningPort:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    def _open(self) -> None:
+        listener = socket.socket()
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", self.port))
+        listener.listen(16)
+        with self._lock:
+            if self._closed:
+                listener.close()
+                return
+            self._listener = listener
+        threading.Thread(target=self._accept, args=(listener,), daemon=True).start()
+
+    def _accept(self, listener: socket.socket) -> None:
+        while True:
+            try:
+                client, _ = listener.accept()
+            except OSError:
+                return
+            try:
+                upstream = socket.create_connection(self._upstream)
+            except OSError:
+                client.close()
+                continue
+            with self._lock:
+                self._sockets.extend([client, upstream])
+            threading.Thread(target=_pipe, args=(client, upstream), daemon=True).start()
+            threading.Thread(target=_pipe, args=(upstream, client), daemon=True).start()
+
+    def close(self) -> None:
+        """Stop listening and drop every forwarded connection."""
+        self._timer.cancel()
+        with self._lock:
+            self._closed = True
+            listener, sockets = self._listener, list(self._sockets)
+        # shutdown() before close(): on Linux, close() alone does not wake a
+        # thread blocked in accept() on the listener.
+        for sock in ([listener] if listener else []) + sockets:
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
+            sock.close()
+
+
+def _pipe(source: socket.socket, sink: socket.socket) -> None:
+    try:
+        while data := source.recv(65536):
+            sink.sendall(data)
+    except OSError:
+        pass
+    finally:
+        for sock in (source, sink):
+            with contextlib.suppress(OSError):
+                sock.close()
+
+
+class StartupConformance:
+    """``from_env`` returns a working adapter when the warehouse refuses connections at first.
+
+    Every adapter runs this class. Its fixtures:
+
+    ``warehouse_address``
+        The ``(host, port)`` of the real engine endpoint the adapter connects
+        to first (for an engine whose catalog lives elsewhere, the endpoint
+        ``from_env`` opens a connection to).
+    ``adapter_from_env``
+        A callable ``(host, port) -> adapter`` that points the engine's
+        connection env at *host*:*port* and returns ``from_env()``.
+    """
+
+    def test_from_env_waits_out_a_warehouse_that_refuses_at_first(
+        self, warehouse_address, adapter_from_env
+    ):
+        with LateOpeningPort(warehouse_address, refuse_for=REFUSAL_SECONDS) as port:
+            adapter = adapter_from_env("127.0.0.1", port.port)
+            try:
+                rows = adapter.fetch("SELECT 1 AS one").to_pylist()
+            finally:
+                adapter.close()
+        if rows != [{"one": 1}]:
+            raise AssertionError(f"SELECT 1 AS one returned {rows}, expected [{{'one': 1}}]")
 
 
 class ConformanceBase:

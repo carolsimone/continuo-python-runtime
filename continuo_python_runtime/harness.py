@@ -392,6 +392,14 @@ def run_node(
         print(result_block("success", message=f"rows={conformed.num_rows}", unique_id=node_id))
         return 0
     except HarnessError as err:
+        # Logged as well as printed: the executor cuts the result block out of
+        # the pod log before storing it, so the log holds only what is logged.
+        # The traceback is kept when the error wraps another exception (a
+        # driver error, the script's own exception), whose frames locate it.
+        logger.error(
+            "node %s failed: %s", node_id, err.sentinel_message(),
+            exc_info=err.__cause__ is not None,
+        )
         print(
             result_block(
                 "error", message=err.sentinel_message(), failures=1, unique_id=node_id

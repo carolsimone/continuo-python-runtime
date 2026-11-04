@@ -151,7 +151,7 @@ gh workflow run publish-pypi.yml --ref <branch> -f dry_run=true
 |---|---|---|---|---|
 | `prepare`, `verify-packages`, `preflight-*` | nothing | nothing | none | Fix, delete the tag (`git push --delete origin vX.Y.Z`), re-tag. |
 | `publish-packages` | maybe some of the five files | nothing | none | Re-run failed jobs (`skip-existing` makes it resumable), or fix forward. |
-| `candidate-build` | published | maybe untagged digests | none | Transient (index lag, runner): re-run failed jobs. Real defect: yank the files on pypi.org and **fix forward** with a new version. |
+| `candidate-build` | published | maybe untagged digests | none | The build waits up to 10 minutes on its own for the index to serve the new pins. Transient (a runner, a longer index lag): re-run failed jobs. Real defect: yank the files on pypi.org and **fix forward** with a new version. |
 | `candidate-verify` | published | untagged candidates | none | Same: an image defect means yank and fix forward. |
 | `promote` | published | verified digests, maybe some engines tagged | none | Re-run failed jobs; tagging is idempotent and refuses to move an existing tag to different content. |
 

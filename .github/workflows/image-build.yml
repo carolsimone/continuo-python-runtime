@@ -89,7 +89,13 @@ jobs:
           # once published. (The image build itself runs inside python:3.14-slim.)
           python-version: "3.14"
       # Ordering between the upload and this build is a `needs:` edge in
-      # publish-pypi.yml, but an index can lag its own upload, so poll. The
+      # publish-pypi.yml, but an index can lag its own upload, so poll. A
+      # probe that succeeds does not guarantee the build's own request the
+      # same answer (two requests seconds apart can be served different
+      # copies of the index page), so the image build's install
+      # (scripts/install_image_pins.py) also retries while a pin is not
+      # served yet. This probe is the fast pre-check, and in a rehearsal it
+      # fetches the files compared byte for byte below. The
       # probe runs with --no-cache-dir: the simple index is served with
       # `Cache-Control: max-age=600`, which pip's HTTP cache honours, so one
       # early stale fetch would otherwise be replayed for 10 minutes, exactly

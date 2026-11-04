@@ -15,48 +15,25 @@ FROM python:3.14.8-slim
 #                           Any other value fails the build.
 # The wheelhouse holds only this repo's own first-party wheels (built via
 # `uv build --all-packages`); third-party dependencies always resolve from
-# PyPI in both branches, so the wheelhouse branch never passes --no-index to
-# the requirements install below.
+# PyPI in both branches, so the wheelhouse install never passes --no-index to
+# the requirements install.
 # The pinned versions live in image-requirements-trino.txt, kept equal to the
 # repo's pyproject versions by tests/test_image_requirements_sync.py.
 #
-# The wheelhouse branch installs its three first-party wheels (contract,
-# runtime, adapter) by exact local file first, with --no-index --no-deps: a
-# plain `--find-links=/tmp/wheelhouse -r req.txt` is not enough, because pip
-# does not prefer a find-links wheel over an index match at the same
-# name+version, and continuo-python-runtime / continuo-engine-contract are
-# already published on PyPI under the version this repo's HEAD currently
-# carries (a routine dependency bump lands between releases without a version
-# bump). Left unpinned-by-file, pip silently installs the last PyPI release's
-# transitive pins instead of the wheel this build just produced, defeating
-# the point of testing an unreleased change. Installing the exact local files
-# first (no index contacted at all for this step) is unambiguous; the second
-# install then only has PyPI-only third-party deps left to resolve, and finds
-# the three first-party packages already satisfied.
+# scripts/install_image_pins.py runs the installs for each WHEEL_SOURCE (and
+# says why the wheelhouse wheels are installed by exact file first). It
+# retries an index install while the index does not serve a just-uploaded
+# pin yet: a release builds its images right after the upload.
 ARG WHEEL_SOURCE=pypi
 COPY image-requirements-trino.txt /tmp/req.txt
 # Optional COPY: the bracket glob matches ./wheelhouse when it exists (the CI/PR
 # WHEEL_SOURCE=wheelhouse path builds it) and no-ops when it is absent, so a
 # release build or a plain `docker build -f Dockerfile.trino .` needs no
-# pre-created directory. Only the wheelhouse branch below reads its contents.
+# pre-created directory. Only the wheelhouse install reads its contents.
 COPY wheelhous[e] /tmp/wheelhouse
-RUN set -eu; \
-    if [ "$WHEEL_SOURCE" = "wheelhouse" ]; then \
-      pip install --no-cache-dir --no-index --no-deps \
-        /tmp/wheelhouse/continuo_engine_contract-*.whl \
-        /tmp/wheelhouse/continuo_python_runtime-*.whl \
-        /tmp/wheelhouse/continuo_trino_adapter-*.whl; \
-      pip install --no-cache-dir -r /tmp/req.txt; \
-    elif [ "$WHEEL_SOURCE" = "testpypi" ]; then \
-      pip install --no-cache-dir --no-deps --only-binary=:all: --index-url https://test.pypi.org/simple/ \
-        -r /tmp/req.txt; \
-      pip install --no-cache-dir -r /tmp/req.txt; \
-    elif [ "$WHEEL_SOURCE" = "pypi" ]; then \
-      pip install --no-cache-dir -r /tmp/req.txt; \
-    else \
-      echo "unknown WHEEL_SOURCE=$WHEEL_SOURCE (pypi|testpypi|wheelhouse)" >&2; exit 1; \
-    fi; \
-    rm -rf /tmp/req.txt /tmp/wheelhouse
+COPY scripts/install_image_pins.py /tmp/install_image_pins.py
+RUN python /tmp/install_image_pins.py --source "$WHEEL_SOURCE" --adapter trino --requirements /tmp/req.txt --wheelhouse /tmp/wheelhouse \
+    && rm -rf /tmp/req.txt /tmp/wheelhouse /tmp/install_image_pins.py
 # PYTHONPATH is belt-and-braces: the harness also inserts APP_ROOT and the
 # node script's own directory at the front of sys.path before executing it.
 ENV CONTRACT_DIR=/app/contracts APP_ROOT=/app PYTHONPATH=/app

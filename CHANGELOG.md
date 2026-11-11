@@ -19,6 +19,14 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   would destroy or leave reading a missing table, and gives none for a missing
   table or schema. The conformance class `DependentsConformance` checks it,
   with an overridable `create_view` hook.
+- `PostgresAdapter.dependents(schema, table)` lists, with `completeness="exact"`,
+  every object a `DROP TABLE ... CASCADE` of the table destroys or changes: views
+  and materialized views to any depth, SQL-standard functions and procedures,
+  foreign keys and policies on other tables, rules, inheriting tables, tables
+  with a column of the table's row type, and what reads a partition of the table
+  or a sequence a column of it owns. It reads `pg_depend`, so it sees what
+  `information_schema.view_table_usage` misses, and `TestPostgresDependents` plus
+  a guard that snapshots the schemas around a rolled-back cascade check it.
 - `continuo-runtime --version` prints `continuo-runtime <version>` to stdout and
   exits 0. The template's `release.yml` has a "Pin the runtime to the image"
   step that reads the version from the Dockerfile's

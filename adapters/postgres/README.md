@@ -26,6 +26,27 @@ mid-sequence failure leaves no partial change. `fetch()` executes a single
 read and commits (or rolls back on error), never leaving an open transaction
 dangling.
 
+`PostgresAdapter` declares `drop_semantics = "cascade"` and is a
+`DependentsIntrospection`: `dependents(schema, table)` lists every object a
+`DROP TABLE ... CASCADE` of the table destroys or changes, with
+`completeness="exact"`. It walks `pg_depend` from the table through every normal
+dependency, so it lists views and materialized views (found through their
+`_RETURN` rule, at any depth: a view of a view of the table is depth 2),
+SQL-standard functions and procedures, foreign keys and policies on other
+tables, rules, inheriting tables and tables with a column of the table's row
+type, and what reads a partition of the table or a sequence a column of it owns.
+`information_schema.view_table_usage` misses the materialized views, the
+functions and every view past the first level. The table's own indexes,
+constraints (a self-referencing foreign key included), column defaults,
+sequences, partitions and triggers are parts of the table and are not listed.
+Each object appears once, at its shallowest depth. The table is found
+case-insensitively, so a seed loaded under another letter case never makes the
+walk skip it; a missing table or schema gives no objects. Each `kind` is one of
+`view`, `materialized_view`, `table`, `function`, `procedure`, `constraint`,
+`policy`, `rule` or `other`; the name of a function carries its argument types
+(`seed_count()`), and that of a constraint, policy or rule the table it sits on
+(`orders_seed_id_fkey on orders`).
+
 The `config:` index vocabulary is the union of the two vocabularies this
 adapter inherited from the merge: `columns`, `unique`, `type`, and `name`,
 with the strictest check from each side applied. The derived index name is

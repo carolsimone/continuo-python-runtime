@@ -7,7 +7,12 @@ cursors/connections here.
 """
 import pytest
 
-from continuo_postgres_adapter.adapter import PostgresAdapter, _index_name, _validated_indexes
+from continuo_postgres_adapter.adapter import (
+    PostgresAdapter,
+    _dependent_kind,
+    _index_name,
+    _validated_indexes,
+)
 
 
 def test_required_env_names_connection_vars():
@@ -201,3 +206,13 @@ def test_an_explicit_name_admits_two_access_methods_over_one_column_set():
     ]
     entries = _validated_indexes({"indexes": indexes}, "t", ["id"])
     assert [e["name"] for e in entries] == ["ix_t_id", "ix_t_id_hash"]
+
+
+@pytest.mark.parametrize(("catalog", "subkind", "kind"), [
+    ("pg_class", "v", "view"), ("pg_class", "m", "materialized_view"), ("pg_class", "r", "table"),
+    ("pg_class", "p", "table"), ("pg_class", "f", "table"), ("pg_proc", "f", "function"),
+    ("pg_proc", "p", "procedure"), ("pg_constraint", "", "constraint"), ("pg_policy", "", "policy"),
+    ("pg_rewrite", "", "rule"), ("pg_trigger", "", "other"),
+])
+def test_dependent_kind_maps_each_catalog_row(catalog, subkind, kind):
+    assert _dependent_kind(catalog, subkind) == kind

@@ -12,6 +12,8 @@ One class covers both roles Continuo asks of an engine:
   its ``PRIMARY KEY``); ``load`` atomically replaces its contents, ``append``
   adds rows and ``_upsert`` inserts or overwrites by key, all through one
   insert helper; ``table_columns`` reads its shape.
+* **Drop impact** — ``dependents`` lists every object a drop of a table would
+  cascade to, from ``pg_depend``.
 
 The connection runs with ``autocommit = True``: every method owns its
 transaction explicitly rather than relying on psycopg2's implicit
@@ -40,6 +42,9 @@ import pyarrow as pa  # type: ignore[import-untyped]
 from continuo_engine_contract.config import ensure_known_keys  # type: ignore[import-untyped]
 from continuo_engine_contract.port import (  # type: ignore[import-untyped]
     AppendCapable,
+    Dependent,
+    DependentsIntrospection,
+    Dependents,
     LiveColumn,
     UpsertCapable,
     WarehouseAdapter,
@@ -443,7 +448,88 @@ def _arrow_table_from_rows(colnames: list[str], rows: list[tuple[Any, ...]]) -> 
     return pa.table({name: pa.array(values) for name, values in zip(colnames, by_column)})
 
 
-class PostgresAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
+# Every object that depends on a table, found by following pg_depend's normal
+# dependencies (deptype 'n'), the ones DROP ... CASCADE follows. A view's
+# dependency is recorded on its _RETURN rewrite rule, so the walk steps from the
+# rule to the view it belongs to. A table that has a column of the walked table's
+# row type depends on the row type (pg_type), not on the table, so each pg_class
+# step also follows the dependencies on its reltype. A partition and a sequence
+# owned by a column are automatic dependencies (deptype 'a') of the table, yet
+# what reads them is dropped with the table: the walk steps through them without
+# adding a level, and lists neither. The table's own indexes and triggers are
+# automatic dependencies that nothing reads, so the walk does not follow them,
+# and the table's own constraints (a self-referencing foreign key included) and
+# column defaults are not listed. The depth bound keeps a dependency cycle from running forever.
+_DEPENDENTS_SQL = """
+WITH RECURSIVE walk(classid, objid, depth) AS (
+    SELECT 'pg_class'::regclass::oid, c.oid, 0
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE lower(n.nspname) = lower(%(schema)s)
+      AND lower(c.relname) = lower(%(table)s)
+      AND c.relkind IN ('r', 'p')
+  UNION
+    SELECT CASE WHEN rw.oid IS NULL THEN dep.classid ELSE 'pg_class'::regclass::oid END,
+           CASE WHEN rw.oid IS NULL THEN dep.objid ELSE rw.ev_class END,
+           w.depth + CASE WHEN dep.deptype = 'a' THEN 0 ELSE 1 END
+    FROM walk w
+    LEFT JOIN pg_class wc
+      ON w.classid = 'pg_class'::regclass::oid AND wc.oid = w.objid
+    JOIN pg_depend dep
+      ON ((dep.refclassid = w.classid AND dep.refobjid = w.objid)
+          OR (dep.refclassid = 'pg_type'::regclass::oid AND dep.refobjid = wc.reltype))
+    LEFT JOIN pg_class dc
+      ON dep.classid = 'pg_class'::regclass::oid AND dc.oid = dep.objid
+    LEFT JOIN pg_rewrite rw
+      ON dep.classid = 'pg_rewrite'::regclass::oid AND rw.oid = dep.objid AND rw.rulename = '_RETURN'
+    WHERE w.depth < 32
+      AND (dep.deptype = 'n' OR (dep.deptype = 'a' AND (dc.relkind = 'S' OR dc.relispartition)))
+      AND (rw.oid IS NULL OR rw.ev_class <> w.objid)
+)
+SELECT found.catalog,
+       CASE found.catalog WHEN 'pg_class' THEN c.relkind::text WHEN 'pg_proc' THEN p.prokind::text ELSE '' END,
+       COALESCE(n.nspname, ''),
+       CASE found.catalog
+           WHEN 'pg_class' THEN c.relname
+           WHEN 'pg_proc' THEN p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
+           WHEN 'pg_constraint' THEN k.conname || ' on ' || t.relname
+           WHEN 'pg_policy' THEN pol.polname || ' on ' || t.relname
+           WHEN 'pg_rewrite' THEN rw.rulename || ' on ' || t.relname
+           ELSE pg_describe_object(found.classid, found.objid, 0)
+       END,
+       COALESCE(pg_get_userbyid(COALESCE(c.relowner, p.proowner, t.relowner)), ''),
+       found.depth
+FROM (
+    SELECT classid, objid, classid::regclass::text AS catalog, min(depth) AS depth
+    FROM walk
+    GROUP BY classid, objid
+    HAVING min(depth) > 0
+) found
+LEFT JOIN pg_class c ON found.catalog = 'pg_class' AND c.oid = found.objid
+LEFT JOIN pg_proc p ON found.catalog = 'pg_proc' AND p.oid = found.objid
+LEFT JOIN pg_constraint k ON found.catalog = 'pg_constraint' AND k.oid = found.objid
+LEFT JOIN pg_policy pol ON found.catalog = 'pg_policy' AND pol.oid = found.objid
+LEFT JOIN pg_rewrite rw ON found.catalog = 'pg_rewrite' AND rw.oid = found.objid
+LEFT JOIN pg_attrdef ad ON found.catalog = 'pg_attrdef' AND ad.oid = found.objid
+LEFT JOIN pg_class t ON t.oid = COALESCE(k.conrelid, pol.polrelid, rw.ev_class)
+LEFT JOIN pg_namespace n ON n.oid = COALESCE(c.relnamespace, p.pronamespace, t.relnamespace)
+WHERE NOT (found.catalog = 'pg_class' AND (c.relkind = 'S' OR c.relispartition))
+  AND NOT COALESCE(COALESCE(k.conrelid, ad.adrelid) IN (
+           SELECT objid FROM walk WHERE depth = 0 AND classid = 'pg_class'::regclass::oid), false)
+ORDER BY found.depth, 3, 4
+"""
+
+
+def _dependent_kind(catalog: str, subkind: str) -> str:
+    """The contract's kind for a catalog row: *subkind* is ``relkind`` for ``pg_class``, ``prokind`` for ``pg_proc``."""
+    if catalog == "pg_class":
+        return {"v": "view", "m": "materialized_view"}.get(subkind, "table")
+    if catalog == "pg_proc":
+        return "procedure" if subkind == "p" else "function"
+    return {"pg_constraint": "constraint", "pg_policy": "policy", "pg_rewrite": "rule"}.get(catalog, "other")
+
+
+class PostgresAdapter(WarehouseAdapter, AppendCapable, UpsertCapable, DependentsIntrospection):
     """WarehouseAdapter speaking postgres over a psycopg2 connection."""
 
     drop_semantics = "cascade"
@@ -717,6 +803,33 @@ class PostgresAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
         if not rows:
             raise LookupError(f"table {schema}.{table} does not exist")
         return [LiveColumn(name=name, nullable=is_nullable == "YES") for name, is_nullable in rows]
+
+    def dependents(self, schema: str, table: str) -> Dependents:
+        """Every object a ``DROP TABLE schema.table CASCADE`` destroys or changes, exactly.
+
+        Lists views, materialized views, SQL-standard functions and procedures,
+        foreign keys and policies on other tables, rules, inheriting tables and
+        tables with a column of this table's row type, to any depth, each once
+        at its shallowest depth, and what reads a partition of the table or a
+        sequence a column owns. The table's own indexes, constraints (a
+        self-referencing foreign key included), column defaults, sequences,
+        partitions and triggers are parts of the table and are not listed.
+
+        The table is found case-insensitively, so a seed loaded under another
+        letter case still has its dependants listed, and the walk never
+        under-reports; a schema holding two tables that differ only by case
+        lists the dependants of both. A missing table or schema gives no objects.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(_DEPENDENTS_SQL, {"schema": schema, "table": table})
+            rows = cur.fetchall()
+        return Dependents(
+            objects=tuple(
+                Dependent(dep_schema, name, _dependent_kind(catalog, subkind), owner or "", depth)
+                for catalog, subkind, dep_schema, name, owner, depth in rows
+            ),
+            completeness="exact",
+        )
 
     @classmethod
     def validate_config(

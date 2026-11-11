@@ -40,7 +40,6 @@ from continuo_trino_adapter.adapter import TrinoAdapter, _view_reads_table
         # is not reading the seed.
         ("SELECT * FROM other.seed", False),
         ("SELECT * FROM lake.other.seed", False),
-        ("SELECT id FROM analytics.seed WHERE ((", True),
         ("SELECT id FROM analytics.seed_ext WHERE ((", False),  # unparsable, only a longer name
         ("SELECT id FROM analytics.my_seed WHERE ((", False),
         ('SELECT id FROM "seed" WHERE ((', True),  # unparsable, quoted name
@@ -52,6 +51,70 @@ from continuo_trino_adapter.adapter import TrinoAdapter, _view_reads_table
 )
 def test_view_reads_table(definition, reads):
     assert _view_reads_table(definition, "analytics", "iceberg", "analytics", "seed") is reads
+
+
+@pytest.mark.parametrize(
+    ("definition", "table", "reads"),
+    [
+        # The body of a CTE named like the table reads the real table.
+        ("WITH seed AS (SELECT * FROM seed) SELECT * FROM seed", "seed", True),
+        ("WITH seed AS (SELECT 1 AS id) SELECT id FROM seed", "seed", False),
+        # A recursive CTE sees itself.
+        (
+            "WITH RECURSIVE seed(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seed WHERE n < 3) "
+            "SELECT n FROM seed",
+            "seed",
+            False,
+        ),
+        # Without RECURSIVE a CTE does not see itself.
+        (
+            "WITH seed(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seed WHERE n < 3) "
+            "SELECT n FROM seed",
+            "seed",
+            True,
+        ),
+        # A CTE sees the CTEs defined before it.
+        ("WITH a AS (SELECT * FROM seed), b AS (SELECT * FROM a) SELECT * FROM b", "seed", True),
+        ("WITH seed AS (SELECT 1 AS id), b AS (SELECT * FROM seed) SELECT * FROM b", "seed", False),
+        # A CTE defined later than a reference does not hide it.
+        ("WITH a AS (SELECT * FROM b), b AS (SELECT 1 AS id) SELECT * FROM a", "b", True),
+        # The main query sees every CTE of its WITH, and a subquery of it too.
+        (
+            "WITH seed AS (SELECT 1 AS id) SELECT id FROM (SELECT id FROM seed) x",
+            "seed",
+            False,
+        ),
+        # A WITH inside a subquery hides the name only inside that subquery.
+        (
+            "SELECT id FROM (WITH seed AS (SELECT 1 AS id) SELECT id FROM seed) x",
+            "seed",
+            False,
+        ),
+        (
+            "SELECT x.id FROM (WITH seed AS (SELECT 1 AS id) SELECT id FROM seed) x "
+            "JOIN seed ON true",
+            "seed",
+            True,
+        ),
+        (
+            "SELECT x.id FROM (WITH seed AS (SELECT 1 AS id) SELECT id FROM seed) x "
+            "JOIN other ON true WHERE x.id IN (SELECT id FROM seed)",
+            "seed",
+            True,
+        ),
+        # A WITH on one side of a UNION hides the name only on that side.
+        (
+            "SELECT id FROM analytics.orders UNION ALL "
+            "(WITH seed AS (SELECT 1 AS id) SELECT id FROM seed)",
+            "seed",
+            False,
+        ),
+        # A qualified reference is never a CTE.
+        ("WITH seed AS (SELECT 1 AS id) SELECT id FROM analytics.seed", "seed", True),
+    ],
+)
+def test_cte_scope_decides_whether_a_name_is_the_table(definition, table, reads):
+    assert _view_reads_table(definition, "analytics", "iceberg", "analytics", table) is reads
 
 
 def test_unqualified_reference_resolves_in_the_views_own_schema():

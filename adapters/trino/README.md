@@ -93,9 +93,14 @@ sqlglot, and lists a view (kind `view`, no owner, depth 1) when any table
 reference in it is the table. An unqualified reference is in the view's own
 schema, a reference without a catalog is in the adapter's catalog, names compare
 in lower case, and a name a `WITH` clause of the same statement defines is a
-CTE, not the table. A definition that does not parse is searched for the table's
-name as a whole identifier (`seed` does not match `seed_ext` or `my_seed`), and a
-WARNING names the view.
+CTE, not the table: a CTE's body sees the CTEs defined before it in its `WITH`
+(and itself under `WITH RECURSIVE`), the query under a `WITH` sees them all, and
+a `WITH` inside a subquery hides the name only inside that subquery, so
+`WITH seed AS (SELECT * FROM seed) ...` reads the table. A definition that does
+not parse is searched for the table's name as a whole identifier, by name only:
+the schema and catalog are ignored, so a view of another schema's `seed` is
+listed (`seed` does not match `seed_ext` or `my_seed`), and a WARNING names the
+view.
 
 The result's `completeness` is `best_effort`, because the scan reads SQL text.
 It misses:

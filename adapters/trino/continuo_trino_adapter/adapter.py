@@ -375,6 +375,31 @@ def _is_unreachable(exc: BaseException) -> bool:
     return False
 
 
+def _names_a_visible_cte(reference: exp.Table, name: str) -> bool:
+    """Whether the unqualified table reference *reference* resolves to a CTE called *name*.
+
+    Walks from the reference up through the statement. A CTE's body sees the
+    CTEs defined before it in its own ``WITH`` (and itself, for ``WITH
+    RECURSIVE``), never a later one. A query carrying a ``WITH`` (a subquery
+    included) shows all of that ``WITH``'s CTEs to everything under it except
+    the ``WITH`` clause itself, whose CTEs follow the first rule.
+    """
+    child: exp.Expr = reference
+    node = reference.parent
+    while node is not None:
+        if isinstance(node, exp.With):
+            ctes = list(node.expressions)
+            position = next(i for i, cte in enumerate(ctes) if cte is child)
+            visible = ctes[: position + 1] if node.args.get("recursive") else ctes[:position]
+        else:
+            clause = node.args.get("with_")
+            visible = list(clause.expressions) if clause is not None and clause is not child else []
+        if any(cte.alias.lower() == name for cte in visible):
+            return True
+        child, node = node, node.parent
+    return False
+
+
 def _view_reads_table(
     definition: str,
     view_schema: str,
@@ -389,8 +414,8 @@ def _view_reads_table(
     The definition is parsed as Trino SQL and every table reference in it is
     compared with the table, in lower case: an unqualified reference is in the
     view's own schema, a reference without a catalog is in *catalog* (the
-    adapter's), and an unqualified name that a ``WITH`` clause of the statement
-    defines is that CTE, not the table.
+    adapter's), and an unqualified name that resolves to a CTE visible at the
+    reference (see ``_names_a_visible_cte``) is that CTE, not the table.
 
     A definition that does not parse (or is empty) is searched for the table's
     name as a whole identifier instead, case-insensitively, so a view is never
@@ -409,12 +434,11 @@ def _view_reads_table(
         return re.search(pattern, definition, re.IGNORECASE) is not None
     if not isinstance(statement, exp.Query):
         return False
-    ctes = {cte.alias.lower() for cte in statement.find_all(exp.CTE)}
     for reference in statement.find_all(exp.Table):
         if not isinstance(reference.this, exp.Identifier):
             continue
         name = reference.name.lower()
-        if not reference.db and name in ctes:
+        if not reference.db and _names_a_visible_cte(reference, name):
             continue
         found = (
             (reference.catalog or catalog).lower(),

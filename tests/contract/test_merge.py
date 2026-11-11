@@ -1,5 +1,6 @@
 """Tests for contract v1 merger."""
 
+import hashlib
 from hashlib import sha256
 
 import yaml
@@ -9,11 +10,10 @@ import pytest
 from continuo_python_runtime.contract.loader import parse_node
 from continuo_python_runtime.contract.merge import (
     build_wire_contract,
-    node_entry,
     write_wire_contract,
 )
 from continuo_python_runtime.errors import ContractError
-from continuo_python_runtime.hashing import config_hash, content_hash_fold
+from continuo_python_runtime.hashing import config_hash, content_hash_fold, shared_code_hash
 
 WIRE_ENTRY_KEYS = {
     "schema", "table", "owner", "schedule", "criticality", "script", "reads",
@@ -111,10 +111,15 @@ def test_editing_shared_helper_flips_only_the_importing_nodes_content_hash(tmp_p
 
 
 def test_hash_stable_across_contract_reformatting(contract_repo):
+    """Key order, the contract-only fields and the whitespace around a read's SQL are not code."""
     repo = contract_repo
     h1 = build_wire_contract(repo / "contracts", repo, "s")["nodes"][0]["content_hash"]
-    text = (repo / "contracts" / "t.yml").read_text()
-    (repo / "contracts" / "t.yml").write_text(text.replace("select id", "select   id"))
+    (repo / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
+        "output_columns": [{"nullable": False, "type": "INT", "name": "id"}],
+        "reads": {"ids": "  select id from analytics.a\r\n"},
+        "script": "scripts/t.py", "criticality": "CORE", "schedule": "hourly",
+        "owner": "someone-else", "description": "reworded", "table": "t", "schema": "analytics",
+    }]}, sort_keys=False))
     h2 = build_wire_contract(repo / "contracts", repo, "s")["nodes"][0]["content_hash"]
     assert h1 == h2
 
@@ -398,13 +403,26 @@ def test_closure_member_with_utf8_bom_does_not_raise_bare_syntax_error(tmp_path)
     assert entry["shared_code_hash"] != ""
 
 
-def test_clean_closure_merge_hashes_match_hand_computed(tmp_path):
-    """Guard against the lint pass (review-fix-b) perturbing the artifact:
-    for a closure with zero violations, source_hash and shared_code_hash
-    must be byte-identical to hashes computed directly from the files on
-    disk, independent of the lint call."""
-    import hashlib
+def test_merge_writes_the_projection_hash_as_config_hash(contract_repo):
+    (entry,) = build_wire_contract(contract_repo / "contracts", contract_repo, "s")["nodes"]
+    raw = yaml.safe_load((contract_repo / "contracts" / "t.yml").read_text())["nodes"][0]
+    assert entry["config_hash"] == config_hash(parse_node(raw, "t.yml"))
 
+
+def test_a_config_the_library_refuses_fails_the_merge_with_a_contract_error(tmp_path):
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "node.py").write_text("def run(ctx):\n    return ctx.read('ids')\n")
+    _write_single_node_contract(repo, "scripts/node.py")
+    contract = repo / "contracts" / "t.yml"
+    doc = yaml.safe_load(contract.read_text())
+    doc["nodes"][0]["config"] = {"n": 2**53}
+    contract.write_text(yaml.safe_dump(doc))
+    with pytest.raises(ContractError, match=r"analytics\.t"):
+        build_wire_contract(repo / "contracts", repo, "s")
+
+
+def test_merge_folds_each_closure_file_with_its_repo_path(tmp_path):
     repo = tmp_path
     (repo / "scripts").mkdir()
     (repo / "scripts" / "helpers.py").write_text("def add(a, b):\n    return a + b\n")
@@ -412,18 +430,39 @@ def test_clean_closure_merge_hashes_match_hand_computed(tmp_path):
         "import scripts.helpers\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
     )
     _write_single_node_contract(repo, "scripts/node.py")
-
     (entry,) = build_wire_contract(repo / "contracts", repo, "s")["nodes"]
+    assert entry["source_hash"] == hashlib.sha256((repo / "scripts" / "node.py").read_bytes()).hexdigest()
+    assert entry["shared_code_hash"] == shared_code_hash(
+        {"scripts/helpers.py": (repo / "scripts" / "helpers.py").read_bytes()}
+    )
+    assert set(entry) == WIRE_ENTRY_KEYS
 
-    script_bytes = (repo / "scripts" / "node.py").read_bytes()
-    helper_bytes = (repo / "scripts" / "helpers.py").read_bytes()
-    expected_source_hash = hashlib.sha256(script_bytes).hexdigest()
-    expected_shared_hash = hashlib.sha256(
-        hashlib.sha256(helper_bytes).hexdigest().encode()
-    ).hexdigest()
 
-    assert entry["source_hash"] == expected_source_hash
-    assert entry["shared_code_hash"] == expected_shared_hash
+def test_swapping_two_imported_files_moves_the_content_hash(tmp_path):  # C13: 7 becomes -7
+    repo = tmp_path
+    (repo / "lib").mkdir()
+    (repo / "lib" / "__init__.py").write_text("")
+    (repo / "lib" / "p.py").write_text("def value():\n    return 7\n")
+    (repo / "lib" / "q.py").write_text("def value():\n    return -7\n")
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "node.py").write_text(
+        "from lib import p, q\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
+    )
+    _write_single_node_contract(repo, "scripts/node.py")
+    (before,) = build_wire_contract(repo / "contracts", repo, "s")["nodes"]
+    p, q = (repo / "lib" / "p.py").read_bytes(), (repo / "lib" / "q.py").read_bytes()
+    (repo / "lib" / "p.py").write_bytes(q)
+    (repo / "lib" / "q.py").write_bytes(p)
+    (after,) = build_wire_contract(repo / "contracts", repo, "s")["nodes"]
+    assert after["source_hash"] == before["source_hash"]
+    assert after["shared_code_hash"] != before["shared_code_hash"]
+    assert after["content_hash"] != before["content_hash"]
+
+
+def test_a_wire_entry_passes_the_fold_check_of_a_topology_controller_older_than_phase_0(contract_repo):  # N1
+    (entry,) = build_wire_contract(contract_repo / "contracts", contract_repo, "s")["nodes"]
+    parts = f"{entry['source_hash']}|{entry['shared_code_hash']}|{entry['config_hash']}"
+    assert entry["content_hash"] == "sha256:" + hashlib.sha256(parts.encode()).hexdigest()
     assert set(entry) == WIRE_ENTRY_KEYS
 
 
@@ -600,25 +639,6 @@ def test_mode_type_and_primary_key_are_part_of_the_config_hash(tmp_path):
     assert len({append["config_hash"], upsert["config_hash"], reordered["config_hash"]}) == 3
 
 
-# Computed with continuo-python-runtime 0.8.0 (before mode_type existed) for the
-# shared fixture's replace node. A replace entry must hash exactly like this.
-_PRE_WRITE_MODES_CONFIG_HASH = "651db2a6fdafda3f4dcdd5358132b0d7cd0177836be90380cd79388ac31d8cdf"
-_REPLACE_NODE = {
-    "schema": "fixture", "table": "replace_node", "owner": "data-team",
-    "schedule": "hourly", "criticality": "SECONDARY", "kind": "python-node",
-    "script": "scripts/replace_node.py", "reads": {"src": "SELECT id FROM fixture.src"},
-    "output_columns": [{"name": "id", "type": "BIGINT", "nullable": False}],
-    "description": "", "extra_columns": "raise", "config": {},
-}
-
-
-@pytest.mark.parametrize("extra", [{}, {"mode_type": "replace"}])
-def test_a_replace_entry_hashes_exactly_as_it_did_before_write_modes(extra):
-    entry = node_entry(parse_node({**_REPLACE_NODE, **extra}, "f.yml"))
-    assert "mode_type" not in entry and "primary_key" not in entry
-    assert config_hash(entry) == _PRE_WRITE_MODES_CONFIG_HASH
-
-
 # --- timeout_minutes ----------------------------------------------------------
 
 
@@ -628,8 +648,6 @@ def test_timeout_minutes_is_outside_the_config_hash(tmp_path):
     long = _only_entry(_modes_repo(tmp_path / "c", timeout_minutes=480))
     assert short["config_hash"] == long["config_hash"] == without["config_hash"]
     assert short["content_hash"] == long["content_hash"] == without["content_hash"]
-    # The wire entry hashes exactly as the same entry would without the key.
-    assert config_hash(short) == short["config_hash"]
 
 
 def test_the_wire_entry_carries_timeout_minutes_only_when_set(tmp_path):

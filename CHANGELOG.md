@@ -5,6 +5,24 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- A node's hashes come from continuo-contracts 0.1.0, the library
+  continuo's topology-controller uses too, so CI and continuo compute the
+  same values. `config_hash` hashes the node's code projection: `owner`,
+  `description`, `criticality` and `schedule` no longer move a node's hash,
+  a column type's spelling does not (`INT` and `INTEGER` hash alike), and a
+  read's SQL is hashed as written, apart from LF line endings and the
+  whitespace around it. `shared_code_hash` folds each import closure file
+  with its repo-relative path, so two files that swap their contents change
+  it. Every Python node's `content_hash` changes once, on the first release
+  built with this version. The wire entry keeps its keys and the fold.
+- A node whose `config` holds a value the hash cannot write (an integer
+  beyond 2**53 - 1, NaN or an infinity, nesting deeper than 99 levels, a
+  lone surrogate) fails `merge` with a `ContractError` naming the node.
+- The package gate no longer counts `continuo-contracts` as a first-party
+  distribution.
+
 ### Fixed
 
 - A release's image build no longer fails when PyPI still serves an index

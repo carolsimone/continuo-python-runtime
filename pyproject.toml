@@ -23,6 +23,9 @@ dependencies = [
     "boto3==1.43.114",
     "pyarrow==26.0.0",
     "PyYAML==6.0.3",
+    # The hashing library continuo's topology-controller pins too. Exact, so CI,
+    # the harness and topology-controller compute the same hashes.
+    "continuo-contracts==0.1.0",
     # Pinned in lockstep with continuo-engine-contract's OWN sqlglot pin
     # (currently ==30.23.0) -- bump this whenever that pin moves.
     # continuo_python_runtime/contract/loader.py imports sqlglot.errors

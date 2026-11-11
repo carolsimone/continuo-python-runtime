@@ -1,94 +1,96 @@
 """Content hashing: three independent parts folded into one content_hash.
 
-The three parts (``source_hash``, ``shared_code_hash``, ``config_hash``) are
-computed independently from already-gathered bytes/dicts and folded together
-with ``content_hash_fold``. This module is pure computation — no filesystem
-access, no knowledge of ``closure.py`` — so the known-vector tests can call
-``content_hash_fold`` on bare strings with no entry or file involved.
+A Python node's ``content_hash`` folds three parts: ``source_hash`` (the node's
+own script bytes), ``shared_code_hash`` (the import closure, each file with its
+repo-relative path) and ``config_hash`` (the node's code projection). The parts
+are computed from already-gathered bytes and a parsed node, so this module does
+no filesystem access and knows nothing about ``closure.py``.
 
-The fold formula and the ``shared_code_hash`` sorted-digest fold are wire
-contracts mirrored byte-for-byte from continuo's manifest-controller
-(``content_hash_fold``) and its dbt-side shared-code hashing. Every byte here
-is load-bearing: manifest-controller independently recomputes the fold from
-the parts this repo emits and rejects the release artifact if the two
-results differ.
+``shared_code_hash``, ``config_hash`` and the fold are computed by
+continuo-contracts, the library continuo's topology-controller pins and
+recomputes the config part with. Nothing here canonicalises or normalises: the
+library does, so every producer of a hash writes the same bytes. The fold is
+the three-part fold that older topology-controllers check on the wire, so an
+entry this module writes passes their re-computation unchanged.
+
+The library refuses a few ``config`` values the contract loader accepts (an
+integer beyond 2**53 - 1, NaN or an infinity, nesting deeper than 99 levels, a
+lone surrogate). Each refusal reaches the caller as a ``ContractError`` naming
+the node.
 """
 
-from collections.abc import Iterable
-from copy import deepcopy
+from collections.abc import Mapping
 from hashlib import sha256
-from json import dumps
 
-HASH_PART_FIELDS = ("source_hash", "shared_code_hash", "config_hash")
-CONTENT_HASH_FIELD = "content_hash"
-# A wire key that is not part of the config_hash basis: it tunes how the node
-# runs (the task timeout) and says nothing about what the node computes, so
-# changing it alone is not a code change.
-NON_HASHED_FIELDS = ("timeout_minutes",)
+from continuo_contracts.errors import ContractsError
+from continuo_contracts.hashing import fold3, shared_hash
+from continuo_contracts.python import PythonColumn, PythonNode, projection_hash
+
+from continuo_python_runtime.contract.model import Node
+from continuo_python_runtime.errors import ContractError
 
 
-def canonical_entry(entry: dict) -> dict:
-    """Deep-copy *entry*, drop the four hash fields, whitespace-normalize reads.
+def source_hash(primary: bytes) -> str:
+    """Bare hex `sha256(primary)` — the node's own script bytes (a csv node's uri)."""
+    return sha256(primary).hexdigest()
 
-    Drops ``content_hash`` and all three of ``HASH_PART_FIELDS`` from the
-    basis, and whitespace-normalizes every ``str`` value in ``reads`` via
-    ``" ".join(sql.split())``. ``timeout_minutes`` is the one other wire key
-    left out of the basis (``NON_HASHED_FIELDS``). Everything else is
-    preserved verbatim, including ``config``.
+
+def to_python_node(node: Node) -> PythonNode:
+    """The library's view of *node*: the fields its code projection is made of.
+
+    ``assets`` is empty: the loader has no ``assets`` key yet.
     """
-    canonical = deepcopy(entry)
-
-    canonical.pop(CONTENT_HASH_FIELD, None)
-    for field in (*HASH_PART_FIELDS, *NON_HASHED_FIELDS):
-        canonical.pop(field, None)
-
-    reads = canonical.get("reads")
-    if isinstance(reads, dict):
-        for key, value in reads.items():
-            if isinstance(value, str):
-                reads[key] = " ".join(value.split())
-
-    return canonical
-
-
-def canonical_json(entry: dict) -> str:
-    """`json.dumps(canonical_entry(entry), sort_keys=True, separators=(",", ":"))`."""
-    return dumps(canonical_entry(entry), sort_keys=True, separators=(",", ":"))
-
-
-def source_hash(script_bytes: bytes) -> str:
-    """Bare hex `sha256(script_bytes)` — the node's own script, byte-for-byte."""
-    return sha256(script_bytes).hexdigest()
+    return PythonNode(
+        schema=node.schema,
+        table=node.table,
+        kind=node.kind,
+        script=node.script,
+        reads=dict(node.reads),
+        output_columns=tuple(
+            PythonColumn(column.name, column.type, column.nullable)
+            for column in node.output_columns
+        ),
+        extra_columns=node.extra_columns,
+        config=dict(node.config),
+        secret_ref=node.secret_ref,
+        mode_type=node.mode_type,
+        primary_key=tuple(node.primary_key),
+        assets=(),
+    )
 
 
-def shared_code_hash(member_bytes: Iterable[bytes]) -> str:
-    """`""` when the closure is empty, else bare hex of the sorted-digest fold."""
-    unit_hashes = sorted(sha256(member).hexdigest() for member in member_bytes)
-    if not unit_hashes:
-        return ""
-    return sha256("".join(unit_hashes).encode()).hexdigest()
+def config_hash(node: Node) -> str:
+    """Bare hex SHA-256 of the RFC 8785 bytes of the node's code projection."""
+    try:
+        return projection_hash(to_python_node(node))
+    except ContractsError as exc:
+        raise ContractError(str(exc)) from exc
 
 
-def config_hash(entry: dict) -> str:
-    """Bare hex `sha256(canonical_json(entry).encode())`."""
-    return sha256(canonical_json(entry).encode()).hexdigest()
+def shared_code_hash(units: Mapping[str, bytes]) -> str:
+    """`""` when there are no units, else bare hex over each unit's path and digest.
+
+    *units* maps a repo-relative POSIX path to the file's bytes.
+    """
+    try:
+        return shared_hash(units)
+    except ContractsError as exc:
+        raise ContractError(str(exc)) from exc
 
 
 def content_hash_fold(source: str, shared: str, config: str) -> str:
-    """`"sha256:" + sha256(f"{source}|{shared}|{config}".encode()).hexdigest()`."""
-    return "sha256:" + sha256(f"{source}|{shared}|{config}".encode()).hexdigest()
+    """`"sha256:"` plus the hex SHA-256 of the three parts joined by `|`."""
+    return fold3(source, shared, config)
 
 
-def hash_parts(
-    entry: dict, script_bytes: bytes, member_bytes: Iterable[bytes]
-) -> dict[str, str]:
+def hash_parts(node: Node, primary: bytes, units: Mapping[str, bytes]) -> dict[str, str]:
     """Return all four fields: the three parts plus their fold."""
-    s = source_hash(script_bytes)
-    sh = shared_code_hash(member_bytes)
-    c = config_hash(entry)
+    source = source_hash(primary)
+    shared = shared_code_hash(units)
+    config = config_hash(node)
     return {
-        "source_hash": s,
-        "shared_code_hash": sh,
-        "config_hash": c,
-        "content_hash": content_hash_fold(s, sh, c),
+        "source_hash": source,
+        "shared_code_hash": shared,
+        "config_hash": config,
+        "content_hash": content_hash_fold(source, shared, config),
     }

@@ -181,9 +181,9 @@ produced, never how it is checked or written.
 Any node may set `timeout_minutes:` — an integer from 1 to 10,080 (one week) —
 to declare how long its task may run before continuo gives up on it. A value
 outside that range, or one that is not an integer, fails
-`continuo-runtime validate`/`merge`/`lint`. It is the one key that is not part
-of `config_hash`, so changing only the timeout never changes the node's
-`content_hash`.
+`continuo-runtime validate`/`merge`/`lint`. Like `owner`, `schedule`,
+`criticality` and `description`, it is outside the code projection that
+`config_hash` hashes, so changing it never changes the node's `content_hash`.
 
 ## Write modes
 
@@ -262,7 +262,7 @@ def run(ctx):
   example a polars DataFrame. Returning anything else raises `ScriptError`.
 - The dataframe library is your choice. No dataframe library is baked into
   the base image — the package's own runtime dependencies are `pyarrow`,
-  `PyYAML`, and `continuo-engine-contract`. Add whatever you script
+  `PyYAML`, `continuo-engine-contract` and `continuo-contracts`. Add whatever you script
   against (pandas, polars, …) as a `RUN pip install` line in your own
   `Dockerfile`, on top of the base image. The base image runs as non-root
   (uid 65532), which pip cannot install under, so switch to root for the

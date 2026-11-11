@@ -57,8 +57,7 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   through an optional `secret_ref` (must match `continuo-api-*`; a trailing
   newline is rejected). Only this kind may set it. Its script and import closure are hashed and
   linted exactly as for `python-node`. When `secret_ref` is set, it appears
-  on the merged wire entry as an extra key (absent otherwise, so no other
-  node's wire entry or `config_hash` changes), and it is part of
+  on the merged wire entry as an extra key (absent otherwise), and it is part of
   `config_hash`, so `content_hash` changes when the referenced Secret name
   changes. `source_hash` does not.
 - **`timeout_minutes`** is additive and optional, valid on every `kind`: an
@@ -67,10 +66,8 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   `ContractError` naming the node and the key. On the merged wire entry it
   appears only when the node declares it, and it is the one wire key **outside
   `config_hash`**: it is written after the hash parts are computed and is
-  excluded from the `config_hash` basis, so changing it alone changes none of
-  the four hashes and is not a code change. A node that does not declare it
-  has the wire entry, `config_hash` and `content_hash` it always had, and
-  `contract_version` stays 1.
+  outside the code projection, so changing it alone changes none of the four
+  hashes and is not a code change. `contract_version` stays 1.
 - **`mode_type`** and **`primary_key`** are additive and optional. `mode_type`
   (`replace`, the default; `append`; `upsert`) says how the harness writes
   the node's table on each run; `python-csv` allows only `replace`.
@@ -78,9 +75,9 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   non-empty list of output column names, each spelled exactly as in
   `output_columns` and declared `nullable: false`, unique case-insensitively. On the merged wire entry `mode_type` appears
   only when it is not `replace`, and `primary_key` only for `upsert`, in the
-  authored order and spelling — so every existing node's wire entry,
-  `config_hash` and `content_hash` are unchanged and `contract_version` stays
-  1. Both are part of `config_hash` when present. A shared fixture of the
+  authored order and spelling, and `contract_version` stays 1. `mode_type` is
+  always part of the code projection and `primary_key` is part of it for
+  `upsert` only. A shared fixture of the
   expected entries lives in this repo at
   `tests/fixtures/wire_contract_write_modes.yml` and, byte-identical, in
   continuo at `topology-controller/tests/fixtures/wire_contract_write_modes.yml`.
@@ -202,50 +199,50 @@ parse time.
 Each node entry in `contract.yaml` carries four hash fields — three
 independently-computed parts plus `content_hash`, their fold — all
 computed by this repo's `continuo-runtime merge`
-(`continuo_python_runtime.hashing`) and shipped on the wire entry. Continuo
-never recomputes `source_hash` or `shared_code_hash` from raw bytes over
-this surface (it doesn't receive the script or closure here); it
-recomputes only the fold (see below).
+(`continuo_python_runtime.hashing`, through the continuo-contracts library)
+and shipped on the wire entry. From continuo's phase 0, topology-controller
+computes the config part itself with the same library and folds it with CI's
+source and shared parts; the fold is the one older topology-controllers
+recompute from the three parts on the wire entry.
 
 ```
 source_hash      = sha256(script_bytes)                            # bare hex
-shared_code_hash = ""  if the in-repo import closure is empty, else
-                    sha256(concat(sorted(
-                        sha256(member_bytes).hexdigest()
-                        for member in closure)))                    # bare hex
-config_hash      = sha256(canonical_json(entry))                    # bare hex
+                   (sha256(uri) for python-csv)
+shared_code_hash = continuo_contracts.hashing.shared_hash(
+                       {repo-relative POSIX path: file bytes})      # bare hex,
+                   over the in-repo import closure, "" when it is empty
+config_hash      = continuo_contracts.python.projection_hash(node)  # bare hex
 content_hash     = "sha256:" + sha256(source_hash + "|" + shared_code_hash
                                        + "|" + config_hash)
 ```
 
 - `script_bytes` — the node's own script file, byte-for-byte.
-- `member_bytes` — the byte content of every file in the node's in-repo
-  import closure (defined below); the script itself is never a closure
-  member, so `source_hash` and `shared_code_hash` never double-count it.
-  `shared_code_hash`'s `sorted(...)` sorts the per-member **hex digest
-  strings**, not the raw bytes, and `concat` joins those sorted hex
-  strings before the outer `sha256`.
-- `canonical_json(entry)` — the node's wire entry, yaml-parsed then
-  re-serialized to JSON with sorted keys and no whitespace
-  (`json.dumps(..., sort_keys=True, separators=(",", ":"))`); every
-  `reads` value is first whitespace-normalized (runs of whitespace
-  collapse to a single space, then stripped); `content_hash` **and all
-  three part fields** (`source_hash`, `shared_code_hash`, `config_hash`)
-  are excluded from the basis — `config_hash` cannot include itself, and
-  none of the four hash fields participates in another's basis. So is
-  `timeout_minutes`, the one non-hash wire key left out of the basis. Every
-  other field, including `config`, participates verbatim.
+- the shared units — the byte content of every file in the node's in-repo
+  import closure (defined below), each keyed by its repo-relative POSIX path;
+  the script itself is never a closure member, so `source_hash` and
+  `shared_code_hash` never double-count it. The part folds one
+  `<path> NUL <sha256 of the bytes>` line per unit, sorted by path, so two
+  files that swap their contents change it.
+- the code projection — the twelve keys `schema`, `table`, `kind`, `script`,
+  `reads`, `output_columns`, `extra_columns`, `config`, `secret_ref`,
+  `mode_type`, `primary_key` and `assets`, written as RFC 8785 canonical JSON.
+  Column types are written in their canonical spelling (`INT` is `INTEGER`,
+  `DECIMAL(12, 2)` is `NUMERIC(12,2)`), and each read's SQL is hashed as
+  written except for LF line endings and the whitespace around it. `owner`,
+  `schedule`, `criticality`, `description` and `timeout_minutes` are outside
+  the projection. A `config` value the library cannot write (an integer beyond
+  2**53 - 1, NaN, an infinity, nesting deeper than 99 levels, a lone
+  surrogate) fails `merge` with a `ContractError` naming the node.
 
-Invariant: formatting-only edits (spaces in SQL, yaml indentation/key
-order) leave all four hashes unchanged; any semantic edit to reads,
-columns, metadata, `config`, or the script changes at least one part and
-therefore `content_hash`.
+Invariant: editing a node's owner, schedule, criticality, description or
+timeout, the order of its keys, or the spelling of a column type leaves all
+four hashes unchanged; any edit to its script, closure, reads, columns or
+`config` changes at least one part and therefore `content_hash`.
 
 The fold (`content_hash = "sha256:" + sha256(source|shared|config)`) is
-byte-identical to manifest-controller's dbt-side fold — one formula spans
-both runtimes. Continuo's side **recomputes the fold from the three part
-fields already on the wire entry and rejects the release if it doesn't
-match the submitted `content_hash`**.
+the three-part fold of continuo-contracts. Continuo's side **recomputes the
+fold from the three part fields already on the wire entry and rejects the
+release if it doesn't match the submitted `content_hash`**.
 
 ### Closure definition and its documented limits
 

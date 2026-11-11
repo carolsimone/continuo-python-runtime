@@ -1,15 +1,13 @@
 """Contract v1 merger: wire contract builder."""
 
-from collections.abc import Callable
 from pathlib import Path
 
 import yaml
 
-from continuo_python_runtime.closure import resolve_closure
 from continuo_python_runtime.contract.loader import load_contract_dir
 from continuo_python_runtime.contract.model import CONTRACT_VERSION, DEFAULT_MODE_TYPE, Node
-from continuo_python_runtime.contract.paths import resolve_script_path
 from continuo_python_runtime.errors import ContractError
+from continuo_python_runtime.hash_inputs import gather_hash_inputs
 from continuo_python_runtime.hashing import hash_parts
 from continuo_python_runtime.lint import lint_source
 
@@ -22,8 +20,7 @@ def node_entry(node: Node) -> dict:
     four (source_hash, shared_code_hash, config_hash, content_hash). The
     nullable field is always present in output_columns. ``secret_ref``,
     ``mode_type`` and ``primary_key`` appear only when they differ from their
-    default, so a node that does not use them has the entry (and hashes) it
-    had before they existed.
+    default, so the entry of a node that does not use them stays minimal.
     """
     entry = {
         "schema": node.schema,
@@ -46,12 +43,11 @@ def node_entry(node: Node) -> dict:
         "extra_columns": node.extra_columns,
         "config": dict(node.config),
     }
-    # Only a kind that may name a Secret ever carries one; emitting the key
-    # only when set keeps every other node's config_hash unchanged.
+    # Only a kind that may name a Secret ever carries one; the key is emitted
+    # only when set.
     if node.secret_ref:
         entry["secret_ref"] = node.secret_ref
-    # Same reasoning: every replace node's entry, config_hash and content_hash
-    # stay byte-identical, so contract_version stays 1.
+    # Same reasoning: a replace node's entry carries no mode_type.
     if node.mode_type != DEFAULT_MODE_TYPE:
         entry["mode_type"] = node.mode_type
     if node.mode_type == "upsert":
@@ -62,10 +58,7 @@ def node_entry(node: Node) -> dict:
 def _lint_node_closure(
     node: Node,
     repo_root: Path,
-    script_path: Path,
-    script_bytes: bytes,
-    closure: list[Path],
-    member_bytes: list[bytes],
+    code_files: tuple[tuple[Path, bytes], ...],
 ) -> None:
     """Lint the node's script and every resolved closure member.
 
@@ -107,10 +100,8 @@ def _lint_node_closure(
     catches only ``HarnessError``/``OSError``.
     """
     repo_root_resolved = repo_root.resolve()
-    files = [(script_path, script_bytes), *zip(closure, member_bytes, strict=True)]
-
     violations: list[str] = []
-    for path, data in files:
+    for path, data in code_files:
         rel = path.relative_to(repo_root_resolved)
         try:
             text = data.decode("utf-8-sig")
@@ -123,30 +114,6 @@ def _lint_node_closure(
         raise ContractError(
             f"{node.relation}: lint violations in script or import closure:\n{report}"
         )
-
-
-def _script_hash_inputs(node: Node, repo_root: Path) -> tuple[bytes, list[bytes]]:
-    """A script node's source is its script plus its in-repo import closure,
-    every file of which is held to the closure lint."""
-    script_path = resolve_script_path(node.script, repo_root, context=node.relation)
-    script_bytes = script_path.read_bytes()
-    closure = resolve_closure(script_path, repo_root)
-    member_bytes = [member.read_bytes() for member in closure]
-    _lint_node_closure(node, repo_root, script_path, script_bytes, closure, member_bytes)
-    return script_bytes, member_bytes
-
-
-def _csv_hash_inputs(node: Node, repo_root: Path) -> tuple[bytes, list[bytes]]:
-    """A csv node has no script and no import closure: its source is the uri.
-    New file content at the same uri is new data, not a new node version."""
-    return node.reads["csv"].encode(), []
-
-
-_HASH_INPUTS: dict[str, Callable[[Node, Path], tuple[bytes, list[bytes]]]] = {
-    "python-node": _script_hash_inputs,
-    "python-csv": _csv_hash_inputs,
-    "python-api": _script_hash_inputs,
-}
 
 
 def build_wire_contract(
@@ -168,8 +135,9 @@ def build_wire_contract(
     for node in nodes:
         entry = node_entry(node)
 
-        primary_bytes, member_bytes = _HASH_INPUTS[node.kind](node, repo_root)
-        entry.update(hash_parts(entry, primary_bytes, member_bytes))
+        inputs = gather_hash_inputs(node, repo_root)
+        _lint_node_closure(node, repo_root, inputs.code_files)
+        entry.update(hash_parts(node, inputs.primary, inputs.units))
         # The one wire key outside config_hash: it is written after the hashes
         # are computed, so changing it alone never changes content_hash.
         if node.timeout_minutes is not None:

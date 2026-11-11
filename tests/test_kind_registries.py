@@ -4,8 +4,7 @@ A kind added to KINDS without one of these would fail at merge or at run
 time; this pins the three registries to the one list.
 """
 
-from continuo_python_runtime import harness
-from continuo_python_runtime.contract import merge
+from continuo_python_runtime import harness, hash_inputs
 from continuo_python_runtime.contract.kinds import RULES
 from continuo_python_runtime.contract.model import KINDS, MODE_TYPES
 
@@ -15,7 +14,7 @@ def test_every_kind_has_rules():
 
 
 def test_every_kind_has_hash_inputs():
-    assert set(merge._HASH_INPUTS) == KINDS
+    assert set(hash_inputs.HASH_INPUTS) == KINDS
 
 
 def test_every_kind_has_a_producer():

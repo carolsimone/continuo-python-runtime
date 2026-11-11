@@ -20,7 +20,7 @@ dependencies = [
     # contract version never exists without a new runtime version to match it;
     # an exact pin therefore costs nothing and keeps the tested pair together.
     "continuo-engine-contract==0.10.0",
-    "boto3==1.43.114",
+    "boto3==1.43.126",
     "pyarrow==26.0.0",
     "PyYAML==6.0.3",
     # The hashing library continuo's topology-controller pins too. Exact, so CI,
@@ -36,7 +36,7 @@ dependencies = [
     # parser's own ParseError handling ever runs). Once that contract bug is
     # fixed upstream, this direct import -- and this explicit pin, since
     # sqlglot would then again be needed only transitively -- can be dropped.
-    "sqlglot==30.23.0",
+    "sqlglot==30.30.0",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

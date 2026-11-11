@@ -24,7 +24,7 @@ CHECK = {
     "SEED_PREFLIGHT_ACKNOWLEDGED": "[]",
 }
 # Two continuo views and one BI view read the seed.
-DESIGN = Dependents((
+SEED_DEPENDENTS = Dependents((
     Dependent("analytics", "fx_rates_current", "view", "dbt", 1),
     Dependent("analytics", "fx_rates_latest_eur", "view", "dbt", 2),
     Dependent("bi", "fx_rates_report", "view", "bi", 1),
@@ -108,7 +108,7 @@ def _with(env, **changes):
 
 
 def test_check_stops_on_an_object_outside_the_allowed_set():
-    code, block = _seed(CHECK, _adapter_class("cascade", listing=DESIGN))
+    code, block = _seed(CHECK, _adapter_class("cascade", listing=SEED_DEPENDENTS))
     assert code == 1
     assert {k: v for k, v in block.items() if k != "message"} == {
         "schema_version": 1, "status": "error", "failures": 1, "unique_id": "analytics.seed_fx_rates_eur",
@@ -126,7 +126,7 @@ def test_check_stops_on_an_object_outside_the_allowed_set():
 
 
 def test_the_listing_is_asked_for_the_production_relation_and_the_adapter_is_closed():
-    cls = _adapter_class("cascade", listing=DESIGN)
+    cls = _adapter_class("cascade", listing=SEED_DEPENDENTS)
     _seed(CHECK, cls)
     assert cls.state.listing_calls == [("analytics", "seed_fx_rates_eur")]
     assert cls.state.closed == 1
@@ -134,14 +134,14 @@ def test_the_listing_is_asked_for_the_production_relation_and_the_adapter_is_clo
 
 def test_check_passes_once_the_operator_acknowledges_the_object():
     env = _with(CHECK, SEED_PREFLIGHT_ACKNOWLEDGED='["bi.fx_rates_report"]')
-    code, block = _seed(env, _adapter_class("cascade", listing=DESIGN))
+    code, block = _seed(env, _adapter_class("cascade", listing=SEED_DEPENDENTS))
     assert code == 0 and block["status"] == "success" and block["failures"] == 0
     assert "reason" not in block
     assert all(d["allowed"] for d in block["dependents"])
 
 
 def test_report_never_fails_and_says_what_a_check_would():
-    code, block = _seed(_with(CHECK, SEED_PREFLIGHT_MODE="report"), _adapter_class("cascade", listing=DESIGN))
+    code, block = _seed(_with(CHECK, SEED_PREFLIGHT_MODE="report"), _adapter_class("cascade", listing=SEED_DEPENDENTS))
     assert code == 0 and block["status"] == "success" and block["failures"] == 0
     assert block["reason"] == "unowned_dependents" and block["mode"] == "report"
     assert block["message"].startswith("unowned_dependents: ")
@@ -157,7 +157,7 @@ def test_late_binding_check_lists_external_views_and_passes():
 
 @pytest.mark.parametrize("mode,code", [("check", 1), ("report", 0)])
 def test_an_unexpected_family_is_engine_mismatch_before_connecting(mode, code):
-    cls = _adapter_class("late_binding", listing=DESIGN)
+    cls = _adapter_class("late_binding", listing=SEED_DEPENDENTS)
     got, block = _seed(_with(CHECK, SEED_PREFLIGHT_MODE=mode), cls)
     assert got == code
     assert block["reason"] == "engine_mismatch" and block["checked"] is False
@@ -169,7 +169,7 @@ def test_an_unexpected_family_is_engine_mismatch_before_connecting(mode, code):
 
 @pytest.mark.parametrize("mode,code", [("check", 1), ("report", 0)])
 def test_an_adapter_that_declares_no_family_is_engine_mismatch(mode, code):
-    cls = _adapter_class(UNSET, listing=DESIGN)
+    cls = _adapter_class(UNSET, listing=SEED_DEPENDENTS)
     got, block = _seed(_with(CHECK, SEED_PREFLIGHT_MODE=mode), cls)
     assert got == code and block["reason"] == "engine_mismatch" and block["drop_semantics"] == ""
     assert cls.state.from_env_calls == 0
@@ -243,7 +243,7 @@ def test_duplicate_entries_in_the_allowed_and_acknowledged_lists_change_nothing(
         SEED_PREFLIGHT_ALLOWED='["analytics.fx_rates_current", "analytics.fx_rates_current", "ANALYTICS.fx_rates_current"]',
         SEED_PREFLIGHT_ACKNOWLEDGED='["bi.fx_rates_report", "bi.fx_rates_report", "analytics.fx_rates_latest_eur"]',
     )
-    code, block = _seed(env, _adapter_class("cascade", listing=DESIGN))
+    code, block = _seed(env, _adapter_class("cascade", listing=SEED_DEPENDENTS))
     assert code == 0 and all(d["allowed"] for d in block["dependents"])
 
 
@@ -265,7 +265,7 @@ def test_the_node_id_defaults_to_the_production_relation():
 
 def test_the_allowed_and_acknowledged_lists_default_to_empty():
     env = _with(CHECK, SEED_PREFLIGHT_ALLOWED=None, SEED_PREFLIGHT_ACKNOWLEDGED=None)
-    code, block = _seed(env, _adapter_class("cascade", listing=DESIGN))
+    code, block = _seed(env, _adapter_class("cascade", listing=SEED_DEPENDENTS))
     assert code == 1 and not any(d["allowed"] for d in block["dependents"])
 
 
@@ -282,7 +282,7 @@ def test_the_allowed_and_acknowledged_lists_default_to_empty():
     {"SEED_PREFLIGHT_ACKNOWLEDGED": '"bi.x"'},
 ])
 def test_bad_inputs_exit_2(changes):
-    cls = _adapter_class("cascade", listing=DESIGN)
+    cls = _adapter_class("cascade", listing=SEED_DEPENDENTS)
     code, block = _seed(_with(CHECK, **changes), cls)
     assert code == 2 and block["status"] == "error" and block["failures"] == 1
     assert block["op"] == "seed_preflight" and "reason" not in block
@@ -305,7 +305,7 @@ def test_a_discovery_failure_exits_2_in_both_modes():
 
 
 def test_missing_adapter_env_exits_2_before_connecting():
-    cls = _adapter_class("cascade", listing=DESIGN, required_env=("POSTGRES_HOST",))
+    cls = _adapter_class("cascade", listing=SEED_DEPENDENTS, required_env=("POSTGRES_HOST",))
     code, block = _seed(CHECK, cls)
     assert code == 2 and "POSTGRES_HOST" in block["message"] and "reason" not in block
     assert cls.state.from_env_calls == 0
@@ -313,7 +313,7 @@ def test_missing_adapter_env_exits_2_before_connecting():
 
 def test_adapter_env_is_read_from_the_given_env_not_the_process(monkeypatch):
     monkeypatch.setenv("POSTGRES_HOST", "from-the-process")
-    cls = _adapter_class("cascade", listing=DESIGN, required_env=("POSTGRES_HOST",))
+    cls = _adapter_class("cascade", listing=SEED_DEPENDENTS, required_env=("POSTGRES_HOST",))
     code, _ = _seed(CHECK, cls)
     assert code == 2
 
@@ -325,10 +325,10 @@ _BAD = (2, "error", "", False, "none")
 _ROWS = {
     "bad input": (None, _with(CHECK, SEED_PREFLIGHT_MODE=None), None, None),
     "engine mismatch": (
-        ("late_binding", {"listing": DESIGN}), CHECK,
+        ("late_binding", {"listing": SEED_DEPENDENTS}), CHECK,
         (1, "error", "engine_mismatch", False, "none"), (0, "success", "engine_mismatch", False, "none")),
     "no declared family": (
-        (UNSET, {"listing": DESIGN}), CHECK,
+        (UNSET, {"listing": SEED_DEPENDENTS}), CHECK,
         (1, "error", "engine_mismatch", False, "none"), (0, "success", "engine_mismatch", False, "none")),
     "no capability, schema_bound": (
         ("cascade", {"capability": False}), CHECK,
@@ -349,10 +349,10 @@ _ROWS = {
         ("late_binding", {"listing_error": OSError("denied")}), LATE,
         (0, "success", "", False, "none"), (0, "success", "", False, "none")),
     "listed, schema_bound, not allowed": (
-        ("cascade", {"listing": DESIGN}), CHECK,
+        ("cascade", {"listing": SEED_DEPENDENTS}), CHECK,
         (1, "error", "unowned_dependents", True, "exact"), (0, "success", "unowned_dependents", True, "exact")),
     "listed, schema_bound, all allowed": (
-        ("cascade", {"listing": DESIGN}), _with(CHECK, SEED_PREFLIGHT_ACKNOWLEDGED='["bi.fx_rates_report"]'),
+        ("cascade", {"listing": SEED_DEPENDENTS}), _with(CHECK, SEED_PREFLIGHT_ACKNOWLEDGED='["bi.fx_rates_report"]'),
         (0, "success", "", True, "exact"), (0, "success", "", True, "exact")),
     "listed, schema_bound, nothing": (
         ("cascade", {"listing": Dependents((), "exact")}), CHECK,
@@ -370,7 +370,7 @@ _ROWS = {
 @pytest.mark.parametrize("row", sorted(_ROWS))
 def test_every_row_of_the_decision_table(row, mode):
     adapter, env, check, report = _ROWS[row]
-    cls = _adapter_class(adapter[0], **adapter[1]) if adapter else _adapter_class("cascade", listing=DESIGN)
+    cls = _adapter_class(adapter[0], **adapter[1]) if adapter else _adapter_class("cascade", listing=SEED_DEPENDENTS)
     code, block = _seed(_with(env, SEED_PREFLIGHT_MODE=mode if row != "bad input" else None), cls)
     want = _BAD if adapter is None else (check if mode == "check" else report)
     got = (code, block["status"], block.get("reason", ""), block["checked"], block["completeness"])
@@ -423,7 +423,7 @@ def test_an_unexpected_exception_in_probe_views_still_prints_one_error_block(cap
 
 def test_a_stop_and_a_failed_probe_are_logged_at_warning(caplog):
     with caplog.at_level(logging.WARNING, logger="validation_preflight"):
-        _seed(CHECK, _adapter_class("cascade", listing=DESIGN))
+        _seed(CHECK, _adapter_class("cascade", listing=SEED_DEPENDENTS))
         _probe(PROBE, _adapter_class("cascade", broken_views=("fx_rates_broken",)))
     texts = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert any("unowned_dependents" in t for t in texts)

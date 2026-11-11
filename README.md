@@ -459,7 +459,7 @@ other op. An adapter's family is `schema_bound` when its `drop_semantics` is
 ### `seed_preflight` block
 
 After the standard keys (and `reason` when one applies): `op` (`seed_preflight`),
-`mode`, `checked` (the warehouse was asked), `engine_family` (as given),
+`mode`, `checked` (the warehouse was asked and its listing came back), `engine_family` (as given),
 `drop_semantics` (the adapter's), `completeness` (`exact`, `best_effort`, or
 `none` when nothing was listed) and `dependents`, a list of
 `{schema, name, kind, owner, depth, allowed}` sorted by depth, schema and name.

@@ -1,4 +1,4 @@
-"""The three hash parts, computed through continuo-contracts (design 4.2, N1 to N4)."""
+"""The three hash parts, computed through continuo-contracts."""
 import hashlib
 import json
 
@@ -22,7 +22,7 @@ PY_DAILY_KPIS = {
         {"name": "total_amount", "type": "NUMERIC(12,2)", "nullable": False},
     ],
 }
-# The design's projection of py_daily_kpis (section 3.6).
+# The config projection of the py_daily_kpis contract.
 PY_DAILY_KPIS_PROJECTION = {
     "assets": [], "config": {}, "extra_columns": "raise", "kind": "python-node", "mode_type": "replace",
     "output_columns": [
@@ -44,7 +44,7 @@ DEMO_ORDERS_CSV = {
         {"name": "amount", "type": "DOUBLE PRECISION", "nullable": True},
     ],
 }
-# The design's projection of demo_orders_csv (section 3.7).
+# The config projection of the demo_orders_csv contract.
 DEMO_ORDERS_CSV_PROJECTION = {
     "assets": [], "config": {}, "extra_columns": "raise", "kind": "python-csv", "mode_type": "replace",
     "output_columns": [
@@ -97,11 +97,11 @@ def test_code_projection_and_config_hash_match_the_design(raw, projection):
     [("owner", "team-b"), ("description", "other words"), ("criticality", "CORE"),
      ("schedule", "hourly"), ("timeout_minutes", 30)],
 )
-def test_contract_only_fields_leave_the_config_hash_alone(field, value):  # C19
+def test_contract_only_fields_leave_the_config_hash_alone(field, value):
     assert config_hash(_node({**PY_DAILY_KPIS, field: value})) == config_hash(_node(PY_DAILY_KPIS))
 
 
-def test_type_spellings_with_one_meaning_hash_alike():  # C20
+def test_type_spellings_with_one_meaning_hash_alike():
     respelt = {**PY_DAILY_KPIS, "output_columns": [
         {"name": "day", "type": "date", "nullable": False},
         {"name": "tx_count", "type": "INT", "nullable": False},
@@ -114,7 +114,7 @@ def _with_read(sql):
     return _node({**PY_DAILY_KPIS, "reads": {"daily": sql}})
 
 
-def test_read_sql_is_hashed_as_written_except_line_endings_and_outer_whitespace():  # C14, N2
+def test_read_sql_is_hashed_as_written_except_line_endings_and_outer_whitespace():
     base = _with_read("select a\nfrom t where s = 'ok  x'")
     assert config_hash(_with_read("  select a\r\nfrom t where s = 'ok  x'\n")) == config_hash(base)
     assert config_hash(_with_read("select a\nfrom t where s = 'ok x'")) != config_hash(base)
@@ -131,7 +131,7 @@ def test_mode_type_and_primary_key_are_in_the_projection():
     assert config_hash(reordered) != config_hash(upsert_node)
 
 
-def test_the_fold_is_the_three_part_fold_older_topology_controllers_check():  # N1
+def test_the_fold_is_the_three_part_fold_older_topology_controllers_check():
     assert content_hash_fold("aaa", "bbb", "ccc") == "sha256:" + hashlib.sha256(b"aaa|bbb|ccc").hexdigest()
     assert content_hash_fold("aaa", "", "ccc") == "sha256:" + hashlib.sha256(b"aaa||ccc").hexdigest()
 
@@ -144,7 +144,7 @@ def test_shared_code_hash_of_no_units_is_empty():
     assert shared_code_hash({}) == ""
 
 
-def test_shared_code_hash_sees_two_files_swap_contents():  # C13
+def test_shared_code_hash_sees_two_files_swap_contents():
     assert shared_code_hash({"lib/p.py": b"V = 7\n", "lib/q.py": b"V = -7\n"}) != shared_code_hash(
         {"lib/p.py": b"V = -7\n", "lib/q.py": b"V = 7\n"}
     )

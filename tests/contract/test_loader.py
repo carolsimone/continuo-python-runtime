@@ -937,6 +937,11 @@ def test_assets_are_refused_on_a_csv_node():
         parse_node({**CSV, "assets": ["data/ref.json"]}, "f.yml")
 
 
+def test_an_empty_assets_list_is_refused_on_a_csv_node_too():
+    with pytest.raises(ContractError, match="'assets' is not allowed for kind python-csv"):
+        parse_node({**CSV, "assets": []}, "f.yml")
+
+
 def test_assets_are_accepted_on_a_python_api_node():
     api = {**VALID, "kind": "python-api", "assets": ["data/ref.json"]}
     del api["reads"]

@@ -89,8 +89,10 @@ jobs:
       # CI must hash with the runtime the image runs: the harness recomputes
       # content_hash at start with its own runtime and fails the node on any
       # difference. The version is the first runtime line's tag in the
-      # Dockerfile's FROM. A repository that builds with Dockerfile.pip reads
-      # the continuo-python-runtime pin of its requirements.lock here instead.
+      # Dockerfile's FROM. A repository that builds with Dockerfile.pip replaces
+      # this step with one that reads the continuo-python-runtime==X.Y.Z pin of
+      # its requirements.lock and writes RUNTIME_VERSION the same way (the
+      # README's Shape 2 section has it).
       # The image needs runtime 0.12.0 or later, the first to carry that check.
       - name: Pin the runtime to the image
         run: |

@@ -438,7 +438,7 @@ def test_merge_folds_each_closure_file_with_its_repo_path(tmp_path):
     assert set(entry) == WIRE_ENTRY_KEYS
 
 
-def test_swapping_two_imported_files_moves_the_content_hash(tmp_path):  # C13: 7 becomes -7
+def test_swapping_two_imported_files_moves_the_content_hash(tmp_path):
     repo = tmp_path
     (repo / "lib").mkdir()
     (repo / "lib" / "__init__.py").write_text("")
@@ -459,7 +459,7 @@ def test_swapping_two_imported_files_moves_the_content_hash(tmp_path):  # C13: 7
     assert after["content_hash"] != before["content_hash"]
 
 
-def test_a_wire_entry_passes_the_fold_check_of_a_topology_controller_older_than_phase_0(contract_repo):  # N1
+def test_a_wire_entry_passes_the_three_part_fold_check_of_an_older_topology_controller(contract_repo):
     (entry,) = build_wire_contract(contract_repo / "contracts", contract_repo, "s")["nodes"]
     parts = f"{entry['source_hash']}|{entry['shared_code_hash']}|{entry['config_hash']}"
     assert entry["content_hash"] == "sha256:" + hashlib.sha256(parts.encode()).hexdigest()
@@ -706,6 +706,16 @@ def test_declaring_an_asset_moves_the_config_and_shared_parts(tmp_path):
     declared = _only_entry(_assets_repo(tmp_path / "b", ["data/ref.json"]))
     assert declared["config_hash"] != without["config_hash"]
     assert declared["shared_code_hash"] != without["shared_code_hash"]
+
+
+@pytest.mark.parametrize("content", [b"\x00\xff", b"not python (\n"], ids=["binary", "invalid-python-text"])
+def test_an_asset_that_is_not_python_merges_cleanly(tmp_path, content):
+    """Assets are hashed as bytes and never linted or parsed."""
+    repo = _assets_repo(tmp_path, ["data/blob.bin"])
+    (repo / "data" / "blob.bin").write_bytes(content)
+    entry = _only_entry(repo)
+    assert entry["assets"] == ["data/blob.bin"]
+    assert entry["shared_code_hash"] == shared_code_hash({"data/blob.bin": content})
 
 
 def test_an_asset_that_is_also_imported_is_one_shared_unit(tmp_path):

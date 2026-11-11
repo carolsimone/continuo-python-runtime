@@ -210,10 +210,10 @@ Each node entry in `contract.yaml` carries four hash fields — three
 independently-computed parts plus `content_hash`, their fold — all
 computed by this repo's `continuo-runtime merge`
 (`continuo_python_runtime.hashing`, through the continuo-contracts library)
-and shipped on the wire entry. From continuo's phase 0, topology-controller
-computes the config part itself with the same library and folds it with CI's
-source and shared parts; the fold is the one older topology-controllers
-recompute from the three parts on the wire entry.
+and shipped on the wire entry. A topology-controller that pins continuo-contracts computes the config part
+itself with the same library and folds it with CI's source and shared parts;
+the fold is the one older topology-controllers recompute from the three parts
+on the wire entry.
 
 ```
 source_hash      = sha256(script_bytes)                            # bare hex
@@ -248,7 +248,7 @@ content_hash     = "sha256:" + sha256(source_hash + "|" + shared_code_hash
 
 Invariant: editing a node's owner, schedule, criticality, description or
 timeout, the order of its keys, or the spelling of a column type leaves all
-four hashes unchanged; any edit to its script, closure, reads, columns or
+four hashes unchanged; any edit to its script, closure, reads, columns, assets or
 `config` changes at least one part and therefore `content_hash`.
 
 The fold (`content_hash = "sha256:" + sha256(source|shared|config)`) is
@@ -440,7 +440,7 @@ inject the names below instead:
 | `TABLE_NAME` | **required** | The target table name; must match the `table` of the node selected via `NODE_ID`. |
 | `TARGET_SCHEMA` | **required** | The target schema name; must match the `schema` of the node selected via `NODE_ID`. There is no fallback — `SCHEMA` and `DBT_TARGET_SCHEMA` are **not** recognized. |
 | `TASK_ATTEMPT` | set by the executor, not read by the harness | The 0-based number of the task's attempt: `0` on a task's first run, `1` on its first retry, and so on. The executor sets it on every production Job, dbt and python alike, so a node script can read it; the harness neither requires nor interprets it. |
-| `CONTENT_HASH` | optional | The `content_hash` the release promoted for the node, set by continuo from phase 0. When set, the harness recomputes the node's hash from the files in the image (the helpers `merge` uses) before it builds the adapter, and a different value, a value that is not byte-for-byte the recomputed string (no `sha256:` prefix, upper-case hex, surrounding whitespace) or a file the release hashed that the image lacks fails the node with `ImageContractMismatch`: one result block with `"reason":"image_contract_mismatch"` and exit 1. The message names the node, `CONTENT_HASH`, the image's `content_hash`, its three parts, the sorted unit paths and the runtime version, and says to rebuild the image from the released commit. Unset or empty logs a WARNING and runs. |
+| `CONTENT_HASH` | optional | The `content_hash` the release promoted for the node, set by continuo; absent or empty means no check. When set, the harness recomputes the node's hash from the files in the image (the helpers `merge` uses) before it builds the adapter, and a different value, a value that is not byte-for-byte the recomputed string (no `sha256:` prefix, upper-case hex, surrounding whitespace) or a file the release hashed that the image lacks fails the node with `ImageContractMismatch`: one result block with `"reason":"image_contract_mismatch"` and exit 1. The message names the node, `CONTENT_HASH`, the image's `content_hash`, its three parts, the sorted unit paths and the runtime version, and says to rebuild the image from the released commit. Unset or empty logs a WARNING and runs. |
 | `CONTRACT_DIR` | optional | Path to the directory of merged contract YAML files baked into the image. Defaults to `/app/contracts`. |
 | `APP_ROOT` | optional | Repository root the node's `script:` path is resolved against. Defaults to `CONTRACT_DIR`'s parent directory. |
 | engine-native vars | **required**, per adapter | Whatever the installed `WarehouseAdapter.required_env()` declares (e.g. `POSTGRES_HOST`/`POSTGRES_DB`/`POSTGRES_USER`, optionally `POSTGRES_PORT`/`POSTGRES_PASSWORD`) — missing any of these is a `LoadError`. |

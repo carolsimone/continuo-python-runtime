@@ -46,7 +46,7 @@ CREATE VIEW "{b}".reads_ident AS SELECT last_value FROM "{s}".seed_ident_seq;
 
 # The objects of the schemas in %(schemas)s as `dependents()` names them, minus the
 # seed (%(s)s.seed) and what is part of it: its own constraints, policies, rules,
-# defaults, columns and partitions.
+# defaults, triggers, columns and partitions.
 _OBJECTS = """
 SELECT CASE c.relkind WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized_view' ELSE 'table' END,
        n.nspname, c.relname
@@ -77,6 +77,12 @@ FROM pg_attrdef d
 JOIN pg_class c ON c.oid = d.adrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = ANY(%(schemas)s) AND NOT (n.nspname = %(s)s AND c.relname = 'seed')
+UNION
+SELECT 'other', '', pg_describe_object('pg_trigger'::regclass, g.oid, 0)
+FROM pg_trigger g
+JOIN pg_class c ON c.oid = g.tgrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = ANY(%(schemas)s) AND NOT g.tgisinternal AND NOT (n.nspname = %(s)s AND c.relname = 'seed')
 """
 
 # A column a cascade drops leaves its table in place, so a dropped column is
@@ -478,3 +484,33 @@ def test_a_foreign_key_onto_a_partitioned_table_is_listed_once(scratch):
         CREATE TABLE "{s}".orders (sid int, sday date, FOREIGN KEY (sid, sday) REFERENCES "{s}".seed (id, day));
     ''')
     assert _listed(adapter, s) == {(s, "orders_sid_sday_fkey on orders", "constraint", "continuo", 1)}
+
+
+def test_a_trigger_of_the_table_with_a_when_clause_is_part_of_the_table(scratch):
+    adapter, s, cur = scratch
+    cur.execute(f'''
+        CREATE TABLE "{s}".seed (id int PRIMARY KEY, name text);
+        CREATE FUNCTION "{s}".noop() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END';
+        CREATE TRIGGER t_when BEFORE UPDATE ON "{s}".seed
+            FOR EACH ROW WHEN (OLD.name IS DISTINCT FROM NEW.name) EXECUTE FUNCTION "{s}".noop();
+    ''')
+    assert _listed(adapter, s) == set()
+
+
+def test_a_trigger_on_another_table_that_calls_a_function_reading_the_seed_is_listed(scratch):
+    adapter, s, cur = scratch
+    # The cascade drops the function (it reads the seed), and with it the trigger whose WHEN
+    # clause calls it, so the trigger is a dependent one level below the function.
+    cur.execute(f'''
+        CREATE TABLE "{s}".seed (id int PRIMARY KEY);
+        CREATE TABLE "{s}".other (id int);
+        CREATE FUNCTION "{s}".seed_has(int) RETURNS bool LANGUAGE sql
+            BEGIN ATOMIC SELECT EXISTS (SELECT 1 FROM "{s}".seed WHERE id = $1); END;
+        CREATE FUNCTION "{s}".noop() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END';
+        CREATE TRIGGER t_other BEFORE INSERT ON "{s}".other
+            FOR EACH ROW WHEN ("{s}".seed_has(NEW.id)) EXECUTE FUNCTION "{s}".noop();
+    ''')
+    listed = {(d.kind, d.name, d.depth) for d in adapter.dependents(s, "seed").objects}
+    assert ("function", "seed_has(integer)", 1) in listed
+    assert ("other", f"trigger t_other on table {s}.other", 2) in listed
+    _assert_listing_matches_the_cascade(adapter, s)

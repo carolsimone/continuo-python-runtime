@@ -96,7 +96,13 @@ def test_an_asset_missing_from_the_image_is_a_mismatch(harness_repo, capsys):
     block = _block(capsys.readouterr().out)
     assert block["reason"] == "image_contract_mismatch"
     assert block["message"].startswith("ImageContractMismatch: ")
-    assert "data/ref.json" in block["message"]
+    message = block["message"]
+    assert "data/ref.json" in message
+    assert "differs from cannot" not in message
+    assert f"the image cannot reproduce CONTENT_HASH {released}" in message
+    assert "analytics.t" in message
+    assert f"runtime {metadata.version('continuo-python-runtime')}" in message
+    assert "rebuild the image from the released commit" in message
     assert adapter.ensured is None
 
 

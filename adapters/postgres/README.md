@@ -50,6 +50,13 @@ a missing table or schema gives no objects. Each `kind` is one of `view`,
 `rule` or `other` (a composite type, an index, a column default); the name of a
 function carries its argument types (`seed_count()`), and that of a constraint,
 policy or rule the table or domain it sits on (`orders_seed_id_fkey on orders`).
+A listed object that has no table of its own (a type, a column default, a
+trigger) has an empty schema and an empty owner.
+
+One case is not followed: an array of a type
+the walk reaches, other than the table's own row type. A
+domain over the table's row type used as `dseed[]` is listed, but a column of
+the array type `dseed[]` is not.
 
 The `config:` index vocabulary is the union of the two vocabularies this
 adapter inherited from the merge: `columns`, `unique`, `type`, and `name`,

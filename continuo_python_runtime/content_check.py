@@ -47,7 +47,9 @@ def check_image_contract(node: Node, app_root: Path, env: Mapping[str, str]) -> 
         inputs = gather_hash_inputs(node, app_root)
         parts = hash_parts(node, inputs.primary, inputs.units)
     except ContractError as exc:
-        raise ImageContractMismatch(_message(node, released, f"cannot hash the image: {exc}")) from exc
+        raise ImageContractMismatch(
+            _message(node, f"the image cannot reproduce {_ENV_KEY} {released}: {exc}")
+        ) from exc
 
     if parts["content_hash"] != released:
         detail = (
@@ -57,15 +59,15 @@ def check_image_contract(node: Node, app_root: Path, env: Mapping[str, str]) -> 
             f"config_hash {parts['config_hash']}, "
             f"units {sorted(inputs.units)})"
         )
-        raise ImageContractMismatch(_message(node, released, detail))
+        raise ImageContractMismatch(_message(node, f"{_ENV_KEY} {released} differs from {detail}"))
 
     logger.info("image holds the release's content for %s (%s)", node.relation, released)
 
 
-def _message(node: Node, released: str, detail: str) -> str:
+def _message(node: Node, detail: str) -> str:
     return (
         f"the image does not hold what the release hashed for {node.relation}: "
-        f"{_ENV_KEY} {released} differs from {detail}. "
+        f"{detail}. "
         f"This image runs runtime {metadata.version('continuo-python-runtime')}. "
         "Fix: rebuild the image from the released commit, with CI on the runtime of the image's FROM tag."
     )

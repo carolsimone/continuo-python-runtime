@@ -77,6 +77,23 @@ adapters were not yet published to PyPI when it was written, so it has no
 `--hash` entries and `pip install --require-hashes` will refuse to install it
 as-is. Regenerate it once your chosen adapter version is actually on PyPI.
 
+The release workflow's `Pin the runtime to the image` step reads the runtime
+version from the `FROM` line of `Dockerfile`, which a `Dockerfile.pip`
+repository does not have. In that repository, replace that step with this
+one, which reads the `continuo-python-runtime==X.Y.Z` pin of
+`requirements.lock` and writes `RUNTIME_VERSION` the same way:
+
+```yaml
+- name: Pin the runtime to the image
+  run: |
+    version="$(sed -nE 's#^continuo-python-runtime==([0-9]+\.[0-9]+\.[0-9]+)([[:space:]]*\\)?[[:space:]]*$#\1#p' requirements.lock | head -n 1)"
+    if [ -z "$version" ]; then
+      echo "::error::requirements.lock has no continuo-python-runtime==X.Y.Z line, so CI cannot install the runtime the image runs"
+      exit 1
+    fi
+    echo "RUNTIME_VERSION=$version" >> "$GITHUB_ENV"
+```
+
 The image name (`continuo-python-runtime-<engine>`, what Shape 1 pulls) and
 the pip distribution name (`continuo-<engine>-adapter`, what Shape 2
 installs) are two artifacts published from the same adapter source — same

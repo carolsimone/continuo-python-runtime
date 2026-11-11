@@ -523,14 +523,15 @@ LEFT JOIN pg_constraint k ON found.catalog = 'pg_constraint' AND k.oid = found.o
 LEFT JOIN pg_policy pol ON found.catalog = 'pg_policy' AND pol.oid = found.objid
 LEFT JOIN pg_rewrite rw ON found.catalog = 'pg_rewrite' AND rw.oid = found.objid
 LEFT JOIN pg_attrdef ad ON found.catalog = 'pg_attrdef' AND ad.oid = found.objid
+LEFT JOIN pg_trigger tg ON found.catalog = 'pg_trigger' AND tg.oid = found.objid
 LEFT JOIN pg_class t ON t.oid = COALESCE(k.conrelid, pol.polrelid, rw.ev_class)
 LEFT JOIN pg_namespace n ON n.oid = COALESCE(c.relnamespace, p.pronamespace, t.relnamespace)
 -- a sequence, a partition and the per-partition copy of a foreign key are parts of their table
 WHERE NOT (found.catalog = 'pg_class'
            AND (c.relkind = 'S' OR (c.relkind IN ('r', 'p', 'f') AND c.relispartition)))
   AND NOT (found.catalog = 'pg_constraint' AND k.conparentid <> 0)
--- a constraint, default, policy or rule of the table itself is part of the table
-  AND NOT COALESCE(COALESCE(k.conrelid, ad.adrelid, pol.polrelid, rw.ev_class) IN (
+-- a constraint, default, policy, rule or trigger of the table itself is part of the table
+  AND NOT COALESCE(COALESCE(k.conrelid, ad.adrelid, pol.polrelid, rw.ev_class, tg.tgrelid) IN (
            SELECT objid FROM walk WHERE depth = 0 AND classid = 'pg_class'::regclass::oid), false)
 ORDER BY found.depth, 3, 4
 """

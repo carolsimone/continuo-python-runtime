@@ -312,7 +312,7 @@ def lint_source(source: str, filename: str) -> list[str]:
       ``types.FunctionType``, ``pickle.load``/``loads``/``Unpickler``), and a
       file named ``sitecustomize.py`` or ``usercustomize.py``. The import
       closure follows imports only, so code these constructs run is not in
-      ``content_hash`` (C12). Detection is
+      ``content_hash``. Detection is
       ``unhashed_code_violations``. A file a script reads belongs in the
       node's ``assets``, where it is hashed.
 
@@ -452,7 +452,8 @@ def lint_source(source: str, filename: str) -> list[str]:
     # Stable sort by line number: this is what puts L5 and L6 hits "alongside"
     # the L1-L4 hits found above instead of trailing as a separate block, while
     # violations on the same line keep the order the passes above found them
-    # (L1 first pass, then L2-L4 second pass, then L5, then L6).
+    # (the file-name L6 entry, at line 1, first; then L1 from the first pass,
+    # then L2-L4 from the second pass, then L5, then the construct L6 hits).
     entries.sort(key=lambda entry: entry[0])
     return [f"{filename}:{lineno}: {message}" for lineno, message in entries]
 

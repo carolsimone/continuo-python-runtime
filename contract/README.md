@@ -63,6 +63,8 @@ version that the co-located runtime and adapters in this workspace consume
 immediately, and that external adapter authors pin from PyPI, so treat it as
 a deliberate, coordinated change. The `result` module is stricter still: its
 wire format is frozen against Continuo's Go parser (`pkg/validationresult`)
-and must not change from this side at all. The only addition is the optional
-keyword-only `reason`, written after `unique_id` and only when non-empty: a
-block without one keeps the five standard keys byte for byte.
+and must not change from this side at all. The only additions are two optional
+keyword-only arguments. `reason` is written after `unique_id` and only when
+non-empty, so a block without one keeps the five standard keys byte for byte.
+`fields` holds an op's own keys, written after `reason` in the order given; a
+key equal to a standard key or to `reason` raises `ValueError`.

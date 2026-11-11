@@ -449,25 +449,27 @@ def _arrow_table_from_rows(colnames: list[str], rows: list[tuple[Any, ...]]) -> 
 
 
 # Every object that depends on a table, found by following pg_depend's normal
-# dependencies (deptype 'n'), the ones DROP ... CASCADE follows. The walk's nodes
-# are (class, object, subid): subid 0 is the whole object, a positive subid one
-# column of a table or composite type. A column a cascade drops leaves its table
-# in place, so from a column node only the dependencies on that column are
-# followed, and the table itself is still listed. A view's dependency is recorded
-# on its _RETURN rewrite rule, so the walk steps from the rule to the view it
-# belongs to. The expression of a generated column (a pg_attrdef row) is dropped
-# together with its column, so the walk steps from it to that column. A table that has a column of the walked table's row type, or of an
-# array of it, depends on that type (pg_type), not on the table, so a whole-table
-# step also follows the dependencies on its reltype and typarray. The array type
-# of any other type the walk reaches (a domain) is internally owned by it and
-# dropped with it, so a pg_type step also follows the dependencies on its array
-# type. A partition, a sequence owned by a column (deptype 'a'), an identity
-# sequence and an array type (deptype 'i') are parts of their owner, yet what
-# reads them is dropped with it: the walk steps through them without adding a
-# level, and lists none of them. The table's
-# own indexes and triggers are automatic dependencies that nothing reads, so the
-# walk does not follow them. The depth bound of 32 keeps a dependency cycle from
-# running forever, and ends a chain deeper than that unlisted.
+# dependencies (deptype 'n'), the ones DROP ... CASCADE follows. The walk's
+# nodes are (class, object, subid): subid 0 is the whole object, a positive
+# subid one column of a table or composite type. A column a cascade drops leaves
+# its table in place, so from a column node only the dependencies on that column
+# are followed, and the table itself is still listed. A view's dependency is
+# recorded on its _RETURN rewrite rule, so the walk steps from the rule to the
+# view it belongs to. The expression of a generated column (a pg_attrdef row) is
+# dropped together with its column, so the walk steps from it to that column. A
+# table that has a column of the walked table's row type, or of an array of it,
+# depends on that type (pg_type), not on the table, so a whole-table step also
+# follows the dependencies on its reltype and typarray. What a type the walk
+# reaches (a domain, a range) internally owns (deptype 'i': its array type, its
+# multirange type, its constructor functions and casts) is dropped with it, so a
+# pg_type step also follows every internal dependency on it. A partition, a
+# sequence owned by a column (deptype 'a'), an identity sequence and an
+# internally owned object are parts of their owner, yet what reads them is
+# dropped with it: the walk steps through them without adding a level, and lists
+# none of them. The table's own indexes and triggers are automatic dependencies
+# that nothing reads, so the walk does not follow them. The depth bound of 32
+# keeps a dependency cycle from running forever, and ends a chain deeper than
+# that unlisted.
 _DEPENDENTS_SQL = """
 WITH RECURSIVE walk(classid, objid, subid, depth) AS (
     SELECT 'pg_class'::regclass::oid, c.oid, 0, 0
@@ -489,7 +491,6 @@ WITH RECURSIVE walk(classid, objid, subid, depth) AS (
     LEFT JOIN pg_class wc
       ON w.classid = 'pg_class'::regclass::oid AND w.subid = 0 AND wc.oid = w.objid
     LEFT JOIN pg_type rowtype ON rowtype.oid = wc.reltype
-    LEFT JOIN pg_type wt ON w.classid = 'pg_type'::regclass::oid AND wt.oid = w.objid
     JOIN pg_depend dep
       ON (dep.refclassid = w.classid AND dep.refobjid = w.objid
           AND (w.subid = 0 OR dep.refobjsubid = w.subid))
@@ -507,7 +508,7 @@ WITH RECURSIVE walk(classid, objid, subid, depth) AS (
       AND (dep.deptype = 'n'
            OR (dep.deptype IN ('a', 'i') AND dc.relkind = 'S')
            OR (dep.deptype = 'a' AND dc.relkind IN ('r', 'p', 'f') AND dc.relispartition)
-           OR (dep.deptype = 'i' AND dep.classid = 'pg_type'::regclass::oid AND dep.objid = wt.typarray))
+           OR (dep.deptype = 'i' AND w.classid = 'pg_type'::regclass::oid AND dep.refclassid = w.classid))
       AND (rw.oid IS NULL OR rw.ev_class <> w.objid)
 )
 SELECT found.catalog,
@@ -538,13 +539,17 @@ LEFT JOIN pg_policy pol ON found.catalog = 'pg_policy' AND pol.oid = found.objid
 LEFT JOIN pg_rewrite rw ON found.catalog = 'pg_rewrite' AND rw.oid = found.objid
 LEFT JOIN pg_attrdef ad ON found.catalog = 'pg_attrdef' AND ad.oid = found.objid
 LEFT JOIN pg_trigger tg ON found.catalog = 'pg_trigger' AND tg.oid = found.objid
-LEFT JOIN pg_type ty ON found.catalog = 'pg_type' AND ty.oid = found.objid
 LEFT JOIN pg_class t ON t.oid = COALESCE(k.conrelid, pol.polrelid, rw.ev_class)
 LEFT JOIN pg_namespace n ON n.oid = COALESCE(c.relnamespace, p.pronamespace, t.relnamespace)
--- a sequence, a partition, an array type and the per-partition copy of a foreign key are parts of their owner
+-- a sequence, a partition and the per-partition copy of a foreign key are parts of their owner
 WHERE NOT (found.catalog = 'pg_class'
            AND (c.relkind = 'S' OR (c.relkind IN ('r', 'p', 'f') AND c.relispartition)))
-  AND NOT (found.catalog = 'pg_type' AND ty.typcategory = 'A')
+-- so is whatever a type internally owns (its array and multirange types, its constructor functions and
+-- casts), except a composite type's own pg_class row
+  AND NOT (found.catalog <> 'pg_class'
+           AND EXISTS (SELECT 1 FROM pg_depend own
+                       WHERE own.classid = found.classid AND own.objid = found.objid
+                         AND own.deptype = 'i' AND own.refclassid = 'pg_type'::regclass::oid))
   AND NOT (found.catalog = 'pg_constraint' AND k.conparentid <> 0)
 -- a constraint, default, policy, rule or trigger of the table itself is part of the table
   AND NOT COALESCE(COALESCE(k.conrelid, ad.adrelid, pol.polrelid, rw.ev_class, tg.tgrelid) IN (
@@ -847,14 +852,19 @@ class PostgresAdapter(WarehouseAdapter, AppendCapable, UpsertCapable, Dependents
         """Every object a ``DROP TABLE schema.table CASCADE`` destroys or changes, exactly.
 
         Lists views, materialized views, SQL-standard functions and procedures,
-        foreign keys and policies on other tables, rules, inheriting tables and
+        foreign keys and policies on other tables, rules, inheriting tables,
         tables with a column of this table's row type, or of an array of it,
-        each once at its shallowest depth, and what reads a partition of the
-        table or a sequence of it (owned or identity). A table that only loses
-        a column is listed, and only what reads that column is walked on from
-        it. The table's own indexes, constraints (a self-referencing foreign key
-        included), policies, rules, column defaults, sequences, partitions and
-        triggers are parts of the table and are not listed.
+        and the types built on it (a domain, a range, a composite type, and a
+        domain over an array of it), each once at its shallowest depth, with
+        what reads them: a column of an array or multirange type of such a
+        type, a generated column over a dropped column, and what reads a
+        partition of the table or a sequence of it (owned or identity). A table
+        that only loses a column is listed, and only what reads that column is
+        walked on from it. The table's own indexes, constraints (a
+        self-referencing foreign key included), policies, rules, column
+        defaults, sequences, partitions and triggers, and what a type owns
+        internally (its array and multirange types, constructor functions and
+        casts), are parts of their owner and are not listed.
 
         The walk follows at most 32 dependency levels: an object deeper than
         that is not listed.

@@ -46,7 +46,10 @@ CREATE VIEW "{b}".reads_ident AS SELECT last_value FROM "{s}".seed_ident_seq;
 
 # The objects of the schemas in %(schemas)s as `dependents()` names them, minus the
 # seed (%(s)s.seed) and what is part of it: its own constraints, policies, rules,
-# defaults, triggers, columns and partitions.
+# defaults, triggers, columns and partitions. A not-null constraint is part of its
+# column, and a constructor function of a range type is part of the type.
+# Domains, range types and enums are listed as types; array and multirange types
+# are parts of the type they belong to.
 _OBJECTS = """
 SELECT CASE c.relkind WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized_view' ELSE 'table' END,
        n.nspname, c.relname
@@ -58,12 +61,14 @@ SELECT CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END, n.nspname,
        p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = ANY(%(schemas)s)
+  AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
+                  AND d.deptype = 'i' AND d.refclassid = 'pg_type'::regclass)
 UNION
 SELECT 'constraint', n.nspname, k.conname || ' on ' || c.relname
 FROM pg_constraint k
 JOIN pg_class c ON c.oid = k.conrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname = ANY(%(schemas)s) AND k.conparentid = 0
+WHERE n.nspname = ANY(%(schemas)s) AND k.conparentid = 0 AND k.contype <> 'n'
   AND NOT (n.nspname = %(s)s AND c.relname = 'seed')
 UNION
 SELECT 'policy', n.nspname, p.polname || ' on ' || c.relname
@@ -81,7 +86,7 @@ WHERE n.nspname = ANY(%(schemas)s) AND a.attgenerated = '' AND NOT (n.nspname = 
 UNION
 SELECT 'other', '', pg_describe_object('pg_type'::regclass, ty.oid, 0)
 FROM pg_type ty JOIN pg_namespace n ON n.oid = ty.typnamespace
-WHERE n.nspname = ANY(%(schemas)s) AND ty.typtype = 'd'
+WHERE n.nspname = ANY(%(schemas)s) AND ty.typtype IN ('d', 'r', 'e')
 UNION
 SELECT 'other', '', pg_describe_object('pg_trigger'::regclass, g.oid, 0)
 FROM pg_trigger g
@@ -614,3 +619,79 @@ def test_a_generated_column_of_the_table_itself_is_part_of_the_table(scratch):
         CREATE VIEW "{s}".reads_twice AS SELECT twice FROM "{s}".seed;
     ''')
     _assert_exact(adapter, s, {("view", "reads_twice", 1)})
+
+
+def test_a_domain_over_an_array_of_the_table_is_listed_with_what_reads_it(scratch):
+    adapter, s, cur = scratch
+    cur.execute(f'''
+        CREATE TABLE "{s}".seed (id int PRIMARY KEY);
+        CREATE DOMAIN "{s}".da AS "{s}".seed[];
+        CREATE TABLE "{s}".consumer (id int, x "{s}".da);
+        CREATE VIEW "{s}".reads_x AS SELECT x FROM "{s}".consumer;
+        CREATE VIEW "{s}".reads_id AS SELECT id FROM "{s}".consumer;
+    ''')
+    _assert_exact(adapter, s, {
+        ("other", f"type {s}.da", 1), ("table", "consumer", 2), ("view", "reads_x", 2),
+    })
+
+
+def test_a_domain_over_an_array_of_a_domain_over_the_table_is_listed(scratch):
+    adapter, s, cur = scratch
+    cur.execute(f'''
+        CREATE TABLE "{s}".seed (id int PRIMARY KEY);
+        CREATE DOMAIN "{s}".d AS "{s}".seed;
+        CREATE DOMAIN "{s}".dda AS "{s}".d[];
+        CREATE TABLE "{s}".consumer (id int, x "{s}".dda);
+        CREATE VIEW "{s}".reads_x AS SELECT x FROM "{s}".consumer;
+    ''')
+    _assert_exact(adapter, s, {
+        ("other", f"type {s}.d", 1), ("other", f"type {s}.dda", 2),
+        ("table", "consumer", 3), ("view", "reads_x", 3),
+    })
+
+
+def test_a_function_that_takes_only_a_domain_over_an_array_of_the_table_is_listed(scratch):
+    adapter, s, cur = scratch
+    cur.execute(f'''
+        CREATE TABLE "{s}".seed (id int PRIMARY KEY);
+        CREATE DOMAIN "{s}".da AS "{s}".seed[];
+        CREATE FUNCTION "{s}".takes_da("{s}".da) RETURNS int LANGUAGE sql AS 'SELECT 1';
+    ''')
+    _assert_exact(adapter, s, {
+        ("other", f"type {s}.da", 1), ("function", f"takes_da({s}.da)", 2),
+    })
+
+
+def test_what_reads_the_multirange_of_a_range_over_the_table_is_listed(scratch):
+    adapter, s, cur = scratch
+    cur.execute(f'''
+        CREATE TABLE "{s}".seed (id int PRIMARY KEY);
+        CREATE TYPE "{s}".sr AS RANGE (subtype = "{s}".seed);
+        CREATE TABLE "{s}".consumer (id int, mr "{s}".sr_multirange);
+        CREATE VIEW "{s}".reads_mr AS SELECT mr FROM "{s}".consumer;
+        CREATE VIEW "{s}".reads_id AS SELECT id FROM "{s}".consumer;
+        CREATE FUNCTION "{s}".takes_mr("{s}".sr_multirange) RETURNS int LANGUAGE sql AS 'SELECT 1';
+        CREATE TYPE "{s}".unrelated_range AS RANGE (subtype = int);
+        CREATE TYPE "{s}".mood AS ENUM ('calm');
+        CREATE TABLE "{s}".unrelated (r "{s}".unrelated_range, m "{s}".mood);
+        CREATE VIEW "{s}".reads_unrelated AS SELECT r, m FROM "{s}".unrelated;
+    ''')
+    _assert_exact(adapter, s, {
+        ("other", f"type {s}.sr", 1), ("table", "consumer", 2), ("view", "reads_mr", 2),
+        ("function", f"takes_mr({s}.sr_multirange)", 2),
+    })
+
+
+def test_what_reads_the_multirange_of_a_range_over_a_domain_over_the_table_is_listed(scratch):
+    adapter, s, cur = scratch
+    cur.execute(f'''
+        CREATE TABLE "{s}".seed (id int PRIMARY KEY);
+        CREATE DOMAIN "{s}".d AS "{s}".seed;
+        CREATE TYPE "{s}".rd AS RANGE (subtype = "{s}".d);
+        CREATE TABLE "{s}".consumer (id int, mr "{s}".rd_multirange);
+        CREATE VIEW "{s}".reads_mr AS SELECT mr FROM "{s}".consumer;
+    ''')
+    _assert_exact(adapter, s, {
+        ("other", f"type {s}.d", 1), ("other", f"type {s}.rd", 2),
+        ("table", "consumer", 3), ("view", "reads_mr", 3),
+    })

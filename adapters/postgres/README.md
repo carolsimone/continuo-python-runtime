@@ -34,26 +34,32 @@ dependency, so it lists views and materialized views (found through their
 `_RETURN` rule, at any depth: a view of a view of the table is depth 2),
 SQL-standard functions and procedures, foreign keys and policies on other
 tables, rules, inheriting tables, tables with a column of the table's row type
-or of an array of it, a domain over it and the table columns of an array of a
-domain, and what reads a partition of the table or a sequence of it (owned or
-identity). A generated column over a dropped column is followed to its own
-readers. A table that only loses a column is listed, and from it
-only what reads that column is walked on. `information_schema.view_table_usage`
-misses the materialized views, the functions and every view past the first
-level. The table's own indexes, constraints (a self-referencing foreign key
-included), policies, rules, column defaults, sequences, partitions and triggers
-are parts of the table and are not listed. Each object appears once, at its
-shallowest depth. The walk follows at most 32 dependency levels; an object
-deeper than that is not listed. The table is found case-insensitively, so a seed
-loaded under another letter case never makes the walk skip it, and a schema
-holding two tables that differ only by letter case lists the dependants of both;
-a missing table or schema gives no objects. Each `kind` is one of `view`,
-`materialized_view`, `table`, `function`, `procedure`, `constraint`, `policy`,
-`rule` or `other` (a composite type, an index, a column default); the name of a
-function carries its argument types (`seed_count()`), and that of a constraint,
-policy or rule the table or domain it sits on (`orders_seed_id_fkey on orders`).
-A listed object that has no table of its own (a type, a column default, a
-trigger) has an empty schema and an empty owner.
+or of an array of it, the types built on it (a domain, a range, a composite
+type, a domain over an array of it) and what reads them, including a column of
+the array or multirange type of such a type, a generated column over a dropped
+column and what reads it, and what reads a partition of the table or a sequence
+of it (owned or identity). A table that only loses a column is listed, and from
+it only what reads that column is walked on.
+`information_schema.view_table_usage` misses the materialized views, the
+functions and every view past the first level. The table's own indexes,
+constraints (a self-referencing foreign key included), policies, rules, column
+defaults, sequences, partitions and triggers are parts of the table, and the
+array and multirange types, constructor functions and casts of a type are parts
+of the type: none is listed. Each object appears once, at its shallowest depth.
+The walk follows at most 32 dependency levels; an object deeper than that is not
+listed. The table is found case-insensitively, so a seed loaded under another
+letter case never makes the walk skip it, and a schema holding two tables that
+differ only by letter case lists the dependants of both; a missing table or
+schema gives no objects. Each `kind` is one of `view`, `materialized_view`,
+`table`, `function`, `procedure`, `constraint`, `policy`, `rule` or `other`.
+`other` is anything else: a domain, a range type or another type (named
+`type <schema>.<name>`), a composite type (its own name), an index, a column
+default of another table (named `default value for column ...`) or a trigger. The
+name of a function carries its argument types (`seed_count()`), and that of a
+constraint, policy or rule the table or domain it sits on
+(`orders_seed_id_fkey on orders`). A listed object that has no table of its own
+(a type, a column default, a trigger) has an empty schema and an empty owner.
+The dependents suite runs against postgres:16 (the test stack) and postgres:18.3.
 
 The `config:` index vocabulary is the union of the two vocabularies this
 adapter inherited from the merge: `columns`, `unique`, `type`, and `name`,

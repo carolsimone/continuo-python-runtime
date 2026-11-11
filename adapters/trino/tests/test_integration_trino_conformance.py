@@ -15,6 +15,7 @@ from continuo_engine_contract.testing.conformance import (
     COLUMNS,
     AppendConformance,
     ConformanceBase,
+    DependentsConformance,
     IntrospectionConformance,
     StartupConformance,
     UpsertConformance,
@@ -99,3 +100,11 @@ def test_a_failed_upsert_leaves_no_stage_table(adapter, schema):
     with pytest.raises(Exception):
         adapter.upsert(schema, table, table_of(ARROW, bulk_rows(1)), ["id"])
     assert _stage_tables(adapter, schema) == []
+
+
+class TestTrinoDependents(DependentsConformance):
+    def create_view(self, adapter, view_schema, view, table_schema, table):
+        adapter._execute(
+            f'CREATE VIEW "iceberg"."{view_schema}"."{view}" AS '
+            f'SELECT "id" FROM "iceberg"."{table_schema}"."{table}"'
+        )

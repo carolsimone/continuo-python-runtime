@@ -28,6 +28,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   follows at most 32 dependency levels. It reads `pg_depend`, so it sees what
   `information_schema.view_table_usage` misses, and `TestPostgresDependents` plus
   a guard that snapshots the schemas around a rolled-back cascade check it.
+- `TrinoAdapter.dependents(schema, table)` lists, with
+  `completeness="best_effort"`, the views whose SQL reads the table. It reads
+  `information_schema.views` of the adapter's catalog in one query and parses
+  each definition with sqlglot: an unqualified name is in the view's own
+  schema, a name without a catalog is in the adapter's, and a CTE of the same
+  statement is not the table. A definition that does not parse is matched by
+  the table's name as a whole identifier, with a WARNING naming the view. It
+  misses dynamic SQL, views in other catalogs, and views that read the table
+  only through another view. The adapter pins `sqlglot==30.23.0`, as the
+  engine contract does, and `TestTrinoDependents` runs the conformance cases
+  against Trino and the Iceberg REST catalog.
 - `continuo-runtime --version` prints `continuo-runtime <version>` to stdout and
   exits 0. The template's `release.yml` has a "Pin the runtime to the image"
   step that reads the version from the Dockerfile's

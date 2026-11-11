@@ -82,6 +82,31 @@ regex) admits spellings Trino does not recognize as type names: `TEXT`,
 rejected anything injection-shaped. Every other grammar token is valid Trino DDL
 unchanged.
 
+## Dependents of a table
+
+`dependents(schema, table)` lists the views that read a table, so a caller can
+see what a drop of the table would leave failing on its next read (Trino
+declares `drop_semantics = "late_binding"`: a drop destroys nothing else). It
+runs one query, `SELECT table_schema, table_name, view_definition FROM
+"<catalog>".information_schema.views`, parses each definition as Trino SQL with
+sqlglot, and lists a view (kind `view`, no owner, depth 1) when any table
+reference in it is the table. An unqualified reference is in the view's own
+schema, a reference without a catalog is in the adapter's catalog, names compare
+in lower case, and a name a `WITH` clause of the same statement defines is a
+CTE, not the table. A definition that does not parse is searched for the table's
+name as a whole identifier (`seed` does not match `seed_ext` or `my_seed`), and a
+WARNING names the view.
+
+The result's `completeness` is `best_effort`, because the scan reads SQL text.
+It misses:
+
+- a view that builds its SQL dynamically;
+- a view in another catalog (only the adapter's catalog is read);
+- a view that reads the table only through another view: only views that name
+  the table directly are listed, always at depth 1.
+
+A missing table or schema gives no objects.
+
 ## Identifier quoting
 
 The trino DBAPI has no psycopg2-style `sql.Identifier`. Catalog, schema, table,

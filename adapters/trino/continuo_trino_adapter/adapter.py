@@ -73,6 +73,7 @@ injection-shaped. Every other grammar token (``BIGINT``, ``INT``, ``INTEGER``,
 import errno
 import logging
 import os
+import re
 import time
 import uuid
 
@@ -85,6 +86,9 @@ import pyarrow as pa  # type: ignore[import-untyped]
 from continuo_engine_contract.config import ensure_known_keys  # type: ignore[import-untyped]
 from continuo_engine_contract.port import (  # type: ignore[import-untyped]
     AppendCapable,
+    Dependent,
+    Dependents,
+    DependentsIntrospection,
     LiveColumn,
     UpsertCapable,
     WarehouseAdapter,
@@ -92,6 +96,9 @@ from continuo_engine_contract.port import (  # type: ignore[import-untyped]
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
 from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 
+import sqlglot
+import sqlglot.errors
+import sqlglot.expressions as exp
 import trino
 
 from trino.auth import BasicAuthentication
@@ -368,7 +375,58 @@ def _is_unreachable(exc: BaseException) -> bool:
     return False
 
 
-class TrinoAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
+def _view_reads_table(
+    definition: str,
+    view_schema: str,
+    catalog: str,
+    schema: str,
+    table: str,
+    *,
+    view: str = "",
+) -> bool:
+    """Whether the SQL of the view ``view_schema.view`` reads ``catalog.schema.table``.
+
+    The definition is parsed as Trino SQL and every table reference in it is
+    compared with the table, in lower case: an unqualified reference is in the
+    view's own schema, a reference without a catalog is in *catalog* (the
+    adapter's), and an unqualified name that a ``WITH`` clause of the statement
+    defines is that CTE, not the table.
+
+    A definition that does not parse (or is empty) is searched for the table's
+    name as a whole identifier instead, case-insensitively, so a view is never
+    missed for being unreadable, and a WARNING names it. A definition that
+    parses to something other than a query reads nothing.
+    """
+    wanted = (catalog.lower(), schema.lower(), table.lower())
+    try:
+        statement = sqlglot.parse_one(definition, read="trino")
+    except sqlglot.errors.SqlglotError as exc:
+        logger.warning(
+            "cannot parse the definition of view %s.%s, matching the name %r as text: %s",
+            view_schema, view or "?", table, exc,
+        )
+        pattern = rf"(?<![\w$]){re.escape(table)}(?![\w$])"
+        return re.search(pattern, definition, re.IGNORECASE) is not None
+    if not isinstance(statement, exp.Query):
+        return False
+    ctes = {cte.alias.lower() for cte in statement.find_all(exp.CTE)}
+    for reference in statement.find_all(exp.Table):
+        if not isinstance(reference.this, exp.Identifier):
+            continue
+        name = reference.name.lower()
+        if not reference.db and name in ctes:
+            continue
+        found = (
+            (reference.catalog or catalog).lower(),
+            (reference.db or view_schema).lower(),
+            name,
+        )
+        if found == wanted:
+            return True
+    return False
+
+
+class TrinoAdapter(WarehouseAdapter, AppendCapable, UpsertCapable, DependentsIntrospection):
     """WarehouseAdapter speaking Trino (Iceberg connector) over the trino DBAPI."""
 
     drop_semantics = "late_binding"
@@ -480,6 +538,32 @@ class TrinoAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
             return list(cur.fetchall())
         finally:
             cur.close()
+
+    def dependents(self, schema: str, table: str) -> Dependents:
+        """The views whose SQL reads ``schema.table``, found by scanning every view definition.
+
+        One query reads ``information_schema.views`` of the adapter's catalog,
+        and each view whose definition names the table (see
+        ``_view_reads_table``) is listed at depth 1 with no owner, since Trino
+        records none there. The listing is ``best_effort``: it misses a view
+        that builds its SQL dynamically, a view in another catalog, and a view
+        that reads the table only through another view. A missing table or
+        schema gives no objects.
+        """
+        rows = self._execute(
+            "SELECT table_schema, table_name, view_definition "
+            f"FROM {_quote(self._catalog)}.information_schema.views"
+        )
+        return Dependents(
+            objects=tuple(
+                Dependent(view_schema, view_name, "view", "", 1)
+                for view_schema, view_name, definition in rows
+                if _view_reads_table(
+                    definition or "", view_schema, self._catalog, schema, table, view=view_name
+                )
+            ),
+            completeness="best_effort",
+        )
 
     def _schema_exists(self, schema: str) -> bool:
         rows = self._execute(f"SHOW SCHEMAS FROM {_quote(self._catalog)}")

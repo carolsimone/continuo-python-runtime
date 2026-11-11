@@ -324,6 +324,7 @@ source = { editable = "adapters/trino" }
 dependencies = [
     { name = "continuo-engine-contract" },
     { name = "pyarrow" },
+    { name = "sqlglot" },
     { name = "trino" },
 ]
 
@@ -341,6 +342,7 @@ test = [
 requires-dist = [
     { name = "continuo-engine-contract", editable = "contract" },
     { name = "pyarrow", specifier = "==26.0.0" },
+    { name = "sqlglot", specifier = "==30.23.0" },
     { name = "trino", specifier = "==0.340.0" },
 ]
 

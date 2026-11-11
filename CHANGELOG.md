@@ -23,8 +23,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   every object a `DROP TABLE ... CASCADE` of the table destroys or changes: views
   and materialized views to any depth, SQL-standard functions and procedures,
   foreign keys and policies on other tables, rules, inheriting tables, tables
-  with a column of the table's row type, and what reads a partition of the table
-  or a sequence a column of it owns. It reads `pg_depend`, so it sees what
+  with a column of the table's row type or of an array of it, and what reads a
+  partition of the table or a sequence of it (owned or identity). The walk
+  follows at most 32 dependency levels. It reads `pg_depend`, so it sees what
   `information_schema.view_table_usage` misses, and `TestPostgresDependents` plus
   a guard that snapshots the schemas around a rolled-back cascade check it.
 - `continuo-runtime --version` prints `continuo-runtime <version>` to stdout and

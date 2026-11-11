@@ -212,7 +212,9 @@ def test_an_explicit_name_admits_two_access_methods_over_one_column_set():
     ("pg_class", "v", "view"), ("pg_class", "m", "materialized_view"), ("pg_class", "r", "table"),
     ("pg_class", "p", "table"), ("pg_class", "f", "table"), ("pg_proc", "f", "function"),
     ("pg_proc", "p", "procedure"), ("pg_constraint", "", "constraint"), ("pg_policy", "", "policy"),
-    ("pg_rewrite", "", "rule"), ("pg_trigger", "", "other"),
+    ("pg_rewrite", "", "rule"), ("pg_trigger", "", "other"), ("pg_class", "c", "other"),
+    ("pg_class", "i", "other"), ("pg_class", "I", "other"), ("pg_class", "S", "other"),
+    ("pg_class", "t", "other"),
 ])
 def test_dependent_kind_maps_each_catalog_row(catalog, subkind, kind):
     assert _dependent_kind(catalog, subkind) == kind

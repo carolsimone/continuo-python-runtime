@@ -34,6 +34,12 @@ from .test_integration_postgres_conformance import PG
 
 pytestmark = pytest.mark.integration
 
+# The same text is in the entry-point tests of postgres, trino and duckdb
+# (tests/test_entrypoint_shims.py checks the copies agree): each adapter test
+# directory is its own pytest package, so there is no helper to share. The
+# development venv installs all three adapters while an image installs one, and
+# discovery refuses several, so the process keeps only the engine named in
+# argv[1] before it runs the real CLI.
 _SHIM = (
     "import sys\n"
     "import continuo_engine_contract.port as port\n"
@@ -154,13 +160,15 @@ def test_probe_views_reports_a_view_that_cannot_be_read_and_exits_0(estate):
     ({"VALIDATION_OP": "seed_preflight", "SEED_PREFLIGHT_MODE": "drop"}, "seed_preflight"),
     ({"VALIDATION_OP": "probe_views", "PROBE_VIEWS": '"bi.x"'}, "probe_views"),
 ])
-def test_a_bad_input_exits_2_without_a_candidate_schema(env, op):
-    assert "DBT_TARGET_SCHEMA" not in env
+def test_a_bad_input_exits_2_and_the_process_does_not_ask_for_a_candidate_schema(env, op):
     proc = _entrypoint("validation-op", env)
     block = _block(proc)
     assert proc.returncode == 2
     assert (block["status"], block["op"], block["failures"]) == ("error", op, 1)
     assert "reason" not in block and block["message"]
+    # The test's env has no DBT_TARGET_SCHEMA; a process that asked for it would
+    # fail with a block naming the variable instead of reporting the bad input.
+    assert "DBT_TARGET_SCHEMA" not in block["message"]
     assert block["message"] in proc.stderr
 
 

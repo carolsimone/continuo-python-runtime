@@ -7,6 +7,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `continuo-runtime --version` prints `continuo-runtime <version>` to stdout and
+  exits 0. The template's `release.yml` has a "Pin the runtime to the image"
+  step that reads the version from the Dockerfile's
+  `FROM ghcr.io/carolsimone/continuo-python-runtime-<engine>:vX.Y.Z` line
+  (failing with an `::error::` when none matches), installs exactly that
+  runtime, and fails when `continuo-runtime --version` differs, so CI hashes
+  with the runtime the image runs.
 - The harness checks, before it builds the adapter, that the image holds what
   the release hashed. When `CONTENT_HASH` is set it recomputes the node's
   `content_hash` from the files in the image, with the helpers `merge` uses,

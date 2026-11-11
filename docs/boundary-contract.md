@@ -455,7 +455,8 @@ sets `TASK_ATTEMPT` on the same Jobs, under the same name as on a dbt Job.
 ## 13.5 Surface 5 — what the domain repo's CI/CD does per merge
 
 ```
-1. lint/test the scripts; validate contract files against the v1 schema
+1. install the continuo-python-runtime version of the image's FROM tag (fail when they differ),
+   then lint/test the scripts and validate contract files against the v1 schema
 2. merge contract files → contract.yaml; compute the per-node hash fields (§13.2)
 3. build + push the image (scripts + contracts + harness baked in)
 4. upload contract.yaml → s3://<bucket>/<service>/<release_id>/contract.yaml

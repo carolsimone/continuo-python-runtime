@@ -84,13 +84,19 @@ engine, same version, same runtime behavior, different packaging.
 
 ## Pipeline Overview
 
-The CI/CD pipeline (`release.yml`) performs the six-step orchestration:
-1. **Lint** scripts for hand-written SQL (forbidden)
-2. **Validate** contracts against the schema
-3. **Run domain tests** (optional, if `tests/` exists)
-4. **Merge** contracts into a single artifact
-5. **Build and push** Docker image
-6. **Upload contract**, then **submit the release** to continuo's
+The CI/CD pipeline (`release.yml`) performs the seven-step orchestration:
+1. **Install the runtime the image runs**: CI reads the version from the
+   Dockerfile's `FROM ghcr.io/carolsimone/continuo-python-runtime-<engine>:vX.Y.Z`
+   line, installs exactly that `continuo-python-runtime`, and fails when the
+   installed version differs or the Dockerfile has no such line. The harness
+   recomputes `content_hash` with the image's runtime at start, so CI must hash
+   with the same one
+2. **Lint** scripts for hand-written SQL (forbidden)
+3. **Validate** contracts against the schema
+4. **Run domain tests** (optional, if `tests/` exists)
+5. **Merge** contracts into a single artifact
+6. **Build and push** Docker image
+7. **Upload contract**, then **submit the release** to continuo's
    `POST /api/v1/releases` and poll `GET /api/v1/releases/{id}` for up to about
    50 minutes (the job's `timeout-minutes` is 60). The job succeeds when the release is `promoted` and fails when it
    is `rejected` or `superseded`

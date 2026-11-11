@@ -227,6 +227,82 @@ def test_release_workflow_preflight_names_the_binding_on_refusal(tmp_path, statu
         assert "auth.publicUrl" in result.stdout
 
 
+def _pin(tmp_path, dockerfile: str):
+    """Run the "Pin the runtime to the image" step for real against a Dockerfile.
+
+    Returns the exit code, what the step appended to ``$GITHUB_ENV`` and its
+    stdout (where the ``::error::`` annotation goes).
+    """
+    _, job = _release_job()
+    (tmp_path / "Dockerfile").write_bytes(dockerfile.encode())
+    env_file = tmp_path / "github_env"
+    env_file.write_text("")
+    done = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+         _step(job, "Pin the runtime to the image")["run"]],
+        cwd=tmp_path, env={**os.environ, "GITHUB_ENV": str(env_file)},
+        capture_output=True, text=True,
+    )
+    return done.returncode, env_file.read_text(), done.stdout
+
+
+_POSTGRES = "ghcr.io/carolsimone/continuo-python-runtime-postgres"
+
+
+@pytest.mark.parametrize(("from_line", "version"), [
+    (f"FROM {_POSTGRES}:v0.12.0", "0.12.0"),
+    (f"FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.12.0@sha256:{'a' * 64}", "0.12.0"),
+    (f"FROM {_POSTGRES}:v0.12.0   \t", "0.12.0"),
+    ("FROM python:3.14.8-slim", None),
+    (f"FROM {_POSTGRES}:latest", None),
+    (f"FROM {_POSTGRES}:v0.12", None),
+    (f"FROM {_POSTGRES}:v0.12.0 AS base", None),
+    (f"FROM --platform=linux/amd64 {_POSTGRES}:v0.12.0", None),
+    (f"# FROM {_POSTGRES}:v0.12.0", None),
+])
+def test_the_pin_step_reads_the_runtime_version_from_the_from_tag(tmp_path, from_line, version):
+    code, written, out = _pin(tmp_path, from_line + "\nCOPY contracts/ /app/contracts/\n")
+    if version:
+        assert code == 0 and written == f"RUNTIME_VERSION={version}\n"
+    else:
+        # A line the step does not parse fails the job with a clear error and
+        # writes nothing, so CI never installs a runtime it guessed.
+        assert code == 1 and written == ""
+        assert out.startswith("::error::Dockerfile has no FROM ghcr.io/carolsimone/continuo-python-runtime-")
+
+
+def test_the_pin_step_reads_a_crlf_dockerfile(tmp_path):
+    """A Windows checkout's carriage return is whitespace, never part of the version."""
+    code, written, _ = _pin(tmp_path, f"FROM {_POSTGRES}:v0.12.0\r\nCOPY contracts/ /app/contracts/\r\n")
+    assert code == 0 and written == "RUNTIME_VERSION=0.12.0\n"
+
+
+def test_the_pin_step_takes_the_first_runtime_line_of_a_multi_stage_build(tmp_path):
+    dockerfile = (
+        "FROM python:3.14.8-slim\n"
+        f"FROM {_POSTGRES}:v0.12.0\n"
+        "FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.13.0\n"
+    )
+    code, written, _ = _pin(tmp_path, dockerfile)
+    assert code == 0 and written == "RUNTIME_VERSION=0.12.0\n"
+
+
+def test_the_pin_step_parses_the_templates_own_dockerfile(tmp_path):
+    code, written, _ = _pin(tmp_path, (TEMPLATE / "Dockerfile").read_text())
+    assert code == 0 and written.startswith("RUNTIME_VERSION=")
+
+
+def test_ci_installs_the_pinned_runtime_and_checks_its_version():
+    _, job = _release_job()
+    steps = job["steps"]
+    checkout = next(i for i, s in enumerate(steps) if s.get("uses", "").startswith("actions/checkout"))
+    names = [s.get("name") for s in steps]
+    assert checkout < names.index("Pin the runtime to the image") < names.index("Install runtime tooling")
+    install = _step(job, "Install runtime tooling")["run"]
+    assert 'uv tool install "continuo-python-runtime==${RUNTIME_VERSION}"' in install
+    assert "continuo-runtime --version" in install
+
+
 def test_readme_and_template_name_images_the_publisher_emits():
     """Engine-selection examples must name images the publisher actually pushes.
 

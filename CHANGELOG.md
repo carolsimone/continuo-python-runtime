@@ -57,7 +57,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   step that reads the version from the Dockerfile's
   `FROM ghcr.io/carolsimone/continuo-python-runtime-<engine>:vX.Y.Z` line
   (failing with an `::error::` when none matches), installs exactly that
-  runtime, and fails when `continuo-runtime --version` differs, so CI hashes
+  runtime, and fails when the version `uv tool list` reports differs, so CI hashes
   with the runtime the image runs.
 - The harness checks, before it builds the adapter, that the image holds what
   the release hashed. When `CONTENT_HASH` is set it recomputes the node's

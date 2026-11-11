@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import threading
+import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -292,15 +293,106 @@ def test_the_pin_step_parses_the_templates_own_dockerfile(tmp_path):
     assert code == 0 and written.startswith("RUNTIME_VERSION=")
 
 
-def test_ci_installs_the_pinned_runtime_and_checks_its_version():
+def test_ci_installs_the_pinned_runtime_before_it_checks_the_installed_version():
     _, job = _release_job()
     steps = job["steps"]
     checkout = next(i for i, s in enumerate(steps) if s.get("uses", "").startswith("actions/checkout"))
     names = [s.get("name") for s in steps]
     assert checkout < names.index("Pin the runtime to the image") < names.index("Install runtime tooling")
-    install = _step(job, "Install runtime tooling")["run"]
-    assert 'uv tool install "continuo-python-runtime==${RUNTIME_VERSION}"' in install
-    assert "continuo-runtime --version" in install
+    install, _ = _install_and_check()
+    assert install == 'uv tool install "continuo-python-runtime==${RUNTIME_VERSION}"'
+
+
+def _install_and_check():
+    """The "Install runtime tooling" step as (install command, version check)."""
+    _, job = _release_job()
+    install, check = _step(job, "Install runtime tooling")["run"].split("\n", 1)
+    return install, check
+
+
+def _fixture_wheel(directory: Path, version: str) -> Path:
+    """A real wheel of a package named continuo-python-runtime at ``version``.
+
+    It carries one console script and no dependencies, so ``uv tool install``
+    needs no index. Its script knows no ``--version`` flag, like a runtime
+    release that predates one.
+    """
+    dist_info = f"continuo_python_runtime-{version}.dist-info"
+    files = {
+        "continuo_runtime_fixture.py": "def main():\n    raise SystemExit(2)\n",
+        f"{dist_info}/METADATA": f"Metadata-Version: 2.1\nName: continuo-python-runtime\nVersion: {version}\n",
+        f"{dist_info}/WHEEL": "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        f"{dist_info}/entry_points.txt": "[console_scripts]\ncontinuo-runtime = continuo_runtime_fixture:main\n",
+    }
+    files[f"{dist_info}/RECORD"] = "".join(f"{name},,\n" for name in [*files, f"{dist_info}/RECORD"])
+    wheel = directory / f"continuo_python_runtime-{version}-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return wheel
+
+
+def _check_installed_runtime(tmp_path, install_args, runtime_version):
+    """Install with a real ``uv tool install``, then run the step's version check.
+
+    Returns the check's exit code and stdout. The tool directories are private
+    to ``tmp_path``, so the host's tools are neither read nor changed.
+    """
+    env = {
+        **os.environ,
+        "UV_TOOL_DIR": str(tmp_path / "tools"),
+        "UV_TOOL_BIN_DIR": str(tmp_path / "bin"),
+        "RUNTIME_VERSION": runtime_version,
+    }
+    subprocess.run(["uv", "tool", "install", *install_args], env=env, check=True, capture_output=True)
+    _, check = _install_and_check()
+    done = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", check],
+        env=env, capture_output=True, text=True,
+    )
+    return done.returncode, done.stdout
+
+
+@pytest.mark.parametrize(("installed", "pinned", "ok"), [
+    ("0.11.0", "0.11.0", True),
+    ("0.12.0", "0.12.0", True),
+    ("0.11.0", "0.12.0", False),
+    ("0.12.0", "0.11.0", False),
+    ("0.12.0", "0.1.0", False),
+])
+def test_the_version_check_compares_the_installed_tool_with_the_pin(tmp_path, installed, pinned, ok):
+    """The check reads the version from ``uv tool list``, which every release supports.
+
+    The fixture's script has no ``--version`` flag, so a check that ran it would fail here.
+    """
+    wheel = _fixture_wheel(tmp_path, installed)
+    code, out = _check_installed_runtime(tmp_path, [str(wheel)], pinned)
+    assert (code == 0) is ok, out
+    if not ok:
+        assert out.strip() == (
+            f"::error::CI installed '{installed}', but the image runs continuo-python-runtime {pinned}"
+        )
+
+
+def test_the_version_check_passes_for_the_wheel_built_from_this_checkout(tmp_path):
+    """A wheel of this source, with its dependencies resolved, is the version the check reads."""
+    import tomllib
+
+    root = TEMPLATE.parent
+    version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+    wheels = tmp_path / "wheels"
+    # The contract wheel sits beside it so an exact `continuo-engine-contract` pin resolves
+    # whether or not that version is on the index yet.
+    for source in (root, root / "contract"):
+        subprocess.run(
+            ["uv", "build", "--wheel", "--out-dir", str(wheels), str(source)],
+            check=True, capture_output=True,
+        )
+    wheel = next(wheels.glob("continuo_python_runtime-*.whl"))
+    code, out = _check_installed_runtime(tmp_path, ["--find-links", str(wheels), str(wheel)], version)
+    assert code == 0, out
+    code, out = _check_installed_runtime(tmp_path, ["--find-links", str(wheels), str(wheel)], "0.0.1")
+    assert code == 1 and out.startswith(f"::error::CI installed '{version}'"), out
 
 
 def test_readme_and_template_name_images_the_publisher_emits():

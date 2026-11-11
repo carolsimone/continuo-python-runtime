@@ -19,7 +19,7 @@ dependencies = [
     # (currently ==30.23.0) -- bump this whenever that pin moves. dependents()
     # parses view definitions with sqlglot directly, so the parser this adapter
     # was tested with must be the one the contract resolves to.
-    "sqlglot==30.23.0",
+    "sqlglot==30.30.0",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

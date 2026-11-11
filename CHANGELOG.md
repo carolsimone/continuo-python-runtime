@@ -5,6 +5,105 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Every engine adapter declares `drop_semantics`, what dropping a table does
+  to the objects that read it: `"cascade"` (they are destroyed) or
+  `"late_binding"` (they survive and fail on their next read). The postgres
+  adapter declares `cascade`, the trino and duckdb adapters `late_binding`.
+  `StartupConformance` has a new case, `test_declares_a_drop_semantics`.
+- `continuo_engine_contract.port` has an opt-in capability,
+  `DependentsIntrospection`, with `Dependent` and `Dependents` and the
+  vocabularies `DROP_SEMANTICS`, `COMPLETENESS` and `DEPENDENT_KINDS`. Its one
+  method, `dependents(schema, table)`, lists every object a drop of the table
+  would destroy or leave reading a missing table, and gives none for a missing
+  table or schema. The conformance class `DependentsConformance` checks it,
+  with an overridable `create_view` hook.
+- `PostgresAdapter.dependents(schema, table)` lists, with `completeness="exact"`,
+  every object a `DROP TABLE ... CASCADE` of the table destroys or changes: views
+  and materialized views to any depth, SQL-standard functions and procedures,
+  foreign keys and policies on other tables, rules, inheriting tables, tables
+  with a column of the table's row type or of an array of it, and what reads a
+  partition of the table or a sequence of it (owned or identity). The walk
+  follows at most 32 dependency levels. It reads `pg_depend`, so it sees what
+  `information_schema.view_table_usage` misses, and `TestPostgresDependents` plus
+  a guard that snapshots the schemas around a rolled-back cascade check it.
+- `TrinoAdapter.dependents(schema, table)` lists, with
+  `completeness="best_effort"`, the views whose SQL reads the table. It reads
+  `information_schema.views` of the adapter's catalog in one query and parses
+  each definition with sqlglot: an unqualified name is in the view's own
+  schema, a name without a catalog is in the adapter's, and a CTE of the same
+  statement is not the table. A definition that does not parse is matched by
+  the table's name as a whole identifier, with a WARNING naming the view. It
+  misses dynamic SQL, views in other catalogs, and views that read the table
+  only through another view. The adapter pins `sqlglot==30.23.0`, as the
+  engine contract does, and `TestTrinoDependents` runs the conformance cases
+  against Trino and the Iceberg REST catalog.
+- The validation runner has two read-only ops, `seed_preflight` and `probe_views`
+  (`VALIDATION_OP`), which need no `DBT_TARGET_SCHEMA`. `seed_preflight` lists the
+  objects a reload of a seed's production table would destroy or leave reading
+  a missing table, compares them with `SEED_PREFLIGHT_ALLOWED` and
+  `SEED_PREFLIGHT_ACKNOWLEDGED`, and in `check` mode exits 1 with `reason`
+  `unowned_dependents`, `engine_mismatch` or `warehouse_unreachable` when the
+  reload must not run; `report` mode prints the same `reason` and exits 0.
+  `probe_views` reads each view of `PROBE_VIEWS` with a zero-row `SELECT` and
+  reports which no longer bind, without failing. Both print one result block
+  with their own keys after `reason`; `result_block` takes them as a keyword-only
+  `fields` mapping and refuses a key that shadows a standard one. The README
+  section "Seed preflight and view probe" has the inputs, the block and the
+  decision table.
+- `continuo-runtime --version` prints `continuo-runtime <version>` to stdout and
+  exits 0. The template's `release.yml` has a "Pin the runtime to the image"
+  step that reads the version from the Dockerfile's
+  `FROM ghcr.io/carolsimone/continuo-python-runtime-<engine>:vX.Y.Z` line
+  (failing with an `::error::` when none matches), installs exactly that
+  runtime, and fails when the version `uv tool list` reports differs, so CI hashes
+  with the runtime the image runs.
+- The harness checks, before it builds the adapter, that the image holds what
+  the release hashed. When `CONTENT_HASH` is set it recomputes the node's
+  `content_hash` from the files in the image, with the helpers `merge` uses,
+  and a difference, or a hashed file missing from the image, fails the node
+  with `ImageContractMismatch` (a `ContractError`) and exit 1. The message
+  names both hashes, the three parts, the unit paths and the runtime version.
+  An unset or empty `CONTENT_HASH` logs a warning and runs. The result block
+  carries an optional `reason` key after `unique_id`
+  (`image_contract_mismatch`); a block without one keeps its bytes, and
+  `continuo_engine_contract.result.result_block` takes it as a keyword-only
+  `reason`.
+- `assets:` on a `python-node` or `python-api` node lists the repository files
+  its script reads. `merge` folds their bytes into `shared_code_hash`, so
+  editing one changes the node's `content_hash`, and writes `assets` on the
+  wire entry when a node declares any. A missing path, a non-file or a path
+  that resolves outside the repository fails `merge`; `python-csv` refuses the
+  key. The image must `COPY` the files.
+- `lint` and `merge` refuse code the content hash cannot see: `runpy`, a change
+  to `sys.path`, a `sitecustomize` or `usercustomize` module, `compile()` and
+  `types.FunctionType`, and `pickle.load`, `pickle.loads` and
+  `pickle.Unpickler`. `merge` also refuses a `sitecustomize.py` or
+  `usercustomize.py` at the repository root. A file a script reads belongs in
+  `assets`.
+
+### Changed
+
+- **Breaking for adapter authors.** `WarehouseAdapter.drop_semantics` is a
+  required declaration with no default: an adapter that does not set it fails
+  `StartupConformance.test_declares_a_drop_semantics`.
+- A node's hashes come from continuo-contracts 0.1.0, the library
+  continuo's topology-controller uses too, so CI and continuo compute the
+  same values. `config_hash` hashes the node's code projection: `owner`,
+  `description`, `criticality` and `schedule` no longer move a node's hash,
+  a column type's spelling does not (`INT` and `INTEGER` hash alike), and a
+  read's SQL is hashed as written, apart from LF line endings and the
+  whitespace around it. `shared_code_hash` folds each import closure file
+  with its repo-relative path, so two files that swap their contents change
+  it. Every Python node's `content_hash` changes once, on the first release
+  built with this version. The wire entry keeps its keys and the fold.
+- A node whose `config` holds a value the hash cannot write (an integer
+  beyond 2**53 - 1, NaN or an infinity, nesting deeper than 99 levels, a
+  lone surrogate) fails `merge` with a `ContractError` naming the node.
+- The package gate no longer counts `continuo-contracts` as a first-party
+  distribution.
+
 ### Fixed
 
 - A release's image build no longer fails when PyPI still serves an index

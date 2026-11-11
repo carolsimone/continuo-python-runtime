@@ -1,13 +1,23 @@
 """Tests for CLI subcommands: validate, merge, hash, run."""
 
 import json
+from importlib import metadata
 
 import pyarrow as pa
+import pytest
 import yaml
 
 import continuo_python_runtime.cli as cli_module
 from continuo_python_runtime.cli import main
 from tests.conftest import FakeWarehouseAdapter
+
+
+def test_version_prints_the_installed_runtime_version(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert out == f"continuo-runtime {metadata.version('continuo-python-runtime')}\n"
 
 
 def test_validate_ok(contract_repo):

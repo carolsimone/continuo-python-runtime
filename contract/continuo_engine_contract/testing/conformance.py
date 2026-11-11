@@ -43,7 +43,13 @@ import pyarrow as pa  # type: ignore[import-untyped]
 import pytest
 
 from continuo_engine_contract.keys import DuplicateKeyError
-from continuo_engine_contract.port import LiveColumn
+from continuo_engine_contract.port import (
+    COMPLETENESS,
+    DEPENDENT_KINDS,
+    DROP_SEMANTICS,
+    Dependents,
+    LiveColumn,
+)
 
 # More rows than one insert statement carries in any shipped adapter (postgres
 # pages 1000 rows, trino batches 500), so an atomicity case spans statements.
@@ -223,6 +229,18 @@ class StartupConformance:
                 adapter.close()
         if rows != [{"one": 1}]:
             raise AssertionError(f"SELECT 1 AS one returned {rows}, expected [{{'one': 1}}]")
+
+    def test_declares_a_drop_semantics(self, warehouse_address, adapter_from_env):
+        adapter = adapter_from_env(*warehouse_address)
+        try:
+            declared = getattr(type(adapter), "drop_semantics", None)
+        finally:
+            adapter.close()
+        if declared not in DROP_SEMANTICS:
+            raise AssertionError(
+                f"{type(adapter).__name__}.drop_semantics is {declared!r}, "
+                f"expected one of {sorted(DROP_SEMANTICS)}"
+            )
 
 
 class ConformanceBase:
@@ -429,3 +447,103 @@ class UpsertConformance(ConformanceBase):
                 (day2, "EUR", None),
             ],
         )
+
+
+class DependentsConformance(ConformanceBase):
+    """For an adapter that is a ``DependentsIntrospection``.
+
+    Views are created through :meth:`create_view`; an engine whose view syntax
+    differs from ANSI overrides it. Tables are made by ``ensure_table`` with an
+    ``id`` column, and every view and schema a case makes is dropped with the
+    ``schema`` fixture or in the case's own ``finally``.
+    """
+
+    def create_view(
+        self, adapter: Any, view_schema: str, view: str, table_schema: str, table: str
+    ) -> None:
+        """Create ``view_schema.view`` as a read of ``table_schema.table``'s ``id`` column."""
+        adapter.fetch(
+            f"CREATE VIEW {quote(view_schema)}.{quote(view)} AS "
+            f"SELECT {quote('id')} FROM {quote(table_schema)}.{quote(table)}"
+        )
+
+    def expect_dependents(
+        self,
+        adapter: Any,
+        schema: str,
+        table: str,
+        expected: Iterable[tuple[str, str, str, int]],
+    ) -> None:
+        """Fail unless a drop of ``schema.table`` lists exactly *expected*, in any order.
+
+        Each entry is ``(schema, name, kind, depth)``; names compare in lower case.
+        """
+        result: Dependents = adapter.dependents(schema, table)
+        if result.completeness not in COMPLETENESS:
+            raise AssertionError(
+                f"dependents({schema}.{table}) reports completeness {result.completeness!r}, "
+                f"expected one of {sorted(COMPLETENESS)}"
+            )
+        for found in result.objects:
+            if found.kind not in DEPENDENT_KINDS:
+                raise AssertionError(
+                    f"dependents({schema}.{table}) lists {found.schema}.{found.name} "
+                    f"of kind {found.kind!r}, expected one of {sorted(DEPENDENT_KINDS)}"
+                )
+            if found.depth < 1:
+                raise AssertionError(
+                    f"dependents({schema}.{table}) lists {found.schema}.{found.name} "
+                    f"at depth {found.depth}, expected 1 or more"
+                )
+        actual = sorted(
+            (found.schema.lower(), found.name.lower(), found.kind, found.depth)
+            for found in result.objects
+        )
+        wanted = sorted(
+            (entry[0].lower(), entry[1].lower(), entry[2], entry[3]) for entry in expected
+        )
+        if actual != wanted:
+            raise AssertionError(f"dependents({schema}.{table}) lists {actual}, expected {wanted}")
+
+    def test_dependents_of_a_table_nothing_reads_is_empty(self, adapter, schema):
+        table = self.new_table(adapter, schema, COLUMNS)
+        self.expect_dependents(adapter, schema, table, [])
+
+    def test_dependents_of_a_missing_table_or_schema_is_empty(self, adapter, schema):
+        self.new_table(adapter, schema, COLUMNS)  # the schema exists; only the table is missing
+        suffix = uuid.uuid4().hex[:8]
+        self.expect_dependents(adapter, schema, f"conf_missing_{suffix}", [])
+        self.expect_dependents(adapter, f"conf_noschema_{suffix}", "seed", [])
+
+    def test_dependents_lists_a_view_that_reads_the_table(self, adapter, schema):
+        table = self.new_table(adapter, schema, COLUMNS)
+        view = f"conf_view_{uuid.uuid4().hex[:8]}"
+        self.create_view(adapter, schema, view, schema, table)
+        self.expect_dependents(adapter, schema, table, [(schema, view, "view", 1)])
+
+    def test_dependents_lists_a_view_in_another_schema(self, adapter, schema):
+        table = self.new_table(adapter, schema, COLUMNS)
+        other = f"conf_other_{uuid.uuid4().hex[:8]}"
+        view = f"conf_view_{uuid.uuid4().hex[:8]}"
+        adapter.ensure_schema(other)
+        try:
+            self.create_view(adapter, other, view, schema, table)
+            self.expect_dependents(adapter, schema, table, [(other, view, "view", 1)])
+        finally:
+            adapter.drop_schema(other)
+
+    def test_dependents_ignores_a_view_of_a_table_whose_name_extends_this_one(
+        self, adapter, schema
+    ):
+        table = self.new_table(adapter, schema, COLUMNS)
+        extended = f"{table}_ext"
+        adapter.ensure_table(schema, extended, COLUMNS, config={})
+        view = f"conf_view_{uuid.uuid4().hex[:8]}"
+        self.create_view(adapter, schema, view, schema, extended)
+        result = adapter.dependents(schema, table)
+        listed = [(found.schema, found.name) for found in result.objects]
+        if listed:
+            raise AssertionError(
+                f"dependents({schema}.{table}) lists {listed}, which read {schema}.{extended}: "
+                f"a table whose name extends {table!r} is not {table!r}"
+            )

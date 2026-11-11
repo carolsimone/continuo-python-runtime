@@ -57,20 +57,27 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   through an optional `secret_ref` (must match `continuo-api-*`; a trailing
   newline is rejected). Only this kind may set it. Its script and import closure are hashed and
   linted exactly as for `python-node`. When `secret_ref` is set, it appears
-  on the merged wire entry as an extra key (absent otherwise, so no other
-  node's wire entry or `config_hash` changes), and it is part of
+  on the merged wire entry as an extra key (absent otherwise), and it is part of
   `config_hash`, so `content_hash` changes when the referenced Secret name
   changes. `source_hash` does not.
+- **`assets`** is additive and optional on `python-node` and `python-api`
+  (refused on `python-csv`, which has no script): a list of repo-relative POSIX
+  paths of the files the node's script reads. Each is a non-empty string with
+  no backslash, not absolute, with no `..` segment; the loader normalises it
+  (`./data//ref.json` is `data/ref.json`), keeps the declared order and refuses
+  a path listed twice. `merge` fails with a `ContractError` for an asset that
+  is missing, is not a file or resolves outside the repository. On the merged
+  wire entry `assets` appears only when the node declares at least one, and it
+  is part of the code projection (sorted by code point there), so declaring
+  one changes `config_hash`. Its bytes are shared units (§13.2).
 - **`timeout_minutes`** is additive and optional, valid on every `kind`: an
   integer from 1 to 10,080 (one week) that is the node's task timeout. Any
   other value (zero, above the bound, a string, a float, a boolean) fails
   `ContractError` naming the node and the key. On the merged wire entry it
   appears only when the node declares it, and it is the one wire key **outside
   `config_hash`**: it is written after the hash parts are computed and is
-  excluded from the `config_hash` basis, so changing it alone changes none of
-  the four hashes and is not a code change. A node that does not declare it
-  has the wire entry, `config_hash` and `content_hash` it always had, and
-  `contract_version` stays 1.
+  outside the code projection, so changing it alone changes none of the four
+  hashes and is not a code change. `contract_version` stays 1.
 - **`mode_type`** and **`primary_key`** are additive and optional. `mode_type`
   (`replace`, the default; `append`; `upsert`) says how the harness writes
   the node's table on each run; `python-csv` allows only `replace`.
@@ -78,9 +85,9 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   non-empty list of output column names, each spelled exactly as in
   `output_columns` and declared `nullable: false`, unique case-insensitively. On the merged wire entry `mode_type` appears
   only when it is not `replace`, and `primary_key` only for `upsert`, in the
-  authored order and spelling — so every existing node's wire entry,
-  `config_hash` and `content_hash` are unchanged and `contract_version` stays
-  1. Both are part of `config_hash` when present. A shared fixture of the
+  authored order and spelling, and `contract_version` stays 1. `mode_type` is
+  always part of the code projection and `primary_key` is part of it for
+  `upsert` only. A shared fixture of the
   expected entries lives in this repo at
   `tests/fixtures/wire_contract_write_modes.yml` and, byte-identical, in
   continuo at `topology-controller/tests/fixtures/wire_contract_write_modes.yml`.
@@ -202,50 +209,52 @@ parse time.
 Each node entry in `contract.yaml` carries four hash fields — three
 independently-computed parts plus `content_hash`, their fold — all
 computed by this repo's `continuo-runtime merge`
-(`continuo_python_runtime.hashing`) and shipped on the wire entry. Continuo
-never recomputes `source_hash` or `shared_code_hash` from raw bytes over
-this surface (it doesn't receive the script or closure here); it
-recomputes only the fold (see below).
+(`continuo_python_runtime.hashing`, through the continuo-contracts library)
+and shipped on the wire entry. A topology-controller that pins continuo-contracts computes the config part
+itself with the same library and folds it with CI's source and shared parts;
+the fold is the one older topology-controllers recompute from the three parts
+on the wire entry.
 
 ```
 source_hash      = sha256(script_bytes)                            # bare hex
-shared_code_hash = ""  if the in-repo import closure is empty, else
-                    sha256(concat(sorted(
-                        sha256(member_bytes).hexdigest()
-                        for member in closure)))                    # bare hex
-config_hash      = sha256(canonical_json(entry))                    # bare hex
+                   (sha256(uri) for python-csv)
+shared_code_hash = continuo_contracts.hashing.shared_hash(
+                       {repo-relative POSIX path: file bytes})      # bare hex,
+                   over the in-repo import closure and the declared assets,
+                   "" when there are none
+config_hash      = continuo_contracts.python.projection_hash(node)  # bare hex
 content_hash     = "sha256:" + sha256(source_hash + "|" + shared_code_hash
                                        + "|" + config_hash)
 ```
 
 - `script_bytes` — the node's own script file, byte-for-byte.
-- `member_bytes` — the byte content of every file in the node's in-repo
-  import closure (defined below); the script itself is never a closure
-  member, so `source_hash` and `shared_code_hash` never double-count it.
-  `shared_code_hash`'s `sorted(...)` sorts the per-member **hex digest
-  strings**, not the raw bytes, and `concat` joins those sorted hex
-  strings before the outer `sha256`.
-- `canonical_json(entry)` — the node's wire entry, yaml-parsed then
-  re-serialized to JSON with sorted keys and no whitespace
-  (`json.dumps(..., sort_keys=True, separators=(",", ":"))`); every
-  `reads` value is first whitespace-normalized (runs of whitespace
-  collapse to a single space, then stripped); `content_hash` **and all
-  three part fields** (`source_hash`, `shared_code_hash`, `config_hash`)
-  are excluded from the basis — `config_hash` cannot include itself, and
-  none of the four hash fields participates in another's basis. So is
-  `timeout_minutes`, the one non-hash wire key left out of the basis. Every
-  other field, including `config`, participates verbatim.
+- the shared units — the byte content of every file in the node's in-repo
+  import closure (defined below) and of every file the node lists under
+  `assets` (§13.1), each keyed by its repo-relative POSIX path; a file that is
+  both is one unit. The script itself is never a closure member, so `source_hash` and
+  `shared_code_hash` never double-count it. The part folds one
+  `<path> NUL <sha256 of the bytes>` line per unit, sorted by path, so two
+  files that swap their contents change it.
+- the code projection — the twelve keys `schema`, `table`, `kind`, `script`,
+  `reads`, `output_columns`, `extra_columns`, `config`, `secret_ref`,
+  `mode_type`, `primary_key` and `assets`, written as RFC 8785 canonical JSON.
+  Column types are written in their canonical spelling (`INT` is `INTEGER`,
+  `DECIMAL(12, 2)` is `NUMERIC(12,2)`), and each read's SQL is hashed as
+  written except for LF line endings and the whitespace around it. `owner`,
+  `schedule`, `criticality`, `description` and `timeout_minutes` are outside
+  the projection. A `config` value the library cannot write (an integer beyond
+  2**53 - 1, NaN, an infinity, nesting deeper than 99 levels, a lone
+  surrogate) fails `merge` with a `ContractError` naming the node.
 
-Invariant: formatting-only edits (spaces in SQL, yaml indentation/key
-order) leave all four hashes unchanged; any semantic edit to reads,
-columns, metadata, `config`, or the script changes at least one part and
-therefore `content_hash`.
+Invariant: editing a node's owner, schedule, criticality, description or
+timeout, the order of its keys, or the spelling of a column type leaves all
+four hashes unchanged; any edit to its script, closure, reads, columns, assets or
+`config` changes at least one part and therefore `content_hash`.
 
 The fold (`content_hash = "sha256:" + sha256(source|shared|config)`) is
-byte-identical to manifest-controller's dbt-side fold — one formula spans
-both runtimes. Continuo's side **recomputes the fold from the three part
-fields already on the wire entry and rejects the release if it doesn't
-match the submitted `content_hash`**.
+the three-part fold of continuo-contracts. Continuo's side **recomputes the
+fold from the three part fields already on the wire entry and rejects the
+release if it doesn't match the submitted `content_hash`**.
 
 ### Closure definition and its documented limits
 
@@ -351,9 +360,10 @@ executor runs it as a Kubernetes Job:
   lifetime, so a deferred `import` inside `run()` resolves too. Both forms a
   script can use work: sibling (`import helpers`) and package-qualified
   (`import scripts.helpers`, `from lib.shared import ...`). The image must
-  still `COPY` every directory the scripts import from: a helper is folded
-  into the hash whether or not it is in the image, so one left out yields a
-  valid release artifact and a node that dies with `ModuleNotFoundError`.
+  still `COPY` every directory the scripts import from or read their `assets`
+  from: a helper or an asset is folded into the hash whether or not it is in
+  the image, so one left out yields a valid release artifact and a node that
+  dies with `ModuleNotFoundError` or `FileNotFoundError`.
 - **Warehouse env**: engine-native connection vars (`POSTGRES_HOST`,
   `POSTGRES_DB`, `POSTGRES_USER`, optional `POSTGRES_PORT`/`_PASSWORD`; ditto
   per engine), injected via the same Secret mechanism dbt Jobs use.
@@ -406,7 +416,10 @@ executor runs it as a Kubernetes Job:
   markers. That wire format is frozen against Continuo's Go parser
   (`pkg/validationresult`). All diagnostics
   go to stderr via stdlib `logging`, including the failure the result block
-  reports, which is logged at ERROR. Non-zero exit on failure.
+  reports, which is logged at ERROR. Non-zero exit on failure. The block may
+  carry one optional extra key, `reason`, after `unique_id`, only on a failure
+  with a machine-readable code (`image_contract_mismatch`); the markers,
+  `schema_version` and the five standard keys stay frozen.
 - The image embeds the same contract files CI merged — `content_hash` is
   what ties the promoted topology to the image actually running.
 
@@ -427,6 +440,7 @@ inject the names below instead:
 | `TABLE_NAME` | **required** | The target table name; must match the `table` of the node selected via `NODE_ID`. |
 | `TARGET_SCHEMA` | **required** | The target schema name; must match the `schema` of the node selected via `NODE_ID`. There is no fallback — `SCHEMA` and `DBT_TARGET_SCHEMA` are **not** recognized. |
 | `TASK_ATTEMPT` | set by the executor, not read by the harness | The 0-based number of the task's attempt: `0` on a task's first run, `1` on its first retry, and so on. The executor sets it on every production Job, dbt and python alike, so a node script can read it; the harness neither requires nor interprets it. |
+| `CONTENT_HASH` | optional | The `content_hash` the release promoted for the node, set by continuo; absent or empty means no check. When set, the harness recomputes the node's hash from the files in the image (the helpers `merge` uses) before it builds the adapter, and a different value, a value that is not byte-for-byte the recomputed string (no `sha256:` prefix, upper-case hex, surrounding whitespace) or a file the release hashed that the image lacks fails the node with `ImageContractMismatch`: one result block with `"reason":"image_contract_mismatch"` and exit 1. The message names the node, `CONTENT_HASH`, the image's `content_hash`, its three parts, the sorted unit paths and the runtime version, and says to rebuild the image from the released commit. Unset or empty logs a WARNING and runs. |
 | `CONTRACT_DIR` | optional | Path to the directory of merged contract YAML files baked into the image. Defaults to `/app/contracts`. |
 | `APP_ROOT` | optional | Repository root the node's `script:` path is resolved against. Defaults to `CONTRACT_DIR`'s parent directory. |
 | engine-native vars | **required**, per adapter | Whatever the installed `WarehouseAdapter.required_env()` declares (e.g. `POSTGRES_HOST`/`POSTGRES_DB`/`POSTGRES_USER`, optionally `POSTGRES_PORT`/`POSTGRES_PASSWORD`) — missing any of these is a `LoadError`. |
@@ -441,7 +455,8 @@ sets `TASK_ATTEMPT` on the same Jobs, under the same name as on a dbt Job.
 ## 13.5 Surface 5 — what the domain repo's CI/CD does per merge
 
 ```
-1. lint/test the scripts; validate contract files against the v1 schema
+1. install the continuo-python-runtime version of the image's FROM tag (fail when they differ),
+   then lint/test the scripts and validate contract files against the v1 schema
 2. merge contract files → contract.yaml; compute the per-node hash fields (§13.2)
 3. build + push the image (scripts + contracts + harness baked in)
 4. upload contract.yaml → s3://<bucket>/<service>/<release_id>/contract.yaml

@@ -92,7 +92,12 @@ on every change.
 last line of stdout, and Continuo's Go side parses it byte-for-byte
 (`pkg/validationresult` in the `continuo` repository). That wire format — the
 sentinel markers, the framing, and the field names inside the block — is
-**frozen**. Reuse it; never change it from this side alone. A change here that
+**frozen**. The additions are an optional `reason` key, written after
+`unique_id` only when an outcome has a machine-readable code (for example
+`image_contract_mismatch`), and the op's own keys that the `seed_preflight` and
+`probe_views` ops write after `reason`; a block without either keeps its bytes,
+and the sentinels, `schema_version` and the five standard keys do not change. Reuse
+it; never change it from this side alone. A change here that
 the Go parser has not been taught is a production outage, not a refactor.
 
 ## Quickstart for domain teams
@@ -176,14 +181,37 @@ produced, never how it is checked or written.
   script reads with `os.environ[...]`. The contract never holds a secret value
   or env var name; the Secret itself is created in the cluster by the operator.
 
+### Files a script reads (`assets`)
+
+A `python-node` or `python-api` script that reads a file from the repository
+(a model, a lookup table, a JSON config) lists it under `assets:`, one path
+relative to the repository root per entry, written with forward slashes and
+without a `..` segment:
+
+```yaml
+- schema: analytics
+  table: scored_orders
+  kind: python-node
+  script: scripts/scored_orders.py
+  assets: [data/rates.json, models/scorer.bin]
+```
+
+`merge` reads each listed file and folds its bytes into `shared_code_hash`
+under its path, so editing one changes the node's `content_hash` and starts a
+validation. A path that is also an import of the script is one unit. `merge`
+fails with a `ContractError` for a path that is missing, is not a file or
+resolves outside the repository, and a path listed twice is refused. The image
+must `COPY` the files, because `assets` only tells the hash about them. A
+`python-csv` node has no script, so `assets` is refused on it.
+
 ### Task timeout
 
 Any node may set `timeout_minutes:` — an integer from 1 to 10,080 (one week) —
 to declare how long its task may run before continuo gives up on it. A value
 outside that range, or one that is not an integer, fails
-`continuo-runtime validate`/`merge`/`lint`. It is the one key that is not part
-of `config_hash`, so changing only the timeout never changes the node's
-`content_hash`.
+`continuo-runtime validate`/`merge`/`lint`. Like `owner`, `schedule`,
+`criticality` and `description`, it is outside the code projection that
+`config_hash` hashes, so changing it never changes the node's `content_hash`.
 
 ## Write modes
 
@@ -262,7 +290,7 @@ def run(ctx):
   example a polars DataFrame. Returning anything else raises `ScriptError`.
 - The dataframe library is your choice. No dataframe library is baked into
   the base image — the package's own runtime dependencies are `pyarrow`,
-  `PyYAML`, and `continuo-engine-contract`. Add whatever you script
+  `PyYAML`, `continuo-engine-contract` and `continuo-contracts`. Add whatever you script
   against (pandas, polars, …) as a `RUN pip install` line in your own
   `Dockerfile`, on top of the base image. The base image runs as non-root
   (uid 65532), which pip cannot install under, so switch to root for the
@@ -278,7 +306,18 @@ def run(ctx):
     read_sql as rs` then calling `rs(...)`),
   - private/protected attribute access (`obj._x`) — except on `self`/`cls`,
     so a script's own class-private helpers (`self._helper()`) aren't
-    flagged.
+    flagged,
+  - code the content hash cannot see. The hash folds the script and the files
+    it imports, found by reading imports, so a node that runs anything else
+    can change without its `content_hash` changing. Lint refuses `runpy`, a
+    change to `sys.path` (`append`, `insert`, assignment, `del`, and
+    `site.addsitedir`), a `sitecustomize` or `usercustomize` module (and a file
+    of that name), `compile()` and `types.FunctionType`, and `pickle.load`,
+    `pickle.loads` and `pickle.Unpickler`. `merge` applies the same rules to
+    every file in a node's import closure, and refuses a `sitecustomize.py` or
+    `usercustomize.py` at the repository root, which Python imports before the
+    harness starts. A file a script reads, such as a model or a lookup table,
+    belongs in the node's `assets`, where its bytes are hashed.
 
   The SQL-literal rule is best-effort: docstrings are exempt, but other
   prose may still occasionally match. The hard guarantees enforced by lint
@@ -317,7 +356,7 @@ declared `output_columns` on the table `run()` returned, in this order:
 
 ## Error taxonomy
 
-Every runtime failure is one of five `HarnessError` subclasses
+Every runtime failure is one of six `HarnessError` subclasses
 (`continuo_python_runtime/errors.py`). The sentinel result block's message
 is prefixed `<ErrorClass>: ` so failures can be triaged without parsing free
 text. The harness also logs the same message at ERROR on stderr, with the
@@ -328,6 +367,7 @@ the result block out of the log before storing it.
 | Class | Meaning | Typical fix target |
 | --- | --- | --- |
 | `ContractError` | Contract missing or invalid, node not found for `NODE_ID`, or the declared script is missing/unreachable. | The contract yaml or the `script:` path. |
+| `ImageContractMismatch` (a `ContractError`) | The image does not hold the contract, script, imports or assets the release hashed: the `content_hash` in `CONTENT_HASH` differs from the one the image's files give, or a file the release hashed is missing from the image. The block also carries `"reason":"image_contract_mismatch"`. | Rebuild the image from the released commit, with CI and the image on the same runtime. |
 | `ReadError` | `ctx.read()` was called with an undeclared name, or a declared read failed at the warehouse. | The `reads:` map, or the upstream query/warehouse access. |
 | `ScriptError` | `run()` raised, has no callable `run`, or returned a value that isn't Arrow-convertible. | The node script. |
 | `ConformError` | Structural mismatch (extra/missing/duplicate columns), a strict-cast failure, a not-null violation, a VARCHAR/CHAR overflow, or an `upsert` run whose rows repeat a primary key. | The script's output shape, or the `output_columns` declaration. |
@@ -381,6 +421,82 @@ A domain repo does not have to build `FROM` the published engine image.
 Both shapes end up running the same runtime and the same adapter version;
 which one you pick only changes who controls the base OS layer underneath
 them.
+
+## Seed preflight and view probe
+
+Two validation ops read the warehouse and change nothing. They run through the
+same runner image as the other validation ops (`VALIDATION_OP`), need no
+`DBT_TARGET_SCHEMA`, and print one result block as the last line of stdout.
+
+A seed reload drops and recreates the seed's production table. On an engine where
+a drop destroys the objects that read the table (`drop_semantics` `cascade`,
+postgres) that takes every view, function and constraint built on the seed with
+it, including objects continuo does not own. On an engine where those objects
+survive and fail on their next read (`late_binding`, trino and duckdb) they
+may go stale. `seed_preflight` lists what a reload would touch and compares it
+with what the operator has allowed or acknowledged; `probe_views` tries named
+views after a reload and says which no longer bind.
+
+`seed_preflight` runs in two places. `check` runs in the seed task's own pod just
+before dbt and stops the reload with exit 1 when the check concludes it must.
+`report` runs in the release's seed-build Job and only reports what a `check`
+would conclude; it exits 0 whatever it finds.
+
+### `seed_preflight` inputs
+
+| Variable | Meaning |
+|---|---|
+| `SEED_PREFLIGHT_MODE` | `check` or `report`. |
+| `SEED_PREFLIGHT_ENGINE_FAMILY` | `schema_bound` or `late_binding`, the family the release plan expects of the engine. |
+| `PROD_SCHEMA`, `TABLE_NAME` | The seed's production relation. |
+| `SEED_PREFLIGHT_ALLOWED`, `SEED_PREFLIGHT_ACKNOWLEDGED` | JSON arrays of `"<schema>.<name>"`, default `[]`. An object is allowed when `<schema>.<name>`, in lower case, is in either list (entries are trimmed and lower-cased). |
+| `NODE_ID` | Optional; the block's `unique_id`. Default `<PROD_SCHEMA>.<TABLE_NAME>`. |
+
+The adapter's own variables (`POSTGRES_*`, `TRINO_*`, ...) are needed as for any
+other op. An adapter's family is `schema_bound` when its `drop_semantics` is
+`cascade`, and `late_binding` when it is `late_binding`.
+
+### `seed_preflight` block
+
+After the standard keys (and `reason` when one applies): `op` (`seed_preflight`),
+`mode`, `checked` (the warehouse was asked and its listing came back), `engine_family` (as given),
+`drop_semantics` (the adapter's), `completeness` (`exact`, `best_effort`, or
+`none` when nothing was listed) and `dependents`, a list of
+`{schema, name, kind, owner, depth, allowed}` sorted by depth, schema and name.
+`status` is `error` for exit codes 1 and 2, and `failures` is 1 then.
+
+`reason` is what a `check` concludes. `report` prints the same `reason` on a
+`success` block.
+
+| Situation | `reason` | `check` | `report` |
+|---|---|---|---|
+| a missing or malformed input, no adapter, missing adapter env | none | exit 2 | exit 2 |
+| the adapter's family differs from `SEED_PREFLIGHT_ENGINE_FAMILY`, or it declares none | `engine_mismatch` | exit 1 | exit 0 |
+| the adapter cannot list dependents, `schema_bound` | `unowned_dependents` | exit 1 | exit 0 |
+| the adapter cannot list dependents, `late_binding` | none | exit 0 | exit 0 |
+| the connection fails | `warehouse_unreachable` | exit 1 | exit 0 |
+| the listing fails, `schema_bound` | none | exit 1 | exit 0 |
+| the listing fails, `late_binding` | none | exit 0 | exit 0 |
+| listed, `schema_bound`, an object is not allowed | `unowned_dependents` | exit 1 | exit 0 |
+| anything else listed (on `late_binding` the objects not allowed are external views that may go stale, named in `message`) | none | exit 0 | exit 0 |
+
+A seed table that does not exist yet has no dependents and passes. A stop's
+`message` starts with its `reason` and names each object outside the set as
+`<schema>.<name> (<kind>, owner <owner>)`.
+
+### `probe_views`
+
+`PROBE_VIEWS` is a JSON array of `"<schema>.<name>"`, split on the first dot;
+`NODE_ID` is optional (default `probe_views`). Each view is read with
+`SELECT * FROM "<schema>"."<name>" LIMIT 0`. The block has `op`
+(`probe_views`), `checked` (the warehouse was reachable) and `views`, a list of
+`{schema, name, ok, error}` in the order given, where `error` is the first line
+of the failure, at most 500 characters, and empty when `ok`. A view that fails
+its probe never fails the op: the exit code is 0, and `message` reads
+`<n> of <total> views failed: <names>`. A warehouse that cannot be reached gives
+exit 0, `checked` false, `views` empty and `reason` `warehouse_unreachable`.
+Only a missing or malformed input, no adapter, missing adapter env or an
+unexpected error is exit 2.
 
 ## Further reading
 

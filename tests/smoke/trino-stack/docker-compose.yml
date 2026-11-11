@@ -41,7 +41,10 @@ services:
       "
 
   iceberg-rest:
-    image: apache/iceberg-rest-fixture:latest
+    # Pinned to a release (multi-arch index digest) because the fixture's
+    # moving `latest` build stores a table name containing a space or `%`
+    # percent-encoded and so cannot rename that table.
+    image: apache/iceberg-rest-fixture:1.10.1@sha256:f7d679d30ac9c640bdeb2c015dff533cd3c8f1c7d491ebcb5d436f9a42db1d6f
     depends_on:
       createbuckets:
         condition: service_completed_successfully

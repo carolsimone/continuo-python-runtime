@@ -32,6 +32,7 @@ from continuo_engine_contract.port import (  # type: ignore[import-untyped]
 from continuo_engine_contract.result import result_block  # type: ignore[import-untyped]
 
 from continuo_python_runtime.conform import conform, to_arrow
+from continuo_python_runtime.content_check import check_image_contract
 from continuo_python_runtime.context import RunContext
 from continuo_python_runtime.contract.loader import load_contract_dir
 from continuo_python_runtime.contract.model import Node
@@ -345,6 +346,7 @@ def run_node(
         # Every other loader validation still runs at container start.
         nodes = load_contract_dir(contract_dir, check_reads=False)
         node = select_node(nodes, node_id)
+        check_image_contract(node, app_root, env)
 
         if adapter is not None:
             active_adapter = adapter
@@ -402,7 +404,11 @@ def run_node(
         )
         print(
             result_block(
-                "error", message=err.sentinel_message(), failures=1, unique_id=node_id
+                "error",
+                message=err.sentinel_message(),
+                failures=1,
+                unique_id=node_id,
+                reason=err.reason,
             )
         )
         return 1

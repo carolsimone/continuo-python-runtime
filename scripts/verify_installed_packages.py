@@ -49,6 +49,8 @@ ENGINES: dict[str, tuple[str, str, str, list[str]]] = {
     ),
 }
 FIRST_PARTY_PREFIX = "continuo-"
+# A separate project the runtime depends on, whose name shares the first-party prefix.
+THIRD_PARTY = frozenset({"continuo-contracts"})
 
 
 class Failure(Exception):
@@ -86,6 +88,7 @@ def check_only_expected_first_party(engine: str) -> None:
         _norm(d.metadata["Name"])
         for d in metadata.distributions()
         if _norm(d.metadata["Name"]).startswith(FIRST_PARTY_PREFIX)
+        and _norm(d.metadata["Name"]) not in THIRD_PARTY
     }
     expected = {"continuo-engine-contract", "continuo-python-runtime", adapter_dist}
     if installed != expected:

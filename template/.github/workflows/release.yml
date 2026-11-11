@@ -86,11 +86,36 @@ jobs:
             *) fail_with_response "reading $CONTINUO_ORIGIN/api/v1/current-prod" "$status" ;;
           esac
       - uses: actions/checkout@v4
+      # CI must hash with the runtime the image runs: the harness recomputes
+      # content_hash at start with its own runtime and fails the node on any
+      # difference. The version is the first runtime line's tag in the
+      # Dockerfile's FROM. A repository that builds with Dockerfile.pip replaces
+      # this step with one that reads the continuo-python-runtime==X.Y.Z pin of
+      # its requirements.lock and writes RUNTIME_VERSION the same way (the
+      # README's Shape 2 section has it).
+      # The image needs runtime 0.12.0 or later, the first to carry that check.
+      - name: Pin the runtime to the image
+        run: |
+          version="$(sed -nE 's#^FROM[[:space:]]+ghcr\.io/carolsimone/continuo-python-runtime-[a-z0-9]+:v([0-9]+\.[0-9]+\.[0-9]+)(@sha256:[0-9a-f]+)?[[:space:]]*$#\1#p' Dockerfile | head -n 1)"
+          if [ -z "$version" ]; then
+            echo "::error::Dockerfile has no FROM ghcr.io/carolsimone/continuo-python-runtime-<engine>:vX.Y.Z line, so CI cannot install the runtime the image runs"
+            exit 1
+          fi
+          echo "RUNTIME_VERSION=$version" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@v5
-      # PRECONDITION: continuo-python-runtime must be published to PyPI (this repo's release pipeline).
-      # Until then, install from git: uv tool install git+https://github.com/carolsimone/continuo-python-runtime
       - name: Install runtime tooling
-        run: uv tool install continuo-python-runtime
+        # `--color never` keeps forced-colour escapes out of the version line the
+        # sed reads. The listing is captured before the sed because the default
+        # shell has no pipefail: a failing `uv tool list` in a pipeline would be
+        # masked by the sed's exit status.
+        run: |
+          uv tool install "continuo-python-runtime==${RUNTIME_VERSION}"
+          listed="$(uv tool list --color never)"
+          installed="$(sed -n 's/^continuo-python-runtime v\([^ ]*\).*/\1/p' <<< "$listed")"
+          if [ "$installed" != "$RUNTIME_VERSION" ]; then
+            echo "::error::CI installed '${installed}', but the image runs continuo-python-runtime ${RUNTIME_VERSION}"
+            exit 1
+          fi
       # Fast feedback only: this only looks at scripts/. `continuo-runtime
       # merge` (below) independently lints the script plus its whole
       # in-repo import closure, so helpers outside scripts/ (e.g. lib/) are

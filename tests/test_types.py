@@ -1,3 +1,6 @@
+import json
+from importlib import resources
+
 import pyarrow as pa
 import pytest
 from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
@@ -135,3 +138,34 @@ def test_parse_sql_type_delegates_acceptance_to_contract(monkeypatch):
     monkeypatch.setattr(types_mod, "validate_column_type", fake_reject)
     with pytest.raises(ContractError, match="stubbed rejection"):
         types_mod.parse_sql_type("BIGINT")
+
+
+# continuo-contracts spells each SQL type for the hash, and parse_sql_type decides what the
+# loader accepts. The library's vectors hold the two together: a type the library refuses must
+# fail here, and a type it accepts must parse to the library's spelling.
+SQL_TYPE_VECTORS = json.loads(
+    resources.files("continuo_contracts").joinpath("vectors/sql_types.json").read_text(encoding="utf-8")
+)
+
+
+def _spelling(t: SqlType) -> str:
+    """A parsed type in the library's spelling: DOUBLE PRECISION with its space, numbers as plain integers."""
+    base = t.base.replace("_", " ")
+    if t.precision is not None:
+        return f"{base}({t.precision},{t.scale})"
+    if t.length is not None:
+        return f"{base}({t.length})"
+    return base
+
+
+def test_the_library_ships_accepted_and_refused_sql_types():
+    assert {case["canonical"] is None for case in SQL_TYPE_VECTORS} == {True, False}
+
+
+@pytest.mark.parametrize("case", SQL_TYPE_VECTORS, ids=lambda case: repr(case["raw"]))
+def test_the_runtime_types_match_the_library_sql_type_vectors(case):
+    if case["canonical"] is None:
+        with pytest.raises(ContractError):
+            parse_sql_type(case["raw"])
+    else:
+        assert _spelling(parse_sql_type(case["raw"])) == case["canonical"]

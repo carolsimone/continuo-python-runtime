@@ -73,6 +73,7 @@ injection-shaped. Every other grammar token (``BIGINT``, ``INT``, ``INTEGER``,
 import errno
 import logging
 import os
+import re
 import time
 import uuid
 
@@ -85,6 +86,9 @@ import pyarrow as pa  # type: ignore[import-untyped]
 from continuo_engine_contract.config import ensure_known_keys  # type: ignore[import-untyped]
 from continuo_engine_contract.port import (  # type: ignore[import-untyped]
     AppendCapable,
+    Dependent,
+    Dependents,
+    DependentsIntrospection,
     LiveColumn,
     UpsertCapable,
     WarehouseAdapter,
@@ -92,6 +96,9 @@ from continuo_engine_contract.port import (  # type: ignore[import-untyped]
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
 from continuo_engine_contract.types import validate_column_type  # type: ignore[import-untyped]
 
+import sqlglot
+import sqlglot.errors
+import sqlglot.expressions as exp
 import trino
 
 from trino.auth import BasicAuthentication
@@ -368,8 +375,85 @@ def _is_unreachable(exc: BaseException) -> bool:
     return False
 
 
-class TrinoAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
+def _names_a_visible_cte(reference: exp.Table, name: str) -> bool:
+    """Whether the unqualified table reference *reference* resolves to a CTE called *name*.
+
+    Walks from the reference up through the statement. A CTE's body sees the
+    CTEs defined before it in its own ``WITH`` (and itself, for ``WITH
+    RECURSIVE``), never a later one. A query carrying a ``WITH`` (a subquery
+    included) shows all of that ``WITH``'s CTEs to everything under it except
+    the ``WITH`` clause itself, whose CTEs follow the first rule.
+    """
+    child: exp.Expr = reference
+    node = reference.parent
+    while node is not None:
+        if isinstance(node, exp.With):
+            ctes = list(node.expressions)
+            position = next(i for i, cte in enumerate(ctes) if cte is child)
+            visible = ctes[: position + 1] if node.args.get("recursive") else ctes[:position]
+        else:
+            clause = node.args.get("with_")
+            visible = list(clause.expressions) if clause is not None and clause is not child else []
+        if any(cte.alias.lower() == name for cte in visible):
+            return True
+        child, node = node, node.parent
+    return False
+
+
+def _view_reads_table(
+    definition: str,
+    view_schema: str,
+    catalog: str,
+    schema: str,
+    table: str,
+    *,
+    view: str = "",
+) -> bool:
+    """Whether the SQL of the view ``view_schema.view`` reads ``catalog.schema.table``.
+
+    The definition is parsed as Trino SQL and every table reference in it is
+    compared with the table, in lower case: an unqualified reference is in the
+    view's own schema, a reference without a catalog is in *catalog* (the
+    adapter's), and an unqualified name that resolves to a CTE visible at the
+    reference (see ``_names_a_visible_cte``) is that CTE, not the table.
+
+    A definition that does not parse (or is empty) is searched for the table's
+    name as a whole identifier instead, case-insensitively, so a view is never
+    missed for being unreadable, and a WARNING names it. A definition that
+    parses to something other than a query reads nothing.
+    """
+    wanted = (catalog.lower(), schema.lower(), table.lower())
+    try:
+        statement = sqlglot.parse_one(definition, read="trino")
+    except sqlglot.errors.SqlglotError as exc:
+        logger.warning(
+            "cannot parse the definition of view %s.%s, matching the name %r as text: %s",
+            view_schema, view or "?", table, exc,
+        )
+        pattern = rf"(?<![\w$]){re.escape(table)}(?![\w$])"
+        return re.search(pattern, definition, re.IGNORECASE) is not None
+    if not isinstance(statement, exp.Query):
+        return False
+    for reference in statement.find_all(exp.Table):
+        if not isinstance(reference.this, exp.Identifier):
+            continue
+        name = reference.name.lower()
+        if not reference.db and _names_a_visible_cte(reference, name):
+            continue
+        found = (
+            (reference.catalog or catalog).lower(),
+            (reference.db or view_schema).lower(),
+            name,
+        )
+        if found == wanted:
+            return True
+    return False
+
+
+class TrinoAdapter(WarehouseAdapter, AppendCapable, UpsertCapable, DependentsIntrospection):
     """WarehouseAdapter speaking Trino (Iceberg connector) over the trino DBAPI."""
+
+    drop_semantics = "late_binding"
 
     def __init__(self, conn: "trino.dbapi.Connection", catalog: str) -> None:
         self._conn = conn
@@ -478,6 +562,32 @@ class TrinoAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
             return list(cur.fetchall())
         finally:
             cur.close()
+
+    def dependents(self, schema: str, table: str) -> Dependents:
+        """The views whose SQL reads ``schema.table``, found by scanning every view definition.
+
+        One query reads ``information_schema.views`` of the adapter's catalog,
+        and each view whose definition names the table (see
+        ``_view_reads_table``) is listed at depth 1 with no owner, since Trino
+        records none there. The listing is ``best_effort``: it misses a view
+        that builds its SQL dynamically, a view in another catalog, and a view
+        that reads the table only through another view. A missing table or
+        schema gives no objects.
+        """
+        rows = self._execute(
+            "SELECT table_schema, table_name, view_definition "
+            f"FROM {_quote(self._catalog)}.information_schema.views"
+        )
+        return Dependents(
+            objects=tuple(
+                Dependent(view_schema, view_name, "view", "", 1)
+                for view_schema, view_name, definition in rows
+                if _view_reads_table(
+                    definition or "", view_schema, self._catalog, schema, table, view=view_name
+                )
+            ),
+            completeness="best_effort",
+        )
 
     def _schema_exists(self, schema: str) -> bool:
         rows = self._execute(f"SHOW SCHEMAS FROM {_quote(self._catalog)}")

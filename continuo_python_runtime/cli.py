@@ -4,6 +4,7 @@ import argparse
 import logging
 import os
 import sys
+from importlib import metadata
 from pathlib import Path
 
 from continuo_python_runtime.contract.loader import load_contract_dir
@@ -28,6 +29,11 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     parser = argparse.ArgumentParser(prog="continuo-runtime")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"continuo-runtime {metadata.version('continuo-python-runtime')}",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     dialect_help = (

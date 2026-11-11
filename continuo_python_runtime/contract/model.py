@@ -46,6 +46,7 @@ class Node:
     mode_type: str = DEFAULT_MODE_TYPE
     primary_key: tuple[str, ...] = ()
     timeout_minutes: int | None = None
+    assets: tuple[str, ...] = ()
 
     @property
     def relation(self) -> str:

@@ -1,4 +1,4 @@
-# Shared wire-contract fixture for python node write modes.
+# Shared wire-contract fixture for python node write modes and assets.
 # Canonical wire entries as the runtime's node_entry() emits them, WITHOUT the
 # four hash fields (source_hash, shared_code_hash, config_hash, content_hash).
 # Twin copies, kept byte-identical:
@@ -51,3 +51,18 @@ nodes:
     config: {}
     mode_type: upsert
     primary_key: [rate_date, base]
+  - schema: fixture
+    table: assets_node
+    owner: data-team
+    schedule: hourly
+    criticality: SECONDARY
+    kind: python-node
+    script: scripts/assets_node.py
+    reads:
+      src: SELECT id FROM fixture.src
+    output_columns:
+      - {name: id, type: "BIGINT", nullable: false}
+    description: ""
+    extra_columns: raise
+    config: {}
+    assets: [data/ref.json]

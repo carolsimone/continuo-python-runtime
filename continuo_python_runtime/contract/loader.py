@@ -7,13 +7,14 @@ structural or semantic violation.
 
 from __future__ import annotations
 
-from pathlib import Path
+import re
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
 from sqlglot import Dialect
 
-from continuo_python_runtime.contract.kinds import rules_for
+from continuo_python_runtime.contract.kinds import KindRules, rules_for
 from continuo_python_runtime.contract.model import (
     CRITICALITIES,
     DEFAULT_KIND,
@@ -45,6 +46,7 @@ _ALLOWED_KEYS = {
     "mode_type",
     "primary_key",
     "timeout_minutes",
+    "assets",
 }
 
 # Bounds of a node's declared task timeout, in minutes (one minute to one week).
@@ -210,6 +212,52 @@ def _validate_primary_key(
     return tuple(raw_key)
 
 
+_DRIVE_PATH = re.compile(r"^[A-Za-z]:")
+
+
+def _validate_assets(
+    raw: dict[str, Any], rules: KindRules, kind: str, label: str
+) -> tuple[str, ...]:
+    """Validate ``assets``: repo-relative paths of the files a script reads.
+
+    A kind without a script has nothing that reads a file, so it refuses the
+    key. Each path is written with forward slashes, relative to the repository
+    root and without a ``..`` segment; it is normalised (``./data//ref.json``
+    is ``data/ref.json``) and keeps its declared position. A repeat after
+    normalising is refused. Whether the file exists is checked where a
+    repository root is known.
+    """
+    if "assets" not in raw:
+        return ()
+    if not rules.assets_allowed:
+        raise ContractError(
+            f"{label}: 'assets' is not allowed for kind {kind} (it has no script to read files)"
+        )
+    raw_assets = raw["assets"]
+    if not isinstance(raw_assets, list):
+        raise ContractError(f"{label}: 'assets' must be a list of repository-relative paths")
+    assets: list[str] = []
+    for entry in raw_assets:
+        if not isinstance(entry, str) or not entry.strip():
+            raise ContractError(f"{label}: 'assets' entry {entry!r} must be a non-empty string")
+        if "\\" in entry:
+            raise ContractError(f"{label}: 'assets' entry {entry!r} must use forward slashes")
+        path = PurePosixPath(entry)
+        if path.is_absolute() or _DRIVE_PATH.match(entry):
+            raise ContractError(
+                f"{label}: 'assets' entry {entry!r} must be relative to the repository root"
+            )
+        if ".." in path.parts:
+            raise ContractError(f"{label}: 'assets' entry {entry!r} must not contain '..'")
+        normalised = path.as_posix()
+        if normalised == ".":
+            raise ContractError(f"{label}: 'assets' entry {entry!r} must name a file")
+        if normalised in assets:
+            raise ContractError(f"{label}: 'assets' names {normalised!r} more than once")
+        assets.append(normalised)
+    return tuple(assets)
+
+
 def parse_node(
     raw: dict[str, Any],
     source: str,
@@ -362,6 +410,7 @@ def parse_node(
         columns.append(Column(name=name, type=col_type, nullable=nullable))
 
     primary_key = _validate_primary_key(raw, mode_type, columns, label)
+    assets = _validate_assets(raw, rules, kind, label)
 
     description = raw.get("description", "")
     if not isinstance(description, str):
@@ -391,6 +440,7 @@ def parse_node(
         mode_type=mode_type,
         primary_key=primary_key,
         timeout_minutes=timeout_minutes,
+        assets=assets,
     )
 
 

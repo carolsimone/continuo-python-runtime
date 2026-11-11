@@ -36,3 +36,36 @@ def resolve_script_path(script: str, repo_root: Path, *, context: str) -> Path:
         raise ContractError(f"{context}: script not found: {script}")
 
     return script_path
+
+
+def resolve_asset_path(asset: str, repo_root: Path, *, context: str) -> Path:
+    """Resolve ``asset`` (relative to ``repo_root``) and validate it.
+
+    Rejects absolute paths, paths that escape ``repo_root`` once symlinks
+    resolve, paths that do not exist and paths that are not a regular file.
+
+    Args:
+        asset: The asset path as declared in the contract, relative to
+            ``repo_root``.
+        repo_root: The repository root the asset path is resolved against.
+        context: A label prefixed to every error message (e.g. a node's
+            relation) to identify which node's asset failed.
+
+    Raises:
+        ContractError: If the path is absolute, escapes the repository root,
+            does not exist or is not a file.
+    """
+    if Path(asset).is_absolute():
+        raise ContractError(
+            f"{context}: asset path {asset!r} must be relative to the repository root"
+        )
+
+    asset_path = (repo_root / asset).resolve()
+    if not asset_path.is_relative_to(repo_root.resolve()):
+        raise ContractError(f"{context}: asset path {asset!r} escapes the repository root")
+    if not asset_path.exists():
+        raise ContractError(f"{context}: asset not found: {asset}")
+    if not asset_path.is_file():
+        raise ContractError(f"{context}: asset {asset!r} is not a file")
+
+    return asset_path

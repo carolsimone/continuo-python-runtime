@@ -17,6 +17,7 @@ from continuo_engine_contract.testing.conformance import (
     NAMES,
     AppendConformance,
     ConformanceBase,
+    DependentsConformance,
     IntrospectionConformance,
     StartupConformance,
     UpsertConformance,
@@ -80,6 +81,10 @@ class TestPostgresAppend(AppendConformance):
 
 
 class TestPostgresUpsert(UpsertConformance):
+    pass
+
+
+class TestPostgresDependents(DependentsConformance):
     pass
 
 

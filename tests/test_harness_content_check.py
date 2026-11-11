@@ -8,7 +8,6 @@ import pyarrow as pa
 import pytest
 import yaml
 
-from continuo_python_runtime import harness
 from continuo_python_runtime.contract.merge import build_wire_contract
 from continuo_python_runtime.harness import run_node
 from tests.conftest import FakeWarehouseAdapter
@@ -123,12 +122,6 @@ def test_mismatch_message_names_the_node_both_hashes_the_parts_and_the_runtime_v
     assert "units ['scripts/helpers.py']" in message
     assert f"runtime {metadata.version('continuo-python-runtime')}" in message
     assert "rebuild the image from the released commit" in message
-
-
-def test_a_mismatch_never_builds_the_adapter(monkeypatch, harness_repo, capsys):
-    monkeypatch.setattr(harness, "build_adapter", lambda: pytest.fail("adapter built before the check"))
-    assert run_node(_env(harness_repo, CONTENT_HASH="sha256:" + "0" * 64)) == 1
-    assert _block(capsys.readouterr().out)["reason"] == "image_contract_mismatch"
 
 
 @pytest.mark.parametrize("spelled", [

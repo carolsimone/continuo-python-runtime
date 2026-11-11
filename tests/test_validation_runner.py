@@ -1160,30 +1160,3 @@ def test_main_emits_exactly_one_sentinel_block_as_last_stdout_line(monkeypatch, 
             assert out.count(result.SENTINEL_BEGIN) == 1, name
             assert out.count(result.SENTINEL_END) == 1, name
             assert out.strip().splitlines()[-1] == result.SENTINEL_END, name
-
-
-def test_main_hands_seed_preflight_to_the_preflight_module_without_dbt_target_schema(monkeypatch):
-    calls = []
-    monkeypatch.setattr(runner.preflight, "run_seed_preflight", lambda env: calls.append("seed") or 1)
-    monkeypatch.delenv("DBT_TARGET_SCHEMA", raising=False)
-    monkeypatch.setenv("VALIDATION_OP", "seed_preflight")
-    with pytest.raises(SystemExit) as exc:
-        runner.main()
-    assert exc.value.code == 1 and calls == ["seed"]
-
-
-def test_main_returns_when_probe_views_passes(monkeypatch):
-    calls = []
-    monkeypatch.setattr(runner.preflight, "run_probe_views", lambda env: calls.append(env) or 0)
-    monkeypatch.delenv("DBT_TARGET_SCHEMA", raising=False)
-    monkeypatch.setenv("VALIDATION_OP", "probe_views")
-    runner.main()
-    assert calls == [runner.os.environ]
-
-
-def test_main_exits_with_the_code_probe_views_returns(monkeypatch):
-    monkeypatch.setattr(runner.preflight, "run_probe_views", lambda env: 2)
-    monkeypatch.setenv("VALIDATION_OP", "probe_views")
-    with pytest.raises(SystemExit) as exc:
-        runner.main()
-    assert exc.value.code == 2

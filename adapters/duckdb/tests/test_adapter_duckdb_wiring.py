@@ -12,6 +12,10 @@ def test_required_env_names_connection_vars():
     ]
 
 
+def test_dropping_a_table_leaves_its_dependents_reading_a_missing_table():
+    assert DuckDBAdapter.drop_semantics == "late_binding"
+
+
 def test_entry_point_registered_and_loads_adapter():
     eps = [ep for ep in entry_points(group="continuo_engine.adapters") if ep.name == "duckdb"]
     assert len(eps) == 1

@@ -371,6 +371,8 @@ def _is_unreachable(exc: BaseException) -> bool:
 class TrinoAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
     """WarehouseAdapter speaking Trino (Iceberg connector) over the trino DBAPI."""
 
+    drop_semantics = "late_binding"
+
     def __init__(self, conn: "trino.dbapi.Connection", catalog: str) -> None:
         self._conn = conn
         self._catalog = catalog

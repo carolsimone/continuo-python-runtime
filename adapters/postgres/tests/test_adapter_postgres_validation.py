@@ -17,6 +17,10 @@ def test_required_env_names_connection_vars():
     ]
 
 
+def test_dropping_a_table_cascades_to_its_dependents():
+    assert PostgresAdapter.drop_semantics == "cascade"
+
+
 def test_build_empty_from_columns_rejects_bad_type_before_touching_db() -> None:
     """Test that a malformed type string is rejected before any DB access."""
     adapter = PostgresAdapter.__new__(PostgresAdapter)  # no connection needed

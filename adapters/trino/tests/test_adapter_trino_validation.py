@@ -20,6 +20,10 @@ def test_required_env_names_host_and_catalog():
     assert TrinoAdapter.required_env() == ["TRINO_HOST", "TRINO_CATALOG"]
 
 
+def test_dropping_a_table_leaves_its_dependents_reading_a_missing_table():
+    assert TrinoAdapter.drop_semantics == "late_binding"
+
+
 def test_quote_rejects_empty_identifier() -> None:
     """Test that an empty identifier raises instead of quoting to an empty pair of quotes."""
     with pytest.raises(ValueError):

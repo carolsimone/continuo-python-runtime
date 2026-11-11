@@ -48,6 +48,8 @@ def _address():
 class _RetryingWarehouse:
     """Connects in from_env and retries a refused connection: what the suite requires."""
 
+    drop_semantics = "late_binding"
+
     def __init__(self, sock):
         self._sock = sock
 
@@ -88,6 +90,10 @@ class _LazyWarehouse(_RetryingWarehouse):
         return cls(None)
 
 
+class _UndeclaredDropSemanticsWarehouse(_RetryingWarehouse):
+    drop_semantics = "tombstone"
+
+
 def _from_env_of(adapter_cls, monkeypatch):
     def build(host, port):
         monkeypatch.setenv("REFERENCE_HOST", host)
@@ -119,6 +125,13 @@ def test_the_suite_catches_an_adapter_that_connects_lazily_without_retrying(
     with pytest.raises(ConnectionRefusedError):
         StartupConformance().test_from_env_waits_out_a_warehouse_that_refuses_at_first(
             warehouse_address, _from_env_of(_LazyWarehouse, monkeypatch)
+        )
+
+
+def test_the_suite_catches_an_adapter_with_an_unknown_drop_semantics(warehouse_address, monkeypatch):
+    with pytest.raises(AssertionError, match="tombstone"):
+        StartupConformance().test_declares_a_drop_semantics(
+            warehouse_address, _from_env_of(_UndeclaredDropSemanticsWarehouse, monkeypatch)
         )
 
 

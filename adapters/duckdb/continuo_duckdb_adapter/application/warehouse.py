@@ -50,6 +50,8 @@ def _columns(raw: list[dict]) -> list[ColumnDefinition]:
 class LakeWarehouse(WarehouseAdapter, AppendCapable, UpsertCapable):
     """WarehouseAdapter implemented over a LakeGateway."""
 
+    drop_semantics = "late_binding"
+
     def __init__(
         self, gateway: LakeGateway, *, sleep: Callable[[float], None] = time.sleep
     ) -> None:

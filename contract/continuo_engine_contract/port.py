@@ -13,6 +13,13 @@ Writing modes beyond replace are opt-in capabilities an adapter declares by
 inheritance (``TableIntrospection``, ``AppendCapable``, ``UpsertCapable``): an
 adapter that declares none still runs every ``replace`` node, and one that
 declares a capability must implement all of it to be instantiated.
+``DependentsIntrospection`` is a further opt-in capability: it lists the objects
+a drop of a table would destroy or leave reading a missing table.
+
+Every adapter also declares ``drop_semantics``: what dropping a table does to
+the objects that read it. It decides the seed reload rules continuo applies: a
+drop that destroys the dependants (``cascade``), or one that leaves them reading
+a missing table (``late_binding``).
 
 Both roles are served by the same connection to the same warehouse, so they are
 one implementation per engine rather than two. Engine packages register a single
@@ -25,11 +32,23 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib.metadata import entry_points
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from continuo_engine_contract.keys import ensure_unique_key
 
 ENTRY_POINT_GROUP = "continuo_engine.adapters"
+
+DropSemantics = Literal["cascade", "late_binding"]
+DROP_SEMANTICS: frozenset[str] = frozenset({"cascade", "late_binding"})
+
+# How far a dependents listing can be trusted: ``exact`` lists every object a
+# drop would affect, ``best_effort`` may miss some the engine cannot report.
+COMPLETENESS: frozenset[str] = frozenset({"exact", "best_effort"})
+
+DEPENDENT_KINDS: frozenset[str] = frozenset({
+    "view", "materialized_view", "table", "function", "procedure",
+    "constraint", "policy", "rule", "other",
+})
 
 if TYPE_CHECKING:  # pragma: no cover
     import pyarrow  # type: ignore[import-untyped]
@@ -48,7 +67,13 @@ class WarehouseAdapter(ABC):
     rather than printing them, must never write to stdout, and must never emit
     the ``===CONTINUO_VALIDATION_RESULT_BEGIN/END===`` marker strings
     themselves.
+
+    ``drop_semantics`` is declared by every concrete adapter (there is no
+    default): ``"cascade"`` when dropping a table also destroys the objects that
+    read it, ``"late_binding"`` when they survive and fail on their next read.
     """
+
+    drop_semantics: ClassVar[DropSemantics]
 
     @classmethod
     @abstractmethod
@@ -258,6 +283,50 @@ class UpsertCapable(TableIntrospection):
 
         All rows or none; a 0-row *data* writes nothing. When every column is
         in the key there is nothing to overwrite: insert only the new keys.
+        """
+
+
+@dataclass(frozen=True)
+class Dependent:
+    """One object that reads a table: *schema*.*name* of *kind*, *owner* its engine owner.
+
+    *depth* is 1 for an object that reads the table directly, 2 for one that
+    reads a depth-1 object, and so on.
+    """
+
+    schema: str
+    name: str
+    kind: str
+    owner: str
+    depth: int
+
+
+@dataclass(frozen=True)
+class Dependents:
+    """The objects a drop would affect, with how far the listing can be trusted.
+
+    *kind* values come from ``DEPENDENT_KINDS`` and *completeness* from
+    ``COMPLETENESS``.
+    """
+
+    objects: tuple[Dependent, ...]
+    completeness: str
+
+
+class DependentsIntrospection(ABC):
+    """Lists the objects that read a table.
+
+    Declare it by inheritance, e.g. ``class MyAdapter(WarehouseAdapter,
+    DependentsIntrospection)``.
+    """
+
+    @abstractmethod
+    def dependents(self, schema: str, table: str) -> Dependents:
+        """Every object a drop of ``schema.table`` would destroy or leave reading a missing table.
+
+        Only objects that read exactly this table are listed, never one that
+        reads a table whose name merely starts with it. A missing table or
+        schema gives no objects and never raises.
         """
 
 

@@ -9,23 +9,31 @@ import pytest
 
 from continuo_engine_contract.port import (
     AppendCapable,
+    Dependent,
+    Dependents,
+    DependentsIntrospection,
     LiveColumn,
     UpsertCapable,
     WarehouseAdapter,
 )
 from continuo_engine_contract.testing.conformance import (
     AppendConformance,
+    DependentsConformance,
     IntrospectionConformance,
     UpsertConformance,
     canonical,
 )
 
 
-class _MemoryWarehouse(WarehouseAdapter, AppendCapable, UpsertCapable):
+class _MemoryWarehouse(WarehouseAdapter, AppendCapable, UpsertCapable, DependentsIntrospection):
     """A reference adapter over Python lists: NOT NULL enforced, every write all-or-nothing."""
+
+    drop_semantics = "late_binding"
 
     def __init__(self):
         self.tables: dict[tuple[str, str], dict] = {}
+        # view (schema, name) -> the table (schema, name) it reads
+        self.views: dict[tuple[str, str], tuple[str, str]] = {}
 
     @classmethod
     def required_env(cls):
@@ -41,6 +49,18 @@ class _MemoryWarehouse(WarehouseAdapter, AppendCapable, UpsertCapable):
     def drop_schema(self, schema):
         for key in [key for key in self.tables if key[0] == schema]:
             del self.tables[key]
+        for key in [key for key in self.views if key[0] == schema]:
+            del self.views[key]
+
+    def dependents(self, schema, table):
+        return Dependents(
+            tuple(
+                Dependent(view_schema, view, "view", "memory", 1)
+                for (view_schema, view), source in self.views.items()
+                if source == (schema, table)
+            ),
+            "exact",
+        )
 
     def build_empty_from_sql(self, schema, table, compiled_sql):
         ...
@@ -124,6 +144,9 @@ class _ReadsMemory:
         rows = adapter.tables[(schema, table)]["rows"]
         return canonical(tuple(row[name] for name in names) for row in rows)
 
+    def create_view(self, adapter, view_schema, view, table_schema, table):
+        adapter.views[(view_schema, view)] = (table_schema, table)
+
 
 @pytest.fixture
 def adapter():
@@ -148,6 +171,24 @@ class TestMemoryUpsert(_ReadsMemory, UpsertConformance):
     pass
 
 
+class TestMemoryDependents(_ReadsMemory, DependentsConformance):
+    pass
+
+
+class _PrefixMatchingWarehouse(_MemoryWarehouse):
+    """Lists a view whose table name merely starts with the one asked."""
+
+    def dependents(self, schema, table):
+        return Dependents(tuple(
+            Dependent(vs, v, "view", "memory", 1)
+            for (vs, v), (ts, t) in self.views.items() if ts == schema and t.startswith(table)
+        ), "exact")
+
+
+class _MemoryDependentsCase(_ReadsMemory, DependentsConformance):
+    pass
+
+
 class _MemoryAppendCase(_ReadsMemory, AppendConformance):
     pass
 
@@ -166,3 +207,9 @@ def test_the_suite_catches_an_upsert_that_loses_other_rows():
         _MemoryUpsertCase().test_upsert_overwrites_existing_keys_and_leaves_other_rows_untouched(
             _ReplacingUpsertWarehouse(), "conf"
         )
+
+
+def test_the_suite_catches_a_scan_that_matches_name_prefixes():
+    with pytest.raises(AssertionError, match="extends"):
+        _MemoryDependentsCase().test_dependents_ignores_a_view_of_a_table_whose_name_extends_this_one(
+            _PrefixMatchingWarehouse(), "conf")

@@ -7,6 +7,18 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Every engine adapter declares `drop_semantics`, what dropping a table does
+  to the objects that read it: `"cascade"` (they are destroyed) or
+  `"late_binding"` (they survive and fail on their next read). The postgres
+  adapter declares `cascade`, the trino and duckdb adapters `late_binding`.
+  `StartupConformance` has a new case, `test_declares_a_drop_semantics`.
+- `continuo_engine_contract.port` has an opt-in capability,
+  `DependentsIntrospection`, with `Dependent` and `Dependents` and the
+  vocabularies `DROP_SEMANTICS`, `COMPLETENESS` and `DEPENDENT_KINDS`. Its one
+  method, `dependents(schema, table)`, lists every object a drop of the table
+  would destroy or leave reading a missing table, and gives none for a missing
+  table or schema. The conformance class `DependentsConformance` checks it,
+  with an overridable `create_view` hook.
 - `continuo-runtime --version` prints `continuo-runtime <version>` to stdout and
   exits 0. The template's `release.yml` has a "Pin the runtime to the image"
   step that reads the version from the Dockerfile's
@@ -40,6 +52,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Breaking for adapter authors.** `WarehouseAdapter.drop_semantics` is a
+  required declaration with no default: an adapter that does not set it fails
+  `StartupConformance.test_declares_a_drop_semantics`.
 - A node's hashes come from continuo-contracts 0.1.0, the library
   continuo's topology-controller uses too, so CI and continuo compute the
   same values. `config_hash` hashes the node's code projection: `owner`,

@@ -17,7 +17,11 @@ import pytest
 from continuo_engine_contract.keys import DuplicateKeyError
 from continuo_engine_contract.port import (
     ENTRY_POINT_GROUP,
+    COMPLETENESS,
+    DEPENDENT_KINDS,
+    DROP_SEMANTICS,
     AppendCapable,
+    DependentsIntrospection,
     LiveColumn,
     TableIntrospection,
     UpsertCapable,
@@ -467,3 +471,14 @@ def test_discover_wraps_adapter_import_failure(tmp_path):
     )
     assert out.startswith("ERR")
     assert "failed to load adapter entry point" in out
+
+
+def test_the_dependents_capability_declares_exactly_its_own_abstract_method():
+    assert DependentsIntrospection.__abstractmethods__ == frozenset({"dependents"})
+
+
+def test_the_vocabularies_are_the_designs():
+    assert DROP_SEMANTICS == frozenset({"cascade", "late_binding"})
+    assert COMPLETENESS == frozenset({"exact", "best_effort"})
+    assert DEPENDENT_KINDS == frozenset({"view", "materialized_view", "table", "function", "procedure",
+                                         "constraint", "policy", "rule", "other"})

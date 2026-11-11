@@ -446,6 +446,8 @@ def _arrow_table_from_rows(colnames: list[str], rows: list[tuple[Any, ...]]) -> 
 class PostgresAdapter(WarehouseAdapter, AppendCapable, UpsertCapable):
     """WarehouseAdapter speaking postgres over a psycopg2 connection."""
 
+    drop_semantics = "cascade"
+
     def __init__(self, conn: "psycopg2.extensions.connection") -> None:
         self._conn = conn
         self._conn.autocommit = True

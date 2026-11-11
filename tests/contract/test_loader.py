@@ -897,3 +897,47 @@ def test_timeout_minutes_defaults_to_none():
 def test_a_bad_timeout_minutes_is_refused(bad):
     with pytest.raises(ContractError, match=r"f\.yml \(analytics\.t\): 'timeout_minutes'"):
         parse_node({**VALID, "timeout_minutes": bad}, "f.yml")
+
+
+CSV = {
+    "schema": "analytics", "table": "c", "owner": "o", "schedule": "daily", "criticality": "SECONDARY",
+    "kind": "python-csv", "reads": {"csv": "s3://bucket/key.csv"},
+    "output_columns": [{"name": "id", "type": "INTEGER"}],
+}
+
+
+def test_assets_are_normalised_repo_relative_paths():
+    node = parse_node({**VALID, "assets": ["./data//ref.json", "lib/model.bin"]}, "f.yml")
+    assert node.assets == ("data/ref.json", "lib/model.bin")
+
+
+def test_an_empty_assets_list_is_no_assets():
+    assert parse_node({**VALID, "assets": []}, "f.yml").assets == ()
+
+
+@pytest.mark.parametrize(("bad", "match"), [
+    ("data/ref.json", "must be a list"),
+    ([""], "non-empty string"),
+    ([3], "non-empty string"),
+    (["/etc/passwd"], "relative to the repository root"),
+    (["C:/data/ref.json"], "relative to the repository root"),
+    (["../secrets.json"], r"must not contain '\.\.'"),
+    (["data/../../x"], r"must not contain '\.\.'"),
+    (["data\\ref.json"], "forward slashes"),
+    (["."], "must name a file"),
+    (["data/ref.json", "./data/ref.json"], "more than once"),
+])
+def test_bad_assets_are_refused(bad, match):
+    with pytest.raises(ContractError, match=match):
+        parse_node({**VALID, "assets": bad}, "f.yml")
+
+
+def test_assets_are_refused_on_a_csv_node():
+    with pytest.raises(ContractError, match="'assets' is not allowed for kind python-csv"):
+        parse_node({**CSV, "assets": ["data/ref.json"]}, "f.yml")
+
+
+def test_assets_are_accepted_on_a_python_api_node():
+    api = {**VALID, "kind": "python-api", "assets": ["data/ref.json"]}
+    del api["reads"]
+    assert parse_node(api, "f.yml").assets == ("data/ref.json",)

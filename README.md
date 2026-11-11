@@ -176,6 +176,29 @@ produced, never how it is checked or written.
   script reads with `os.environ[...]`. The contract never holds a secret value
   or env var name; the Secret itself is created in the cluster by the operator.
 
+### Files a script reads (`assets`)
+
+A `python-node` or `python-api` script that reads a file from the repository
+(a model, a lookup table, a JSON config) lists it under `assets:`, one path
+relative to the repository root per entry, written with forward slashes and
+without a `..` segment:
+
+```yaml
+- schema: analytics
+  table: scored_orders
+  kind: python-node
+  script: scripts/scored_orders.py
+  assets: [data/rates.json, models/scorer.bin]
+```
+
+`merge` reads each listed file and folds its bytes into `shared_code_hash`
+under its path, so editing one changes the node's `content_hash` and starts a
+validation. A path that is also an import of the script is one unit. `merge`
+fails with a `ContractError` for a path that is missing, is not a file or
+resolves outside the repository, and a path listed twice is refused. The image
+must `COPY` the files, because `assets` only tells the hash about them. A
+`python-csv` node has no script, so `assets` is refused on it.
+
 ### Task timeout
 
 Any node may set `timeout_minutes:` — an integer from 1 to 10,080 (one week) —

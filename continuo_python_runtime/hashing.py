@@ -36,10 +36,7 @@ def source_hash(primary: bytes) -> str:
 
 
 def to_python_node(node: Node) -> PythonNode:
-    """The library's view of *node*: the fields its code projection is made of.
-
-    ``assets`` is empty: the loader has no ``assets`` key yet.
-    """
+    """The library's view of *node*: the fields its code projection is made of."""
     return PythonNode(
         schema=node.schema,
         table=node.table,
@@ -55,7 +52,7 @@ def to_python_node(node: Node) -> PythonNode:
         secret_ref=node.secret_ref,
         mode_type=node.mode_type,
         primary_key=tuple(node.primary_key),
-        assets=(),
+        assets=node.assets,
     )
 
 

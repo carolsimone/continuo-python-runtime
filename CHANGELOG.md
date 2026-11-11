@@ -5,6 +5,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `assets:` on a `python-node` or `python-api` node lists the repository files
+  its script reads. `merge` folds their bytes into `shared_code_hash`, so
+  editing one changes the node's `content_hash`, and writes `assets` on the
+  wire entry when a node declares any. A missing path, a non-file or a path
+  that resolves outside the repository fails `merge`; `python-csv` refuses the
+  key. The image must `COPY` the files.
+
 ### Changed
 
 - A node's hashes come from continuo-contracts 0.1.0, the library

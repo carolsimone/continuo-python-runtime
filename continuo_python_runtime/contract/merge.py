@@ -19,8 +19,9 @@ def node_entry(node: Node) -> dict:
     dicts. The entry carries no hash fields: build_wire_contract adds all
     four (source_hash, shared_code_hash, config_hash, content_hash). The
     nullable field is always present in output_columns. ``secret_ref``,
-    ``mode_type`` and ``primary_key`` appear only when they differ from their
-    default, so the entry of a node that does not use them stays minimal.
+    ``mode_type``, ``primary_key`` and ``assets`` appear only when they differ
+    from their default, so the entry of a node that does not use them stays
+    minimal.
     """
     entry = {
         "schema": node.schema,
@@ -52,6 +53,8 @@ def node_entry(node: Node) -> dict:
         entry["mode_type"] = node.mode_type
     if node.mode_type == "upsert":
         entry["primary_key"] = list(node.primary_key)
+    if node.assets:
+        entry["assets"] = list(node.assets)
     return entry
 
 

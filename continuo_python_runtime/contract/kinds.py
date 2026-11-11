@@ -112,14 +112,22 @@ class KindRules:
     # The write modes a node of this kind may declare. A new kind gets replace
     # only unless its entry opts into more.
     mode_types: frozenset[str] = frozenset({DEFAULT_MODE_TYPE})
+    # Whether a node of this kind may list the repository files its script reads.
+    assets_allowed: bool = False
 
 
 RULES: dict[str, KindRules] = {
-    "python-node": KindRules(script_required=True, reads=SqlReads(), mode_types=MODE_TYPES),
+    "python-node": KindRules(
+        script_required=True, reads=SqlReads(), mode_types=MODE_TYPES, assets_allowed=True
+    ),
     # A csv drop is a snapshot of its source: replace only (spec D2).
     "python-csv": KindRules(script_required=False, reads=CsvRead()),
     "python-api": KindRules(
-        script_required=True, reads=NoReads(), secret_allowed=True, mode_types=MODE_TYPES
+        script_required=True,
+        reads=NoReads(),
+        secret_allowed=True,
+        mode_types=MODE_TYPES,
+        assets_allowed=True,
     ),
 }
 

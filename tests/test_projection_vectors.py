@@ -23,15 +23,11 @@ def _authored(node: dict) -> dict:
     return authored
 
 
-# Vectors that declare assets run once the loader accepts them (Task 2 removes this filter).
-RUNNABLE = [vector for vector in VECTORS if not vector["node"].get("assets")]
-
-
 def test_the_library_ships_a_vector_for_every_kind():
     assert {v["node"].get("kind", "python-node") for v in VECTORS} == {"python-node", "python-csv", "python-api"}
 
 
-@pytest.mark.parametrize("vector", RUNNABLE, ids=lambda vector: vector["name"])
+@pytest.mark.parametrize("vector", VECTORS, ids=lambda vector: vector["name"])
 def test_the_runtime_reproduces_each_projection_vector(vector):
     node = parse_node(_authored(vector["node"]), vector["name"], check_reads=False)
     assert json.loads(json.dumps(code_projection(to_python_node(node)))) == vector["projection"]

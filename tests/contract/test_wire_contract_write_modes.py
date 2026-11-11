@@ -45,6 +45,10 @@ def test_fixture_covers_every_mode_and_a_key():
     assert [e["primary_key"] for e in entries if "primary_key" in e] == [["rate_date", "base"]]
 
 
+def test_fixture_covers_assets():
+    assert [e["assets"] for e in _fixture_nodes() if "assets" in e] == [["data/ref.json"]]
+
+
 def test_fixture_names_both_twins():
     text = FIXTURE.read_text()
     # Both twin paths are named in the header. Check each via a form that is not

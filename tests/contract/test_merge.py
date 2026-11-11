@@ -657,3 +657,74 @@ def test_the_wire_entry_carries_timeout_minutes_only_when_set(tmp_path):
     assert set(without) == WIRE_ENTRY_KEYS
     assert declared["timeout_minutes"] == 120
     assert set(declared) == WIRE_ENTRY_KEYS | {"timeout_minutes"}
+
+
+def _assets_repo(root, assets):
+    """A repository with one python-node that reads data/ref.json, declaring *assets* when not None."""
+    (root / "contracts").mkdir(parents=True)
+    (root / "scripts").mkdir()
+    (root / "data").mkdir()
+    (root / "scripts" / "node.py").write_text("def run(ctx):\n    return ctx.read('ids')\n")
+    (root / "data" / "ref.json").write_text('{"rate": 1}')
+    node = {
+        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
+        "criticality": "SECONDARY", "script": "scripts/node.py",
+        "reads": {"ids": "select id from analytics.a"},
+        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
+    }
+    if assets is not None:
+        node["assets"] = assets
+    (root / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [node]}))
+    return root
+
+
+def _only_entry(repo):
+    (entry,) = build_wire_contract(repo / "contracts", repo, "s")["nodes"]
+    return entry
+
+
+def test_wire_entry_carries_assets_only_when_declared(tmp_path):
+    with_assets = _only_entry(_assets_repo(tmp_path / "a", ["data/ref.json"]))
+    without = _only_entry(_assets_repo(tmp_path / "b", None))
+    assert with_assets["assets"] == ["data/ref.json"]
+    assert set(with_assets) == WIRE_ENTRY_KEYS | {"assets"}
+    assert set(without) == WIRE_ENTRY_KEYS
+
+
+def test_editing_an_asset_moves_only_the_shared_part(tmp_path):
+    repo = _assets_repo(tmp_path, ["data/ref.json"])
+    before = _only_entry(repo)
+    (repo / "data" / "ref.json").write_text('{"rate": 2}')
+    after = _only_entry(repo)
+    assert (after["source_hash"], after["config_hash"]) == (before["source_hash"], before["config_hash"])
+    assert after["shared_code_hash"] != before["shared_code_hash"]
+    assert after["content_hash"] != before["content_hash"]
+
+
+def test_declaring_an_asset_moves_the_config_and_shared_parts(tmp_path):
+    without = _only_entry(_assets_repo(tmp_path / "a", None))
+    declared = _only_entry(_assets_repo(tmp_path / "b", ["data/ref.json"]))
+    assert declared["config_hash"] != without["config_hash"]
+    assert declared["shared_code_hash"] != without["shared_code_hash"]
+
+
+def test_an_asset_that_is_also_imported_is_one_shared_unit(tmp_path):
+    repo = _assets_repo(tmp_path, ["scripts/helper.py"])
+    (repo / "scripts" / "helper.py").write_text("RATE = 1\n")
+    (repo / "scripts" / "node.py").write_text("import helper\n\n\ndef run(ctx):\n    return ctx.read('ids')\n")
+    entry = _only_entry(repo)
+    assert entry["shared_code_hash"] == shared_code_hash({"scripts/helper.py": b"RATE = 1\n"})
+
+
+@pytest.mark.parametrize(("prepare", "match"), [
+    (lambda repo: (repo / "data" / "ref.json").unlink(), "asset not found: data/ref.json"),
+    (lambda repo: ((repo / "data" / "ref.json").unlink(), (repo / "data" / "ref.json").mkdir()), "is not a file"),
+    (lambda repo: ((repo / "data" / "ref.json").unlink(),
+                   (repo / "data" / "ref.json").symlink_to(repo.parent / "outside.json")), "escapes the repository root"),
+])
+def test_an_asset_the_merge_cannot_read_fails_it(tmp_path, prepare, match):
+    (tmp_path / "outside.json").write_text("{}")
+    repo = _assets_repo(tmp_path / "repo", ["data/ref.json"])
+    prepare(repo)
+    with pytest.raises(ContractError, match=match):
+        build_wire_contract(repo / "contracts", repo, "s")

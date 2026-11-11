@@ -60,6 +60,16 @@ s3://<bucket>/<service>/<release_id>/contract.yaml
   on the merged wire entry as an extra key (absent otherwise), and it is part of
   `config_hash`, so `content_hash` changes when the referenced Secret name
   changes. `source_hash` does not.
+- **`assets`** is additive and optional on `python-node` and `python-api`
+  (refused on `python-csv`, which has no script): a list of repo-relative POSIX
+  paths of the files the node's script reads. Each is a non-empty string with
+  no backslash, not absolute, with no `..` segment; the loader normalises it
+  (`./data//ref.json` is `data/ref.json`), keeps the declared order and refuses
+  a path listed twice. `merge` fails with a `ContractError` for an asset that
+  is missing, is not a file or resolves outside the repository. On the merged
+  wire entry `assets` appears only when the node declares at least one, and it
+  is part of the code projection (sorted by code point there), so declaring
+  one changes `config_hash`. Its bytes are shared units (§13.2).
 - **`timeout_minutes`** is additive and optional, valid on every `kind`: an
   integer from 1 to 10,080 (one week) that is the node's task timeout. Any
   other value (zero, above the bound, a string, a float, a boolean) fails
@@ -210,7 +220,8 @@ source_hash      = sha256(script_bytes)                            # bare hex
                    (sha256(uri) for python-csv)
 shared_code_hash = continuo_contracts.hashing.shared_hash(
                        {repo-relative POSIX path: file bytes})      # bare hex,
-                   over the in-repo import closure, "" when it is empty
+                   over the in-repo import closure and the declared assets,
+                   "" when there are none
 config_hash      = continuo_contracts.python.projection_hash(node)  # bare hex
 content_hash     = "sha256:" + sha256(source_hash + "|" + shared_code_hash
                                        + "|" + config_hash)
@@ -218,8 +229,9 @@ content_hash     = "sha256:" + sha256(source_hash + "|" + shared_code_hash
 
 - `script_bytes` — the node's own script file, byte-for-byte.
 - the shared units — the byte content of every file in the node's in-repo
-  import closure (defined below), each keyed by its repo-relative POSIX path;
-  the script itself is never a closure member, so `source_hash` and
+  import closure (defined below) and of every file the node lists under
+  `assets` (§13.1), each keyed by its repo-relative POSIX path; a file that is
+  both is one unit. The script itself is never a closure member, so `source_hash` and
   `shared_code_hash` never double-count it. The part folds one
   `<path> NUL <sha256 of the bytes>` line per unit, sorted by path, so two
   files that swap their contents change it.
@@ -348,9 +360,10 @@ executor runs it as a Kubernetes Job:
   lifetime, so a deferred `import` inside `run()` resolves too. Both forms a
   script can use work: sibling (`import helpers`) and package-qualified
   (`import scripts.helpers`, `from lib.shared import ...`). The image must
-  still `COPY` every directory the scripts import from: a helper is folded
-  into the hash whether or not it is in the image, so one left out yields a
-  valid release artifact and a node that dies with `ModuleNotFoundError`.
+  still `COPY` every directory the scripts import from or read their `assets`
+  from: a helper or an asset is folded into the hash whether or not it is in
+  the image, so one left out yields a valid release artifact and a node that
+  dies with `ModuleNotFoundError` or `FileNotFoundError`.
 - **Warehouse env**: engine-native connection vars (`POSTGRES_HOST`,
   `POSTGRES_DB`, `POSTGRES_USER`, optional `POSTGRES_PORT`/`_PASSWORD`; ditto
   per engine), injected via the same Secret mechanism dbt Jobs use.

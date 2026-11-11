@@ -6,7 +6,13 @@ remediation classifier can key off it without parsing free text.
 
 
 class HarnessError(Exception):
-    """Base for all runtime failures the harness converts to a sentinel block."""
+    """Base for all runtime failures the harness converts to a sentinel block.
+
+    ``reason`` is a machine-readable code the block carries beside the message;
+    empty for the errors that have none.
+    """
+
+    reason: str = ""
 
     @property
     def error_class(self) -> str:
@@ -18,6 +24,12 @@ class HarnessError(Exception):
 
 class ContractError(HarnessError):
     """Contract missing, invalid, node not found, or script missing."""
+
+
+class ImageContractMismatch(ContractError):
+    """The image does not hold the contract, script, imports or assets the release hashed."""
+
+    reason = "image_contract_mismatch"
 
 
 class ReadError(HarnessError):

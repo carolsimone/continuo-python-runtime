@@ -92,7 +92,11 @@ on every change.
 last line of stdout, and Continuo's Go side parses it byte-for-byte
 (`pkg/validationresult` in the `continuo` repository). That wire format — the
 sentinel markers, the framing, and the field names inside the block — is
-**frozen**. Reuse it; never change it from this side alone. A change here that
+**frozen**. The one addition is an optional `reason` key, written after
+`unique_id` only on a failure that has a machine-readable code (today
+`image_contract_mismatch`); a block without one keeps its bytes, and the
+sentinels, `schema_version` and the five standard keys do not change. Reuse
+it; never change it from this side alone. A change here that
 the Go parser has not been taught is a production outage, not a refactor.
 
 ## Quickstart for domain teams
@@ -351,7 +355,7 @@ declared `output_columns` on the table `run()` returned, in this order:
 
 ## Error taxonomy
 
-Every runtime failure is one of five `HarnessError` subclasses
+Every runtime failure is one of six `HarnessError` subclasses
 (`continuo_python_runtime/errors.py`). The sentinel result block's message
 is prefixed `<ErrorClass>: ` so failures can be triaged without parsing free
 text. The harness also logs the same message at ERROR on stderr, with the
@@ -362,6 +366,7 @@ the result block out of the log before storing it.
 | Class | Meaning | Typical fix target |
 | --- | --- | --- |
 | `ContractError` | Contract missing or invalid, node not found for `NODE_ID`, or the declared script is missing/unreachable. | The contract yaml or the `script:` path. |
+| `ImageContractMismatch` (a `ContractError`) | The image does not hold the contract, script, imports or assets the release hashed: the `content_hash` in `CONTENT_HASH` differs from the one the image's files give, or a file the release hashed is missing from the image. The block also carries `"reason":"image_contract_mismatch"`. | Rebuild the image from the released commit, with CI and the image on the same runtime. |
 | `ReadError` | `ctx.read()` was called with an undeclared name, or a declared read failed at the warehouse. | The `reads:` map, or the upstream query/warehouse access. |
 | `ScriptError` | `run()` raised, has no callable `run`, or returned a value that isn't Arrow-convertible. | The node script. |
 | `ConformError` | Structural mismatch (extra/missing/duplicate columns), a strict-cast failure, a not-null violation, a VARCHAR/CHAR overflow, or an `upsert` run whose rows repeat a primary key. | The script's output shape, or the `output_columns` declaration. |

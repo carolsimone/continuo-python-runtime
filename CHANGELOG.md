@@ -7,6 +7,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The harness checks, before it builds the adapter, that the image holds what
+  the release hashed. When `CONTENT_HASH` is set it recomputes the node's
+  `content_hash` from the files in the image, with the helpers `merge` uses,
+  and a difference, or a hashed file missing from the image, fails the node
+  with `ImageContractMismatch` (a `ContractError`) and exit 1. The message
+  names both hashes, the three parts, the unit paths and the runtime version.
+  An unset or empty `CONTENT_HASH` logs a warning and runs. The result block
+  carries an optional `reason` key after `unique_id`
+  (`image_contract_mismatch`); a block without one keeps its bytes, and
+  `continuo_engine_contract.result.result_block` takes it as a keyword-only
+  `reason`.
 - `assets:` on a `python-node` or `python-api` node lists the repository files
   its script reads. `merge` folds their bytes into `shared_code_hash`, so
   editing one changes the node's `content_hash`, and writes `assets` on the

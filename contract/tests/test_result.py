@@ -38,3 +38,17 @@ def test_result_block_success_defaults():
     assert doc["status"] == "success"
     assert doc["message"] == ""
     assert doc["failures"] == 0
+
+
+def test_result_block_without_a_reason_keeps_its_frozen_bytes():
+    assert result.result_block("error", "boom", 1, "a.b") == (
+        result.SENTINEL_BEGIN + "\n"
+        + '{"schema_version":1,"status":"error","message":"boom","failures":1,"unique_id":"a.b"}'
+        + "\n" + result.SENTINEL_END
+    )
+
+
+def test_result_block_writes_a_reason_only_when_given():
+    assert "reason" not in _extract(result.result_block("error", "boom"))
+    doc = _extract(result.result_block("error", "boom", reason="image_contract_mismatch"))
+    assert list(doc)[-1] == "reason" and doc["reason"] == "image_contract_mismatch"

@@ -56,4 +56,6 @@ version that the co-located runtime and adapters in this workspace consume
 immediately, and that external adapter authors pin from PyPI, so treat it as
 a deliberate, coordinated change. The `result` module is stricter still: its
 wire format is frozen against Continuo's Go parser (`pkg/validationresult`)
-and must not change from this side at all.
+and must not change from this side at all. The only addition is the optional
+keyword-only `reason`, written after `unique_id` and only when non-empty: a
+block without one keeps the five standard keys byte for byte.

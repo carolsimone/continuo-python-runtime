@@ -416,7 +416,10 @@ executor runs it as a Kubernetes Job:
   markers. That wire format is frozen against Continuo's Go parser
   (`pkg/validationresult`). All diagnostics
   go to stderr via stdlib `logging`, including the failure the result block
-  reports, which is logged at ERROR. Non-zero exit on failure.
+  reports, which is logged at ERROR. Non-zero exit on failure. The block may
+  carry one optional extra key, `reason`, after `unique_id`, only on a failure
+  with a machine-readable code (`image_contract_mismatch`); the markers,
+  `schema_version` and the five standard keys stay frozen.
 - The image embeds the same contract files CI merged — `content_hash` is
   what ties the promoted topology to the image actually running.
 
@@ -437,6 +440,7 @@ inject the names below instead:
 | `TABLE_NAME` | **required** | The target table name; must match the `table` of the node selected via `NODE_ID`. |
 | `TARGET_SCHEMA` | **required** | The target schema name; must match the `schema` of the node selected via `NODE_ID`. There is no fallback — `SCHEMA` and `DBT_TARGET_SCHEMA` are **not** recognized. |
 | `TASK_ATTEMPT` | set by the executor, not read by the harness | The 0-based number of the task's attempt: `0` on a task's first run, `1` on its first retry, and so on. The executor sets it on every production Job, dbt and python alike, so a node script can read it; the harness neither requires nor interprets it. |
+| `CONTENT_HASH` | optional | The `content_hash` the release promoted for the node, set by continuo from phase 0. When set, the harness recomputes the node's hash from the files in the image (the helpers `merge` uses) before it builds the adapter, and a different value, a value that is not byte-for-byte the recomputed string (no `sha256:` prefix, upper-case hex, surrounding whitespace) or a file the release hashed that the image lacks fails the node with `ImageContractMismatch`: one result block with `"reason":"image_contract_mismatch"` and exit 1. The message names the node, `CONTENT_HASH`, the image's `content_hash`, its three parts, the sorted unit paths and the runtime version, and says to rebuild the image from the released commit. Unset or empty logs a WARNING and runs. |
 | `CONTRACT_DIR` | optional | Path to the directory of merged contract YAML files baked into the image. Defaults to `/app/contracts`. |
 | `APP_ROOT` | optional | Repository root the node's `script:` path is resolved against. Defaults to `CONTRACT_DIR`'s parent directory. |
 | engine-native vars | **required**, per adapter | Whatever the installed `WarehouseAdapter.required_env()` declares (e.g. `POSTGRES_HOST`/`POSTGRES_DB`/`POSTGRES_USER`, optionally `POSTGRES_PORT`/`POSTGRES_PASSWORD`) — missing any of these is a `LoadError`. |

@@ -15,20 +15,24 @@ SENTINEL_END = "===CONTINUO_VALIDATION_RESULT_END==="
 SCHEMA_VERSION = 1
 
 
-def result_block(status: str, message: str = "", failures: int = 0, unique_id: str = "") -> str:
+def result_block(
+    status: str, message: str = "", failures: int = 0, unique_id: str = "", *, reason: str = ""
+) -> str:
     """Return the sentinel-framed, single-line-JSON block for one node.
 
     The JSON is compact (no embedded newlines) so the consumer can split the
-    block out of a multi-line pod log by marker lines alone.
+    block out of a multi-line pod log by marker lines alone. ``reason``, a
+    machine-readable failure code, is written after ``unique_id`` and only when
+    non-empty, so a block without one keeps the five standard keys byte for byte.
     """
-    body = json.dumps(
-        {
-            "schema_version": SCHEMA_VERSION,
-            "status": status,
-            "message": message or "",
-            "failures": int(failures or 0),
-            "unique_id": unique_id or "",
-        },
-        separators=(",", ":"),
-    )
+    doc = {
+        "schema_version": SCHEMA_VERSION,
+        "status": status,
+        "message": message or "",
+        "failures": int(failures or 0),
+        "unique_id": unique_id or "",
+    }
+    if reason:
+        doc["reason"] = reason
+    body = json.dumps(doc, separators=(",", ":"))
     return f"{SENTINEL_BEGIN}\n{body}\n{SENTINEL_END}"

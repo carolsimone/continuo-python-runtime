@@ -477,7 +477,7 @@ def test_the_dependents_capability_declares_exactly_its_own_abstract_method():
     assert DependentsIntrospection.__abstractmethods__ == frozenset({"dependents"})
 
 
-def test_the_vocabularies_are_the_designs():
+def test_the_vocabularies_hold_the_documented_values():
     assert DROP_SEMANTICS == frozenset({"cascade", "late_binding"})
     assert COMPLETENESS == frozenset({"exact", "best_effort"})
     assert DEPENDENT_KINDS == frozenset({"view", "materialized_view", "table", "function", "procedure",

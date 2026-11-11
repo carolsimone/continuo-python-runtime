@@ -86,7 +86,7 @@ def _jcs_sha256(value) -> str:
     [(PY_DAILY_KPIS, PY_DAILY_KPIS_PROJECTION), (DEMO_ORDERS_CSV, DEMO_ORDERS_CSV_PROJECTION)],
     ids=["python-node", "python-csv"],
 )
-def test_code_projection_and_config_hash_match_the_design(raw, projection):
+def test_code_projection_and_config_hash_match_the_expected_projection(raw, projection):
     node = _node(raw)
     assert _json(code_projection(to_python_node(node))) == projection
     assert config_hash(node) == _jcs_sha256(projection)

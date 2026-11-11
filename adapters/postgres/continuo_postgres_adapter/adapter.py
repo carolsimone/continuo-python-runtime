@@ -455,12 +455,16 @@ def _arrow_table_from_rows(colnames: list[str], rows: list[tuple[Any, ...]]) -> 
 # in place, so from a column node only the dependencies on that column are
 # followed, and the table itself is still listed. A view's dependency is recorded
 # on its _RETURN rewrite rule, so the walk steps from the rule to the view it
-# belongs to. A table that has a column of the walked table's row type, or of an
+# belongs to. The expression of a generated column (a pg_attrdef row) is dropped
+# together with its column, so the walk steps from it to that column. A table that has a column of the walked table's row type, or of an
 # array of it, depends on that type (pg_type), not on the table, so a whole-table
-# step also follows the dependencies on its reltype and typarray. A partition, a
-# sequence owned by a column (deptype 'a') and an identity sequence (deptype 'i')
-# are parts of the table, yet what reads them is dropped with the table: the walk
-# steps through them without adding a level, and lists none of them. The table's
+# step also follows the dependencies on its reltype and typarray. The array type
+# of any other type the walk reaches (a domain) is internally owned by it and
+# dropped with it, so a pg_type step also follows the dependencies on its array
+# type. A partition, a sequence owned by a column (deptype 'a'), an identity
+# sequence and an array type (deptype 'i') are parts of their owner, yet what
+# reads them is dropped with it: the walk steps through them without adding a
+# level, and lists none of them. The table's
 # own indexes and triggers are automatic dependencies that nothing reads, so the
 # walk does not follow them. The depth bound of 32 keeps a dependency cycle from
 # running forever, and ends a chain deeper than that unlisted.
@@ -473,14 +477,19 @@ WITH RECURSIVE walk(classid, objid, subid, depth) AS (
       AND lower(c.relname) = lower(%(table)s)
       AND c.relkind IN ('r', 'p')
   UNION
-    SELECT CASE WHEN rw.oid IS NULL THEN dep.classid ELSE 'pg_class'::regclass::oid END,
-           CASE WHEN rw.oid IS NULL THEN dep.objid ELSE rw.ev_class END,
-           CASE WHEN rw.oid IS NULL THEN dep.objsubid ELSE 0 END,
+    SELECT CASE WHEN rw.oid IS NULL AND gad.oid IS NULL THEN dep.classid ELSE 'pg_class'::regclass::oid END,
+           CASE WHEN rw.oid IS NOT NULL THEN rw.ev_class
+                WHEN gad.oid IS NOT NULL THEN gad.adrelid
+                ELSE dep.objid END,
+           CASE WHEN rw.oid IS NOT NULL THEN 0
+                WHEN gad.oid IS NOT NULL THEN gad.adnum::int
+                ELSE dep.objsubid END,
            w.depth + CASE WHEN dep.deptype IN ('a', 'i') THEN 0 ELSE 1 END
     FROM walk w
     LEFT JOIN pg_class wc
       ON w.classid = 'pg_class'::regclass::oid AND w.subid = 0 AND wc.oid = w.objid
     LEFT JOIN pg_type rowtype ON rowtype.oid = wc.reltype
+    LEFT JOIN pg_type wt ON w.classid = 'pg_type'::regclass::oid AND wt.oid = w.objid
     JOIN pg_depend dep
       ON (dep.refclassid = w.classid AND dep.refobjid = w.objid
           AND (w.subid = 0 OR dep.refobjsubid = w.subid))
@@ -490,10 +499,15 @@ WITH RECURSIVE walk(classid, objid, subid, depth) AS (
       ON dep.classid = 'pg_class'::regclass::oid AND dc.oid = dep.objid
     LEFT JOIN pg_rewrite rw
       ON dep.classid = 'pg_rewrite'::regclass::oid AND rw.oid = dep.objid AND rw.rulename = '_RETURN'
+    LEFT JOIN pg_attrdef gad
+      ON dep.classid = 'pg_attrdef'::regclass::oid AND gad.oid = dep.objid
+     AND EXISTS (SELECT 1 FROM pg_attribute ga
+                 WHERE ga.attrelid = gad.adrelid AND ga.attnum = gad.adnum AND ga.attgenerated <> '')
     WHERE w.depth < 32
       AND (dep.deptype = 'n'
            OR (dep.deptype IN ('a', 'i') AND dc.relkind = 'S')
-           OR (dep.deptype = 'a' AND dc.relkind IN ('r', 'p', 'f') AND dc.relispartition))
+           OR (dep.deptype = 'a' AND dc.relkind IN ('r', 'p', 'f') AND dc.relispartition)
+           OR (dep.deptype = 'i' AND dep.classid = 'pg_type'::regclass::oid AND dep.objid = wt.typarray))
       AND (rw.oid IS NULL OR rw.ev_class <> w.objid)
 )
 SELECT found.catalog,
@@ -524,11 +538,13 @@ LEFT JOIN pg_policy pol ON found.catalog = 'pg_policy' AND pol.oid = found.objid
 LEFT JOIN pg_rewrite rw ON found.catalog = 'pg_rewrite' AND rw.oid = found.objid
 LEFT JOIN pg_attrdef ad ON found.catalog = 'pg_attrdef' AND ad.oid = found.objid
 LEFT JOIN pg_trigger tg ON found.catalog = 'pg_trigger' AND tg.oid = found.objid
+LEFT JOIN pg_type ty ON found.catalog = 'pg_type' AND ty.oid = found.objid
 LEFT JOIN pg_class t ON t.oid = COALESCE(k.conrelid, pol.polrelid, rw.ev_class)
 LEFT JOIN pg_namespace n ON n.oid = COALESCE(c.relnamespace, p.pronamespace, t.relnamespace)
--- a sequence, a partition and the per-partition copy of a foreign key are parts of their table
+-- a sequence, a partition, an array type and the per-partition copy of a foreign key are parts of their owner
 WHERE NOT (found.catalog = 'pg_class'
            AND (c.relkind = 'S' OR (c.relkind IN ('r', 'p', 'f') AND c.relispartition)))
+  AND NOT (found.catalog = 'pg_type' AND ty.typcategory = 'A')
   AND NOT (found.catalog = 'pg_constraint' AND k.conparentid <> 0)
 -- a constraint, default, policy, rule or trigger of the table itself is part of the table
   AND NOT COALESCE(COALESCE(k.conrelid, ad.adrelid, pol.polrelid, rw.ev_class, tg.tgrelid) IN (

@@ -76,7 +76,12 @@ SELECT 'other', '', pg_describe_object('pg_attrdef'::regclass, d.oid, 0)
 FROM pg_attrdef d
 JOIN pg_class c ON c.oid = d.adrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname = ANY(%(schemas)s) AND NOT (n.nspname = %(s)s AND c.relname = 'seed')
+JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+WHERE n.nspname = ANY(%(schemas)s) AND a.attgenerated = '' AND NOT (n.nspname = %(s)s AND c.relname = 'seed')
+UNION
+SELECT 'other', '', pg_describe_object('pg_type'::regclass, ty.oid, 0)
+FROM pg_type ty JOIN pg_namespace n ON n.oid = ty.typnamespace
+WHERE n.nspname = ANY(%(schemas)s) AND ty.typtype = 'd'
 UNION
 SELECT 'other', '', pg_describe_object('pg_trigger'::regclass, g.oid, 0)
 FROM pg_trigger g
@@ -85,14 +90,14 @@ JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = ANY(%(schemas)s) AND NOT g.tgisinternal AND NOT (n.nspname = %(s)s AND c.relname = 'seed')
 """
 
-# A column a cascade drops leaves its table in place, so a dropped column is
-# read as the change of its table.
+# A column a cascade drops leaves its table (or composite type) in place, so a
+# dropped column is read as the change of its table (or type).
 _COLUMNS = """
-SELECT n.nspname, c.relname, a.attname
+SELECT CASE c.relkind WHEN 'c' THEN 'other' ELSE 'table' END, n.nspname, c.relname, a.attname
 FROM pg_attribute a
 JOIN pg_class c ON c.oid = a.attrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname = ANY(%(schemas)s) AND c.relkind IN ('r', 'p', 'f')
+WHERE n.nspname = ANY(%(schemas)s) AND c.relkind IN ('r', 'p', 'f', 'c')
   AND a.attnum > 0 AND NOT a.attisdropped
   AND NOT (n.nspname = %(s)s AND c.relname = 'seed')
 """
@@ -114,7 +119,7 @@ def _query(sql: str, *params: Any) -> list[tuple[Any, ...]]:
         conn.close()
 
 
-def _snapshot(cur: Any, params: dict[str, Any]) -> tuple[set[tuple[str, str, str]], set[tuple[str, str, str]]]:
+def _snapshot(cur: Any, params: dict[str, Any]) -> tuple[set[tuple[str, str, str]], set[tuple[str, str, str, str]]]:
     cur.execute(_OBJECTS, params)
     objects = set(cur.fetchall())
     cur.execute(_COLUMNS, params)
@@ -133,7 +138,7 @@ def _dropped_by_cascade(s: str, *others: str) -> set[tuple[str, str, str]]:
         conn.rollback()
     finally:
         conn.close()
-    changed_tables = {("table", schema, table) for schema, table, _ in columns_before - columns_after}
+    changed_tables = {(kind, schema, table) for kind, schema, table, _ in columns_before - columns_after}
     return (objects_before - objects_after) | changed_tables
 
 
@@ -514,3 +519,98 @@ def test_a_trigger_on_another_table_that_calls_a_function_reading_the_seed_is_li
     assert ("function", "seed_has(integer)", 1) in listed
     assert ("other", f"trigger t_other on table {s}.other", 2) in listed
     _assert_listing_matches_the_cascade(adapter, s)
+
+
+def _assert_exact(adapter, s, expected):
+    """The listing equals *expected* (kind, name, depth) and what a rolled-back cascade drops."""
+    assert {(d.kind, d.name, d.depth) for d in adapter.dependents(s, "seed").objects} == expected
+    _assert_listing_matches_the_cascade(adapter, s)
+
+
+def test_what_reads_a_generated_column_over_a_dropped_column_is_listed(scratch):
+    adapter, s, cur = scratch
+    cur.execute(f'''
+        CREATE TABLE "{s}".seed (id int PRIMARY KEY);
+        CREATE TABLE "{s}".consumer (
+            id int,
+            row_value "{s}".seed,
+            gen_id int GENERATED ALWAYS AS ((row_value).id) STORED,
+            gen_twice int GENERATED ALWAYS AS ((row_value).id * 2) STORED,
+            gen_plain int GENERATED ALWAYS AS (id + 1) STORED
+        );
+        CREATE VIEW "{s}".reads_gen AS SELECT gen_id FROM "{s}".consumer;
+        CREATE VIEW "{s}".reads_twice AS SELECT gen_twice FROM "{s}".consumer;
+        CREATE FUNCTION "{s}".sum_gen() RETURNS bigint LANGUAGE sql
+            BEGIN ATOMIC SELECT sum(gen_id) FROM "{s}".consumer; END;
+        CREATE VIEW "{s}".reads_id AS SELECT id FROM "{s}".consumer;
+        CREATE VIEW "{s}".reads_plain AS SELECT gen_plain FROM "{s}".consumer;
+    ''')
+    _assert_exact(adapter, s, {
+        ("table", "consumer", 1),
+        ("view", "reads_gen", 2),
+        ("view", "reads_twice", 2),
+        ("function", "sum_gen()", 2),
+    })
+
+
+def test_what_reads_a_column_of_an_array_of_a_domain_over_the_table_is_listed(scratch):
+    adapter, s, cur = scratch
+    cur.execute(f'''
+        CREATE TABLE "{s}".seed (id int PRIMARY KEY);
+        CREATE DOMAIN "{s}".d AS "{s}".seed;
+        CREATE TABLE "{s}".consumer (id int, x "{s}".d[]);
+        CREATE VIEW "{s}".reads_x AS SELECT x FROM "{s}".consumer;
+        CREATE VIEW "{s}".reads_id AS SELECT id FROM "{s}".consumer;
+    ''')
+    _assert_exact(adapter, s, {
+        ("other", f"type {s}.d", 1), ("table", "consumer", 2), ("view", "reads_x", 2),
+    })
+
+
+def test_what_reads_a_two_dimensional_array_of_a_domain_over_a_domain_is_listed(scratch):
+    adapter, s, cur = scratch
+    cur.execute(f'''
+        CREATE TABLE "{s}".seed (id int PRIMARY KEY);
+        CREATE DOMAIN "{s}".d AS "{s}".seed;
+        CREATE DOMAIN "{s}".d2 AS "{s}".d;
+        CREATE TABLE "{s}".consumer (id int, grid "{s}".d2[][]);
+        CREATE VIEW "{s}".reads_grid AS SELECT grid FROM "{s}".consumer;
+    ''')
+    _assert_exact(adapter, s, {
+        ("other", f"type {s}.d", 1), ("other", f"type {s}.d2", 2),
+        ("table", "consumer", 3), ("view", "reads_grid", 3),
+    })
+
+
+def test_an_array_of_a_composite_type_the_cascade_only_changes_is_not_followed(scratch):
+    adapter, s, cur = scratch
+    cur.execute(f'''
+        CREATE TABLE "{s}".seed (id int PRIMARY KEY);
+        CREATE TYPE "{s}".pair AS (x "{s}".seed, y int);
+        CREATE TABLE "{s}".holds (pairs "{s}".pair[]);
+        CREATE VIEW "{s}".reads_pairs AS SELECT pairs FROM "{s}".holds;
+    ''')
+    _assert_exact(adapter, s, {("other", "pair", 1)})
+
+
+def test_what_reads_an_array_of_the_row_type_still_matches_the_cascade(scratch):
+    adapter, s, cur = scratch
+    cur.execute(f'''
+        CREATE TABLE "{s}".seed (id int PRIMARY KEY);
+        CREATE TABLE "{s}".vals_t (id int, vals "{s}".seed[]);
+        CREATE VIEW "{s}".reads_vals AS SELECT vals FROM "{s}".vals_t;
+        CREATE VIEW "{s}".reads_id AS SELECT id FROM "{s}".vals_t;
+        CREATE FUNCTION "{s}".takes_many("{s}".seed[]) RETURNS int LANGUAGE sql AS 'SELECT 1';
+    ''')
+    _assert_exact(adapter, s, {
+        ("table", "vals_t", 1), ("view", "reads_vals", 1), ("function", f"takes_many({s}.seed[])", 1),
+    })
+
+
+def test_a_generated_column_of_the_table_itself_is_part_of_the_table(scratch):
+    adapter, s, cur = scratch
+    cur.execute(f'''
+        CREATE TABLE "{s}".seed (id int PRIMARY KEY, twice int GENERATED ALWAYS AS (id * 2) STORED);
+        CREATE VIEW "{s}".reads_twice AS SELECT twice FROM "{s}".seed;
+    ''')
+    _assert_exact(adapter, s, {("view", "reads_twice", 1)})

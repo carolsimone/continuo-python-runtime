@@ -34,8 +34,10 @@ dependency, so it lists views and materialized views (found through their
 `_RETURN` rule, at any depth: a view of a view of the table is depth 2),
 SQL-standard functions and procedures, foreign keys and policies on other
 tables, rules, inheriting tables, tables with a column of the table's row type
-or of an array of it, and what reads a partition of the table or a sequence of
-it (owned or identity). A table that only loses a column is listed, and from it
+or of an array of it, a domain over it and the table columns of an array of a
+domain, and what reads a partition of the table or a sequence of it (owned or
+identity). A generated column over a dropped column is followed to its own
+readers. A table that only loses a column is listed, and from it
 only what reads that column is walked on. `information_schema.view_table_usage`
 misses the materialized views, the functions and every view past the first
 level. The table's own indexes, constraints (a self-referencing foreign key
@@ -52,11 +54,6 @@ function carries its argument types (`seed_count()`), and that of a constraint,
 policy or rule the table or domain it sits on (`orders_seed_id_fkey on orders`).
 A listed object that has no table of its own (a type, a column default, a
 trigger) has an empty schema and an empty owner.
-
-One case is not followed: an array of a type
-the walk reaches, other than the table's own row type. A
-domain over the table's row type used as `dseed[]` is listed, but a column of
-the array type `dseed[]` is not.
 
 The `config:` index vocabulary is the union of the two vocabularies this
 adapter inherited from the merge: `columns`, `unique`, `type`, and `name`,

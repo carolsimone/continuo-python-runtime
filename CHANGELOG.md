@@ -5,6 +5,35 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-11
+
+**TL;DR**
+
+- Hashes now come from continuo-contracts 0.1.0, the library continuo uses.
+  Every Python node's `content_hash` changes once, on its first release with
+  this version.
+- A node can list the files its script reads in `assets`, and the lint refuses
+  five kinds of code the hash cannot see.
+- The harness checks, when a node starts, that the image holds what the
+  release hashed.
+- The validation runner has two new read-only ops, `seed_preflight` and
+  `probe_views`.
+- Adapter authors: every adapter must now declare `drop_semantics`.
+
+**Upgrade**
+
+1. Build your domain image `FROM` the `v0.12.0` engine image and install
+   `continuo-python-runtime==0.12.0` in CI. The template's "Pin the runtime to
+   the image" step does this from the `FROM` line. A `Dockerfile.pip`
+   repository replaces that step as the template README says.
+2. Move each Python service with continuo's rebaseline release, not an
+   ordinary one: its `content_hash` changes once.
+3. `COPY` into the image every file a node lists in `assets`.
+4. Bring-your-own adapter: declare `drop_semantics`. You may also implement
+   `DependentsIntrospection` and run `DependentsConformance`.
+
+Versions: runtime 0.12.0 (pins continuo-contracts 0.1.0), engine contract 0.10.0, postgres adapter 0.4.0, trino adapter 0.5.0, duckdb adapter 0.3.0.
+
 ### Added
 
 - Every engine adapter declares `drop_semantics`, what dropping a table does
@@ -23,11 +52,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   every object a `DROP TABLE ... CASCADE` of the table destroys or changes: views
   and materialized views to any depth, SQL-standard functions and procedures,
   foreign keys and policies on other tables, rules, inheriting tables, tables
-  with a column of the table's row type or of an array of it, and what reads a
-  partition of the table or a sequence of it (owned or identity). The walk
-  follows at most 32 dependency levels. It reads `pg_depend`, so it sees what
-  `information_schema.view_table_usage` misses, and `TestPostgresDependents` plus
-  a guard that snapshots the schemas around a rolled-back cascade check it.
+  with a column of the table's row type or of an array of it, the types built
+  on the table (a domain, a range, a composite type) and what reads them, and
+  what reads a partition of the table or a sequence of it (owned or identity).
+  Each object is listed once, at its shallowest depth, and the walk follows at
+  most 32 dependency levels. It reads `pg_depend`, so it sees what
+  `information_schema.view_table_usage` misses, and finds the table
+  case-insensitively. `TestPostgresDependents` plus a guard that snapshots the
+  schemas around a rolled-back cascade check it. The adapter's README lists
+  every kind.
 - `TrinoAdapter.dependents(schema, table)` lists, with
   `completeness="best_effort"`, the views whose SQL reads the table. It reads
   `information_schema.views` of the adapter's catalog in one query and parses
@@ -86,8 +119,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - **Breaking for adapter authors.** `WarehouseAdapter.drop_semantics` is a
-  required declaration with no default: an adapter that does not set it fails
-  `StartupConformance.test_declares_a_drop_semantics`.
+  required declaration with no default: an adapter that does not set it cannot
+  pass the new conformance case.
 - A node's hashes come from continuo-contracts 0.1.0, the library
   continuo's topology-controller uses too, so CI and continuo compute the
   same values. `config_hash` hashes the node's code projection: `owner`,

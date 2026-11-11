@@ -39,6 +39,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   only through another view. The adapter pins `sqlglot==30.23.0`, as the
   engine contract does, and `TestTrinoDependents` runs the conformance cases
   against Trino and the Iceberg REST catalog.
+- The validation runner has two read-only ops, `seed_preflight` and `probe_views`
+  (`VALIDATION_OP`), which need no `DBT_TARGET_SCHEMA`. `seed_preflight` lists the
+  objects a reload of a seed's production table would destroy or leave reading
+  a missing table, compares them with `SEED_PREFLIGHT_ALLOWED` and
+  `SEED_PREFLIGHT_ACKNOWLEDGED`, and in `check` mode exits 1 with `reason`
+  `unowned_dependents`, `engine_mismatch` or `warehouse_unreachable` when the
+  reload must not run; `report` mode prints the same `reason` and exits 0.
+  `probe_views` reads each view of `PROBE_VIEWS` with a zero-row `SELECT` and
+  reports which no longer bind, without failing. Both print one result block
+  with their own keys after `reason`; `result_block` takes them as a keyword-only
+  `fields` mapping and refuses a key that shadows a standard one. The README
+  section "Seed preflight and view probe" has the inputs, the block and the
+  decision table.
 - `continuo-runtime --version` prints `continuo-runtime <version>` to stdout and
   exits 0. The template's `release.yml` has a "Pin the runtime to the image"
   step that reads the version from the Dockerfile's

@@ -92,10 +92,11 @@ on every change.
 last line of stdout, and Continuo's Go side parses it byte-for-byte
 (`pkg/validationresult` in the `continuo` repository). That wire format — the
 sentinel markers, the framing, and the field names inside the block — is
-**frozen**. The one addition is an optional `reason` key, written after
-`unique_id` only on a failure that has a machine-readable code (today
-`image_contract_mismatch`); a block without one keeps its bytes, and the
-sentinels, `schema_version` and the five standard keys do not change. Reuse
+**frozen**. The additions are an optional `reason` key, written after
+`unique_id` only when an outcome has a machine-readable code (for example
+`image_contract_mismatch`), and the op's own keys that the `seed_preflight` and
+`probe_views` ops write after `reason`; a block without either keeps its bytes,
+and the sentinels, `schema_version` and the five standard keys do not change. Reuse
 it; never change it from this side alone. A change here that
 the Go parser has not been taught is a production outage, not a refactor.
 
@@ -420,6 +421,82 @@ A domain repo does not have to build `FROM` the published engine image.
 Both shapes end up running the same runtime and the same adapter version;
 which one you pick only changes who controls the base OS layer underneath
 them.
+
+## Seed preflight and view probe
+
+Two validation ops read the warehouse and change nothing. They run through the
+same runner image as the other validation ops (`VALIDATION_OP`), need no
+`DBT_TARGET_SCHEMA`, and print one result block as the last line of stdout.
+
+A seed reload drops and recreates the seed's production table. On an engine where
+a drop destroys the objects that read the table (`drop_semantics` `cascade`,
+postgres) that takes every view, function and constraint built on the seed with
+it, including objects continuo does not own. On an engine where those objects
+survive and fail on their next read (`late_binding`, trino and duckdb) they
+may go stale. `seed_preflight` lists what a reload would touch and compares it
+with what the operator has allowed or acknowledged; `probe_views` tries named
+views after a reload and says which no longer bind.
+
+`seed_preflight` runs in two places. `check` runs in the seed task's own pod just
+before dbt and stops the reload with exit 1 when the check concludes it must.
+`report` runs in the release's seed-build Job and only reports what a `check`
+would conclude; it exits 0 whatever it finds.
+
+### `seed_preflight` inputs
+
+| Variable | Meaning |
+|---|---|
+| `SEED_PREFLIGHT_MODE` | `check` or `report`. |
+| `SEED_PREFLIGHT_ENGINE_FAMILY` | `schema_bound` or `late_binding`, the family the release plan expects of the engine. |
+| `PROD_SCHEMA`, `TABLE_NAME` | The seed's production relation. |
+| `SEED_PREFLIGHT_ALLOWED`, `SEED_PREFLIGHT_ACKNOWLEDGED` | JSON arrays of `"<schema>.<name>"`, default `[]`. An object is allowed when `<schema>.<name>`, in lower case, is in either list (entries are trimmed and lower-cased). |
+| `NODE_ID` | Optional; the block's `unique_id`. Default `<PROD_SCHEMA>.<TABLE_NAME>`. |
+
+The adapter's own variables (`POSTGRES_*`, `TRINO_*`, ...) are needed as for any
+other op. An adapter's family is `schema_bound` when its `drop_semantics` is
+`cascade`, and `late_binding` when it is `late_binding`.
+
+### `seed_preflight` block
+
+After the standard keys (and `reason` when one applies): `op` (`seed_preflight`),
+`mode`, `checked` (the warehouse was asked), `engine_family` (as given),
+`drop_semantics` (the adapter's), `completeness` (`exact`, `best_effort`, or
+`none` when nothing was listed) and `dependents`, a list of
+`{schema, name, kind, owner, depth, allowed}` sorted by depth, schema and name.
+`status` is `error` for exit codes 1 and 2, and `failures` is 1 then.
+
+`reason` is what a `check` concludes. `report` prints the same `reason` on a
+`success` block.
+
+| Situation | `reason` | `check` | `report` |
+|---|---|---|---|
+| a missing or malformed input, no adapter, missing adapter env | none | exit 2 | exit 2 |
+| the adapter's family differs from `SEED_PREFLIGHT_ENGINE_FAMILY`, or it declares none | `engine_mismatch` | exit 1 | exit 0 |
+| the adapter cannot list dependents, `schema_bound` | `unowned_dependents` | exit 1 | exit 0 |
+| the adapter cannot list dependents, `late_binding` | none | exit 0 | exit 0 |
+| the connection fails | `warehouse_unreachable` | exit 1 | exit 0 |
+| the listing fails, `schema_bound` | none | exit 1 | exit 0 |
+| the listing fails, `late_binding` | none | exit 0 | exit 0 |
+| listed, `schema_bound`, an object is not allowed | `unowned_dependents` | exit 1 | exit 0 |
+| anything else listed (on `late_binding` the objects not allowed are external views that may go stale, named in `message`) | none | exit 0 | exit 0 |
+
+A seed table that does not exist yet has no dependents and passes. A stop's
+`message` starts with its `reason` and names each object outside the set as
+`<schema>.<name> (<kind>, owner <owner>)`.
+
+### `probe_views`
+
+`PROBE_VIEWS` is a JSON array of `"<schema>.<name>"`, split on the first dot;
+`NODE_ID` is optional (default `probe_views`). Each view is read with
+`SELECT * FROM "<schema>"."<name>" LIMIT 0`. The block has `op`
+(`probe_views`), `checked` (the warehouse was reachable) and `views`, a list of
+`{schema, name, ok, error}` in the order given, where `error` is the first line
+of the failure, at most 500 characters, and empty when `ok`. A view that fails
+its probe never fails the op: the exit code is 0, and `message` reads
+`<n> of <total> views failed: <names>`. A warehouse that cannot be reached gives
+exit 0, `checked` false, `views` empty and `reason` `warehouse_unreachable`.
+Only a missing or malformed input, no adapter, missing adapter env or an
+unexpected error is exit 2.
 
 ## Further reading
 

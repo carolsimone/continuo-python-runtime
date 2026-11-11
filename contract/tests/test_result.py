@@ -1,6 +1,8 @@
 """Unit tests for the validation-result contract helper."""
 import json
 
+import pytest
+
 from continuo_engine_contract import result
 
 
@@ -52,3 +54,20 @@ def test_result_block_writes_a_reason_only_when_given():
     assert "reason" not in _extract(result.result_block("error", "boom"))
     doc = _extract(result.result_block("error", "boom", reason="image_contract_mismatch"))
     assert list(doc)[-1] == "reason" and doc["reason"] == "image_contract_mismatch"
+
+
+def test_result_block_writes_op_fields_after_the_standard_keys():
+    doc = _extract(result.result_block("success", unique_id="a.b", fields={"op": "probe_views", "views": []}))
+    assert doc == {"schema_version": 1, "status": "success", "message": "", "failures": 0,
+                   "unique_id": "a.b", "op": "probe_views", "views": []}
+
+
+def test_result_block_writes_fields_after_the_reason_in_the_order_given():
+    doc = _extract(result.result_block("error", reason="r", fields={"z": 1, "a": 2}))
+    assert list(doc)[-3:] == ["reason", "z", "a"]
+
+
+@pytest.mark.parametrize("key", ["schema_version", "status", "message", "failures", "unique_id", "reason"])
+def test_result_block_refuses_a_field_that_shadows_a_standard_key(key):
+    with pytest.raises(ValueError, match=key):
+        result.result_block("success", fields={key: "x"})

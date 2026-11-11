@@ -23,6 +23,12 @@ Dispatches on ``VALIDATION_OP`` env var (default ``build_from_sql``):
   via the engine adapter and creates nothing — a test whose compiled SQL names
   a column a candidate change dropped or renamed fails the release at its
   source, before any table is built.
+- ``seed_preflight``: before a seed's production table is reloaded, list the objects
+  (``PROD_SCHEMA``.``TABLE_NAME``) that read it and compare them with the operator's
+  allowed and acknowledged lists. Needs no ``DBT_TARGET_SCHEMA`` and creates nothing.
+- ``probe_views``: try each view of ``PROBE_VIEWS`` with a zero-row read and report
+  which ones no longer bind. Needs no ``DBT_TARGET_SCHEMA`` and creates nothing.
+  The inputs and the result block of both ops are in ``preflight``.
 
 The engine adapter is discovered from the single installed
 ``continuo_engine.adapters`` entry point — each runner image installs exactly one.
@@ -43,7 +49,7 @@ from continuo_engine_contract.port import (  # type: ignore[import-untyped]
 )
 from continuo_python_runtime.csv_readers import reader_for
 from continuo_python_runtime.csv_source import check_header, parse_csv_uri
-from continuo_python_runtime.validation import s3
+from continuo_python_runtime.validation import preflight, s3
 
 logger = logging.getLogger("validation_runner")
 
@@ -115,6 +121,7 @@ def load_candidate_spec() -> dict:
 
 _NODE_OPS = ("build_from_sql", "clone_from_prod", "build_from_columns", "check_binds")
 _SCHEMA_OPS = ("ensure_schema", "drop_schema")
+_PREFLIGHT_OPS = ("seed_preflight", "probe_views")
 
 
 def main() -> None:
@@ -128,13 +135,23 @@ def main() -> None:
     Schema ops (``ensure_schema``/``drop_schema``) act on the whole candidate
     schema — the executor schedules them as one-shot engine-image Jobs to own
     the candidate-schema lifecycle without connecting to the warehouse itself —
-    and take no table.
+    and take no table. The preflight ops (``seed_preflight``/``probe_views``) read
+    their own inputs, need no candidate schema and exit with the code ``preflight``
+    returns.
     """
     logging.basicConfig(
         level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s"
     )
-    schema = _require("DBT_TARGET_SCHEMA")
     op = os.environ.get("VALIDATION_OP", "build_from_sql")
+    if op in _PREFLIGHT_OPS:
+        if op == "seed_preflight":
+            code = preflight.run_seed_preflight(os.environ)
+        else:
+            code = preflight.run_probe_views(os.environ)
+        if code:
+            sys.exit(code)
+        return
+    schema = _require("DBT_TARGET_SCHEMA")
 
     # Gather op-specific inputs and identity BEFORE touching the adapter, surfacing
     # input errors as a structured block (preserves the prior contract + exit codes).

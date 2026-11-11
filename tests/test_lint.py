@@ -1,5 +1,7 @@
 """Tests for script linting: forbidden imports, SQL literals, data-access calls."""
 
+import pytest
+
 from continuo_python_runtime.lint import lint_paths, lint_source
 
 GOOD = "def run(ctx):\n    ids = ctx.read('ids')\n    return ids\n"
@@ -288,3 +290,78 @@ def test_violations_are_returned_in_line_order_across_rules():
         "s.py:2: dynamic import construct 'importlib'",
         "s.py:3: forbidden warehouse driver import 'psycopg2'",
     ]
+
+
+@pytest.mark.parametrize(("source", "construct"), [
+    ("import runpy\n", "runpy"),
+    ("from runpy import run_path\n", "runpy"),
+    ("import sys\nsys.path.append('vendor')\n", "sys.path"),
+    ("import sys\nsys.path.insert(0, 'vendor')\n", "sys.path"),
+    ("import sys\nsys.path[0:0] = ['vendor']\n", "sys.path"),
+    ("import sys\nsys.path += ['vendor']\n", "sys.path"),
+    ("import sys\nsys.path = ['vendor']\n", "sys.path"),
+    ("import sys as s\ns.path.extend(['vendor'])\n", "sys.path"),
+    ("from sys import path\npath.append('vendor')\n", "sys.path"),
+    ("from sys import path as p\np.append('vendor')\n", "sys.path"),
+    ("from sys import path\npath += ['vendor']\n", "sys.path"),
+    ("from sys import path\npath[0:0] = ['vendor']\n", "sys.path"),
+    ("import sys\n\n\ndef run(ctx):\n    sys.path.insert(0, 'vendor')\n", "sys.path"),
+    ("import sys\ndel sys.path[0]\n", "sys.path"),
+    ("import sys\ndel sys.path\n", "sys.path"),
+    ("import sys\nsys.path.sort()\n", "sys.path"),
+    ("import site\nsite.addsitedir('vendor')\n", "sys.path"),
+    ("from site import addsitedir\naddsitedir('vendor')\n", "sys.path"),
+    ("import sitecustomize\n", "sitecustomize"),
+    ("import usercustomize\n", "usercustomize"),
+    ("code = compile(src, 'x', 'exec')\n", "compile"),
+    ("import types\nf = types.FunctionType(code, {})\n", "FunctionType"),
+    ("from types import FunctionType\n", "FunctionType"),
+    ("import pickle\nobj = pickle.load(fh)\n", "pickle.load"),
+    ("import pickle\nobj = pickle.loads(data)\n", "pickle.loads"),
+    ("from pickle import load\n", "pickle.load"),
+    ("import pickle as pk\nobj = pk.Unpickler(fh).load()\n", "pickle.Unpickler"),
+])
+def test_unhashed_code_construct_is_flagged(source, construct):
+    assert any(f"unhashed code construct '{construct}'" in v for v in lint_source(source, "s.py"))
+
+
+@pytest.mark.parametrize("source", [
+    "import re\npattern = re.compile('a+')\n",
+    "from re import compile\npattern = compile('a+')\n",
+    "import mylib\ncode = mylib.compile(src)\n",
+    "import sys\nroots = list(sys.path)\n",
+    "import sys\nhere = sys.path[0]\n",
+    "from sys import path\nroots = list(path)\n",
+    "from sys import path\npath = ['mine']\n",
+    "class Holder:\n    path = []\n\n\ndef run(obj):\n    obj.path.append(1)\n    obj.path = []\n",
+    "path = []\npath.append(1)\n",
+    "import pickle\npickle.dump(obj, fh)\n",
+    "import types\nns = types.SimpleNamespace(a=1)\n",
+    "def run(ctx):\n    return ctx.read('ids').to_pandas().eval('a + b')\n",
+])
+def test_lookalikes_are_not_flagged(source):
+    assert not any("unhashed code construct" in v for v in lint_source(source, "s.py"))
+
+
+def test_each_unhashed_construct_is_reported_at_its_own_line():
+    source = "import sys\nimport runpy\n\n\ndef run(ctx):\n    sys.path.append('v')\n"
+    assert lint_source(source, "s.py") == [
+        "s.py:2: unhashed code construct 'runpy'",
+        "s.py:6: unhashed code construct 'sys.path'",
+    ]
+
+
+def test_a_sitecustomize_file_is_flagged_by_name():
+    (violation,) = lint_source("X = 1\n", "lib/sitecustomize.py")
+    assert violation == "lib/sitecustomize.py:1: unhashed code construct 'sitecustomize'"
+
+
+def test_a_usercustomize_file_is_flagged_by_name():
+    (violation,) = lint_source("X = 1\n", "usercustomize.py")
+    assert violation == "usercustomize.py:1: unhashed code construct 'usercustomize'"
+
+
+def test_a_sitecustomize_file_that_does_not_parse_reports_both():
+    violations = lint_source("def (:\n", "sitecustomize.py")
+    assert violations[0] == "sitecustomize.py:1: unhashed code construct 'sitecustomize'"
+    assert "syntax error" in violations[1]

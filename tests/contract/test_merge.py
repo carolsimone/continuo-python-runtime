@@ -728,3 +728,36 @@ def test_an_asset_the_merge_cannot_read_fails_it(tmp_path, prepare, match):
     prepare(repo)
     with pytest.raises(ContractError, match=match):
         build_wire_contract(repo / "contracts", repo, "s")
+
+
+@pytest.mark.parametrize("name", ["sitecustomize.py", "usercustomize.py"])
+def test_a_startup_hook_at_the_repository_root_fails_the_merge(contract_repo, name):
+    (contract_repo / name).write_text("X = 1\n")
+    with pytest.raises(ContractError, match=f"{name} at the repository root"):
+        build_wire_contract(contract_repo / "contracts", contract_repo, "s")
+
+
+def test_a_sitecustomize_below_the_repository_root_is_caught_by_the_closure_lint(tmp_path):
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "sitecustomize.py").write_text("X = 1\n")
+    (repo / "scripts" / "node.py").write_text(
+        "import scripts.sitecustomize\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
+    )
+    _write_single_node_contract(repo, "scripts/node.py")
+    with pytest.raises(ContractError, match="unhashed code construct 'sitecustomize'"):
+        build_wire_contract(repo / "contracts", repo, "s")
+
+
+def test_a_closure_member_that_runs_code_with_runpy_fails_the_merge(tmp_path):
+    repo = tmp_path
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "helpers.py").write_text(
+        "import runpy\n\n\ndef load(path):\n    return runpy.run_path(path)\n"
+    )
+    (repo / "scripts" / "node.py").write_text(
+        "from scripts.helpers import load\n\n\ndef run(ctx):\n    return ctx.read('ids')\n"
+    )
+    _write_single_node_contract(repo, "scripts/node.py")
+    with pytest.raises(ContractError, match="unhashed code construct 'runpy'"):
+        build_wire_contract(repo / "contracts", repo, "s")

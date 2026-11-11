@@ -69,7 +69,8 @@ def _lint_node_closure(
     in-repo import closure — is held to the same lint rules
     (``continuo_python_runtime.lint.lint_source``: L1 forbidden driver
     imports, L2 SQL string literals, L3 forbidden data-access calls, L4
-    private-attribute access, L5 dynamic-import constructs) that CI's
+    private-attribute access, L5 dynamic-import constructs, L6 constructs
+    that run code the hash cannot see) that CI's
     ``continuo-runtime lint`` applies to ``scripts/``. Enforcing it again
     here, at merge time, means a helper file outside ``scripts/`` — which
     the CI lint step never looks at — cannot become a side channel around
@@ -130,9 +131,18 @@ def build_wire_contract(
     .load_contract_dir` so every declared read is checked against that sqlglot
     dialect (``None`` -- the default -- uses sqlglot's dialect-neutral parser).
 
-    Raises ContractError if any script file is missing.
+    Raises ContractError if any script file is missing, or if the repository
+    root holds a ``sitecustomize.py`` or ``usercustomize.py``: Python imports
+    either at startup, before the harness, so nothing in a node's import
+    closure reaches it.
     """
     nodes = load_contract_dir(contract_dir, dialect=dialect)
+
+    for hook in ("sitecustomize.py", "usercustomize.py"):
+        if (repo_root / hook).exists():
+            raise ContractError(
+                f"{hook} at the repository root runs before the harness and is not in the hash"
+            )
 
     wire_nodes = []
     for node in nodes:

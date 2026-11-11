@@ -301,7 +301,18 @@ def run(ctx):
     read_sql as rs` then calling `rs(...)`),
   - private/protected attribute access (`obj._x`) — except on `self`/`cls`,
     so a script's own class-private helpers (`self._helper()`) aren't
-    flagged.
+    flagged,
+  - code the content hash cannot see. The hash folds the script and the files
+    it imports, found by reading imports, so a node that runs anything else
+    can change without its `content_hash` changing. Lint refuses `runpy`, a
+    change to `sys.path` (`append`, `insert`, assignment, `del`, and
+    `site.addsitedir`), a `sitecustomize` or `usercustomize` module (and a file
+    of that name), `compile()` and `types.FunctionType`, and `pickle.load`,
+    `pickle.loads` and `pickle.Unpickler`. `merge` applies the same rules to
+    every file in a node's import closure, and refuses a `sitecustomize.py` or
+    `usercustomize.py` at the repository root, which Python imports before the
+    harness starts. A file a script reads, such as a model or a lookup table,
+    belongs in the node's `assets`, where its bytes are hashed.
 
   The SQL-literal rule is best-effort: docstrings are exempt, but other
   prose may still occasionally match. The hard guarantees enforced by lint

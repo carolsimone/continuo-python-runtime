@@ -13,6 +13,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   wire entry when a node declares any. A missing path, a non-file or a path
   that resolves outside the repository fails `merge`; `python-csv` refuses the
   key. The image must `COPY` the files.
+- `lint` and `merge` refuse code the content hash cannot see: `runpy`, a change
+  to `sys.path`, a `sitecustomize` or `usercustomize` module, `compile()` and
+  `types.FunctionType`, and `pickle.load`, `pickle.loads` and
+  `pickle.Unpickler`. `merge` also refuses a `sitecustomize.py` or
+  `usercustomize.py` at the repository root. A file a script reads belongs in
+  `assets`.
 
 ### Changed
 

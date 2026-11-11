@@ -106,7 +106,8 @@ jobs:
       - name: Install runtime tooling
         run: |
           uv tool install "continuo-python-runtime==${RUNTIME_VERSION}"
-          installed="$(uv tool list | sed -n 's/^continuo-python-runtime v\([^ ]*\).*/\1/p')"
+          listed="$(uv tool list --color never)"
+          installed="$(sed -n 's/^continuo-python-runtime v\([^ ]*\).*/\1/p' <<< "$listed")"
           if [ "$installed" != "$RUNTIME_VERSION" ]; then
             echo "::error::CI installed '${installed}', but the image runs continuo-python-runtime ${RUNTIME_VERSION}"
             exit 1

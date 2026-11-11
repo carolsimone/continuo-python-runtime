@@ -332,7 +332,15 @@ def _fixture_wheel(directory: Path, version: str) -> Path:
     return wheel
 
 
-def _check_installed_runtime(tmp_path, install_args, runtime_version):
+def _run_check(env):
+    """Run the step's version check the way GitHub runs a default shell: ``bash -e``, no pipefail."""
+    _, check = _install_and_check()
+    return subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-c", check], env=env, capture_output=True, text=True,
+    )
+
+
+def _check_installed_runtime(tmp_path, install_args, runtime_version, extra_env=None):
     """Install with a real ``uv tool install``, then run the step's version check.
 
     Returns the check's exit code and stdout. The tool directories are private
@@ -343,13 +351,10 @@ def _check_installed_runtime(tmp_path, install_args, runtime_version):
         "UV_TOOL_DIR": str(tmp_path / "tools"),
         "UV_TOOL_BIN_DIR": str(tmp_path / "bin"),
         "RUNTIME_VERSION": runtime_version,
+        **(extra_env or {}),
     }
     subprocess.run(["uv", "tool", "install", *install_args], env=env, check=True, capture_output=True)
-    _, check = _install_and_check()
-    done = subprocess.run(
-        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", check],
-        env=env, capture_output=True, text=True,
-    )
+    done = _run_check(env)
     return done.returncode, done.stdout
 
 
@@ -372,6 +377,27 @@ def test_the_version_check_compares_the_installed_tool_with_the_pin(tmp_path, in
         assert out.strip() == (
             f"::error::CI installed '{installed}', but the image runs continuo-python-runtime {pinned}"
         )
+
+
+@pytest.mark.parametrize("force_colour", ["FORCE_COLOR", "CLICOLOR_FORCE"])
+def test_the_version_check_ignores_forced_colour(tmp_path, force_colour):
+    """uv wraps its output in ANSI escapes when colour is forced; the check still reads the version."""
+    wheel = _fixture_wheel(tmp_path, "0.12.0")
+    code, out = _check_installed_runtime(tmp_path, [str(wheel)], "0.12.0", {force_colour: "1"})
+    assert code == 0, out
+
+
+def test_the_version_check_stops_on_a_uv_failure_and_shows_uvs_error(tmp_path):
+    """A failing `uv tool list` ends the step with uv's own message, not a mismatch on ''.
+
+    A regular file where uv expects its tool directory makes uv fail for real.
+    """
+    not_a_directory = tmp_path / "tools"
+    not_a_directory.write_text("")
+    done = _run_check({**os.environ, "UV_TOOL_DIR": str(not_a_directory), "RUNTIME_VERSION": "0.12.0"})
+    assert done.returncode != 0
+    assert "Not a directory" in done.stderr
+    assert "CI installed" not in done.stdout + done.stderr
 
 
 def test_the_version_check_passes_for_the_wheel_built_from_this_checkout(tmp_path):

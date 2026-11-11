@@ -104,6 +104,10 @@ jobs:
           echo "RUNTIME_VERSION=$version" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@v5
       - name: Install runtime tooling
+        # `--color never` keeps forced-colour escapes out of the version line the
+        # sed reads. The listing is captured before the sed because the default
+        # shell has no pipefail: a failing `uv tool list` in a pipeline would be
+        # masked by the sed's exit status.
         run: |
           uv tool install "continuo-python-runtime==${RUNTIME_VERSION}"
           listed="$(uv tool list --color never)"

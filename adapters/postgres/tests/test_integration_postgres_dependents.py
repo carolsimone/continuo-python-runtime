@@ -3,6 +3,10 @@
 Run the stack first:
     docker compose -f tests/smoke/postgres-stack/docker-compose.yml up -d --wait
 
+CI runs this file on postgres:16. It also passes on postgres:18.3: start a
+server with database ``warehouse`` and user and password ``continuo``, and set
+``VR_IT_PG_PORT`` to its host port.
+
 Every fixture creates uniquely named schemas (and a NOLOGIN role) and drops them
 in teardown, whether the test passed or not.
 """

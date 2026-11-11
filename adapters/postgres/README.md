@@ -44,8 +44,11 @@ it only what reads that column is walked on.
 functions and every view past the first level. The table's own indexes,
 constraints (a self-referencing foreign key included), policies, rules, column
 defaults, sequences, partitions and triggers are parts of the table, and the
-array and multirange types, constructor functions and casts of a type are parts
-of the type: none is listed. Each object appears once, at its shallowest depth.
+array and multirange types, constructor functions and casts a type internally
+owns (the constructors of a range or multirange type and the range-to-multirange
+cast) are parts of the type: none is listed. A cast a user created, such as
+`CREATE CAST (seed AS text)`, is dropped by the cascade and is listed as `other`
+(`cast from <schema>.seed to text`). Each object appears once, at its shallowest depth.
 The walk follows at most 32 dependency levels; an object deeper than that is not
 listed. The table is found case-insensitively, so a seed loaded under another
 letter case never makes the walk skip it, and a schema holding two tables that
@@ -53,13 +56,19 @@ differ only by letter case lists the dependants of both; a missing table or
 schema gives no objects. Each `kind` is one of `view`, `materialized_view`,
 `table`, `function`, `procedure`, `constraint`, `policy`, `rule` or `other`.
 `other` is anything else: a domain, a range type or another type (named
-`type <schema>.<name>`), a composite type (its own name), an index, a column
-default of another table (named `default value for column ...`) or a trigger. The
+`type <name>`), a composite type (its own name), an index, a user cast, a column
+default of another table (named `default value for column ...`) or a trigger.
+A name that Postgres describes (a type, a cast, a column default) is
+schema-qualified unless the object is visible on the connection's `search_path`
+(a domain in `public` is named `type my_domain`). The
 name of a function carries its argument types (`seed_count()`), and that of a
 constraint, policy or rule the table or domain it sits on
 (`orders_seed_id_fkey on orders`). A listed object that has no table of its own
 (a type, a column default, a trigger) has an empty schema and an empty owner.
-The dependents suite runs against postgres:16 (the test stack) and postgres:18.3.
+CI runs the dependents suite against the postgres:16 test stack; it was also
+verified against a postgres:18.3 server by pointing the suite at it with
+`VR_IT_PG_PORT` (host `localhost`, database `warehouse`, user and password
+`continuo`).
 
 The `config:` index vocabulary is the union of the two vocabularies this
 adapter inherited from the merge: `columns`, `unique`, `type`, and `name`,

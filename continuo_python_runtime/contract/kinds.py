@@ -3,9 +3,10 @@
 continuo-contracts decides which fields a node of each kind must, may and may
 not carry. The runtime keeps one rule per kind for itself, the check of its
 reads: a python-node's reads each parse as one read query under the
-repository's dialect, a python-csv node's uri is one its readers fetch, and a
-python-api node reads nothing. Adding a kind means adding one entry to
-``RULES``; nothing that loads a contract branches on the kind's name.
+repository's dialect and name the schema of every table they read, a
+python-csv node's uri is one its readers fetch, and a python-api node reads
+nothing. Adding a kind means adding one entry to ``RULES``; nothing that loads
+a contract branches on the kind's name.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from continuo_engine_contract.sql import ensure_single_read  # type: ignore[impo
 from sqlglot.errors import TokenError
 
 from continuo_python_runtime.contract.model import KINDS
+from continuo_python_runtime.contract.read_tables import unqualified_tables
 from continuo_python_runtime.csv_source import parse_csv_uri
 from continuo_python_runtime.errors import ContractError
 
@@ -32,7 +34,11 @@ class ReadsRule(ABC):
 
 
 class SqlReads(ReadsRule):
-    """A non-empty mapping of read name -> single SELECT."""
+    """A non-empty mapping of read name -> single SELECT.
+
+    When the reads are checked, every table a query names must name its schema
+    (a CTE of the query excepted), as topology-controller requires of a release.
+    """
 
     def validate(
         self, reads: Any, label: str, *, dialect: str | None, check_reads: bool
@@ -71,6 +77,12 @@ class SqlReads(ReadsRule):
                 raise ContractError(
                     f"{label}: 'reads.{name}' must be a single read query ({exc})"
                 ) from exc
+            unqualified = unqualified_tables(sql, dialect=dialect)
+            if unqualified:
+                raise ContractError(
+                    f"{label}: read {name!r} names table {unqualified[0]!r} without its schema; "
+                    f"write <schema>.{unqualified[0]}"
+                )
         return dict(reads)
 
 

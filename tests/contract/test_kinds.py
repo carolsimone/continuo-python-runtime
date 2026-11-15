@@ -3,6 +3,7 @@ import pytest
 from continuo_python_runtime.contract.kinds import RULES, CsvRead, NoReads, SqlReads, rules_for
 from continuo_python_runtime.contract.model import KINDS
 from continuo_python_runtime.errors import ContractError
+from tests.odcs_builder import contract_node
 
 
 def test_every_kind_has_rules():
@@ -31,6 +32,71 @@ def test_sql_reads_rejects_an_empty_mapping():
 def test_sql_reads_skips_the_shape_gate_when_asked():
     reads = {"a": "this is not sql at all"}
     assert SqlReads().validate(reads, "L", dialect=None, check_reads=False) == reads
+
+
+def test_sql_reads_accepts_reads_that_name_their_schemas():
+    reads = {"a": "select * from raw.a", "b": "with c as (select 1) select * from c join raw.b on 1=1"}
+    assert SqlReads().validate(reads, "L", dialect="postgres", check_reads=True) == reads
+
+
+def test_an_unqualified_table_fails_validate():
+    with pytest.raises(ContractError) as exc:
+        SqlReads().validate({"x": "select * from orders"}, "L", dialect=None, check_reads=True)
+    assert str(exc.value) == "L: read 'x' names table 'orders' without its schema; write <schema>.orders"
+
+
+def test_validate_names_the_first_read_and_the_first_table_that_lacks_a_schema():
+    reads = {"a": "select * from raw.a", "b": "select * from raw.b join y on 1=1 join z on 1=1", "c": "select * from w"}
+    with pytest.raises(ContractError) as exc:
+        SqlReads().validate(reads, "L", dialect="postgres", check_reads=True)
+    assert str(exc.value) == "L: read 'b' names table 'y' without its schema; write <schema>.y"
+
+
+def test_a_cte_in_one_read_does_not_hide_the_same_name_in_another():
+    reads = {"a": "with users as (select 1) select * from users", "b": "select * from users"}
+    with pytest.raises(ContractError, match="read 'b' names table 'users' without its schema"):
+        SqlReads().validate(reads, "L", dialect="postgres", check_reads=True)
+
+
+def test_a_nameless_table_with_no_schema_is_named_by_its_sql_text():
+    with pytest.raises(ContractError) as exc:
+        SqlReads().validate(
+            {"x": "select * from generate_series(1, 3)"}, "L", dialect="postgres", check_reads=True
+        )
+    assert str(exc.value) == (
+        "L: read 'x' names table 'generate_series(1, 3)' without its schema; "
+        "write <schema>.generate_series(1, 3)"
+    )
+
+
+def test_a_schema_qualified_function_call_passes_validate():
+    reads = {"x": "select * from pg_catalog.generate_series(1, 3)"}
+    assert SqlReads().validate(reads, "L", dialect="postgres", check_reads=True) == reads
+
+
+def test_the_single_read_check_comes_before_the_schema_rule():
+    with pytest.raises(ContractError, match="'reads.x' must be a single read query"):
+        SqlReads().validate({"x": "select 1 from t; select 2 from u"}, "L", dialect=None, check_reads=True)
+
+
+def test_the_harness_does_not_apply_the_rule():
+    reads = {"x": "select * from orders"}
+    assert SqlReads().validate(reads, "L", dialect=None, check_reads=False) == reads
+
+
+def test_a_contract_with_an_unqualified_read_loads_as_the_harness_reads_it():
+    """The harness loads with check_reads=False, so the rule is validate's alone."""
+    node = contract_node(
+        schema="analytics",
+        table="t",
+        owner="marketing",
+        schedule="daily",
+        criticality="SECONDARY",
+        script="scripts/t.py",
+        reads={"x": "select * from orders"},
+        output_columns=[{"name": "id", "type": "INTEGER"}],
+    )
+    assert node.reads == {"x": "select * from orders"}
 
 
 def test_csv_read_requires_exactly_a_csv_key():

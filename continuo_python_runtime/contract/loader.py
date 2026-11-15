@@ -128,9 +128,10 @@ def node_from_contract(
 
     The runtime's own rules follow, each naming ``file`` and the relation:
     the kind's reads rule (:mod:`~continuo_python_runtime.contract.kinds`),
-    which parses each read of a python-node as one read query under
-    ``dialect`` unless ``check_reads`` is false; the shape of ``config``; and
-    the case-insensitive uniqueness of an upsert key's names.
+    which, unless ``check_reads`` is false, parses each read of a python-node
+    as one read query under ``dialect`` and refuses a read that names a table
+    without its schema (a CTE of the read excepted); the shape of ``config``;
+    and the case-insensitive uniqueness of an upsert key's names.
 
     The node takes ``owner`` from ``team.name``, ``description`` from
     ``description.purpose`` (``""`` when absent), and ``schedule``,
@@ -211,12 +212,13 @@ def load_contract_dir(
     another format is a mistake, never a node to skip. Files with any other
     extension are not read.
 
-    ``check_reads=False`` skips only the check that each read of a python-node
-    parses as one read query; every other rule of :func:`node_from_contract`
-    and every rule here (the dialect name, the duplicate relations, the empty
-    folder) still runs. The harness
+    ``check_reads=False`` skips only the checks of the reads of a python-node:
+    that each parses as one read query and that each names its tables with
+    their schemas. Every other rule of :func:`node_from_contract` and every
+    rule here (the dialect name, the duplicate relations, the empty folder)
+    still runs. The harness
     (:func:`~continuo_python_runtime.harness.run_node`) passes it, because
-    parsing the reads again at container start can only disagree with the
+    checking the reads again at container start can only disagree with the
     checks already passed, never catch a new problem:
 
     - CI already checked the reads (``continuo-runtime validate``) under the

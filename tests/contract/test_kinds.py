@@ -79,6 +79,15 @@ def test_the_single_read_check_comes_before_the_schema_rule():
         SqlReads().validate({"x": "select 1 from t; select 2 from u"}, "L", dialect=None, check_reads=True)
 
 
+@pytest.mark.parametrize("dialect", ["postgres", None])
+@pytest.mark.parametrize("sql", ["SELECT FROM WHERE (", "; select * from raw.a", ";"])
+def test_a_read_sqlglot_refuses_is_a_contract_error_not_a_sqlglot_error(sql, dialect):
+    """A leading `;` passes ensure_single_read (one statement is left) but not the
+    parse the schema rule needs, which topology-controller refuses as well."""
+    with pytest.raises(ContractError, match=r"^L: 'reads\.x' must be a single read query \("):
+        SqlReads().validate({"x": sql}, "L", dialect=dialect, check_reads=True)
+
+
 def test_the_harness_does_not_apply_the_rule():
     reads = {"x": "select * from orders"}
     assert SqlReads().validate(reads, "L", dialect=None, check_reads=False) == reads

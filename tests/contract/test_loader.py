@@ -335,6 +335,23 @@ def test_a_read_the_tokenizer_refuses_is_a_contract_error(sql):
         _with_read(sql)
 
 
+def test_a_read_that_names_a_table_without_its_schema_is_refused():
+    with pytest.raises(ContractError) as exc:
+        _with_read("select id from orders")
+    assert str(exc.value) == (
+        "t.odcs.yaml (analytics.t): read 'ids' names table 'orders' without its schema; "
+        "write <schema>.orders"
+    )
+
+
+def test_a_folder_with_a_read_that_names_no_schema_is_refused_by_the_loader(tmp_path):
+    file = write_contract(tmp_path, **{**FIELDS, "reads": {"ids": "select id from orders"}})
+    with pytest.raises(ContractError, match=rf"{re.escape(str(file))} \(analytics\.t\): read 'ids' names table 'orders'"):
+        load_contract_dir(tmp_path)
+    (node,) = load_contract_dir(tmp_path, check_reads=False)
+    assert node.reads == {"ids": "select id from orders"}
+
+
 def test_the_dialect_decides_which_reads_parse(tmp_path):
     """QUALIFY parses under sqlglot's dialect-neutral grammar and not under trino's."""
     sql = "select a from analytics.a qualify row_number() over (order by a) = 1"

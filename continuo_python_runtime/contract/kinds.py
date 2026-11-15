@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
-from sqlglot.errors import TokenError
+from sqlglot.errors import ParseError, TokenError
 
 from continuo_python_runtime.contract.model import KINDS
 from continuo_python_runtime.contract.read_tables import unqualified_tables
@@ -77,7 +77,17 @@ class SqlReads(ReadsRule):
                 raise ContractError(
                     f"{label}: 'reads.{name}' must be a single read query ({exc})"
                 ) from exc
-            unqualified = unqualified_tables(sql, dialect=dialect)
+            try:
+                unqualified = unqualified_tables(sql, dialect=dialect)
+            except ParseError as exc:
+                # ensure_single_read keeps the statements sqlglot parsed and
+                # accepts a query that starts with an empty statement (`; select
+                # ...`); sqlglot's parse_one, which finds the tables here and in
+                # topology-controller, refuses it. The read is refused as the
+                # release would refuse it.
+                raise ContractError(
+                    f"{label}: 'reads.{name}' must be a single read query ({exc})"
+                ) from exc
             if unqualified:
                 raise ContractError(
                     f"{label}: read {name!r} names table {unqualified[0]!r} without its schema; "

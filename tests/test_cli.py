@@ -10,6 +10,7 @@ import yaml
 import continuo_python_runtime.cli as cli_module
 from continuo_python_runtime.cli import main
 from tests.conftest import FakeWarehouseAdapter
+from tests.odcs_builder import write_contract
 
 
 def test_version_prints_the_installed_runtime_version(capsys):
@@ -65,6 +66,42 @@ def test_validate_invalid_dialect_reports_bad_flag_not_bad_read(contract_repo, c
     messages = [r.message for r in caplog.records]
     assert any("--dialect" in m and "POSTGRES" in m for m in messages)
     assert not any("must be a single read query" in m for m in messages)
+
+
+def test_validate_refuses_a_read_that_names_a_table_without_its_schema(tmp_path, caplog):
+    write_contract(
+        tmp_path,
+        schema="analytics",
+        table="t",
+        owner="marketing",
+        schedule="daily",
+        criticality="SECONDARY",
+        script="scripts/t.py",
+        reads={"ids": "select id from orders"},
+        output_columns=[{"name": "id", "type": "INTEGER"}],
+    )
+    assert main(["validate", str(tmp_path)]) == 1
+    messages = [r.message for r in caplog.records]
+    assert any(
+        "read 'ids' names table 'orders' without its schema; write <schema>.orders" in m
+        for m in messages
+    )
+
+
+def test_validate_refuses_a_read_that_starts_with_a_semicolon_without_a_traceback(tmp_path, caplog):
+    write_contract(
+        tmp_path,
+        schema="analytics",
+        table="t",
+        owner="marketing",
+        schedule="daily",
+        criticality="SECONDARY",
+        script="scripts/t.py",
+        reads={"ids": "; select id from raw.a"},
+        output_columns=[{"name": "id", "type": "INTEGER"}],
+    )
+    assert main(["validate", str(tmp_path)]) == 1
+    assert any("'reads.ids' must be a single read query" in r.message for r in caplog.records)
 
 
 def test_merge_writes_artifact(contract_repo, tmp_path):

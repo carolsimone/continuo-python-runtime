@@ -337,7 +337,8 @@ def run_node(
         logger.info("running node %s -> %s.%s", node_id, target_schema, table_name)
 
         # check_reads=False: the harness has no --dialect of its own, so
-        # re-running the read-shape gate here would judge the reads against
+        # re-running the read checks here (each read is one read query, and
+        # each table it names has its schema) would judge the reads against
         # sqlglot's dialect-neutral grammar -- a different, in places stricter
         # grammar than the one CI used -- and could only disagree with the
         # gates already passed (CI's `continuo-runtime validate`, then

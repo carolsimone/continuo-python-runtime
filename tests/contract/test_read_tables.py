@@ -120,6 +120,14 @@ def test_a_nameless_table_is_listed_once():
     assert unqualified_tables(sql, dialect="postgres") == ["generate_series(1, 3)"]
 
 
-def test_sql_sqlglot_refuses_propagates_its_error():
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_sql_sqlglot_refuses_propagates_its_error(dialect):
     with pytest.raises(ParseError):
-        unqualified_tables("SELECT FROM WHERE (", dialect="postgres")
+        unqualified_tables("SELECT FROM WHERE (", dialect=dialect)
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_a_leading_empty_statement_propagates_sqlglots_error(dialect):
+    """sqlglot's parse_one, which topology-controller uses too, refuses a query that starts with `;`."""
+    with pytest.raises(ParseError):
+        unqualified_tables("; SELECT * FROM raw.a", dialect=dialect)

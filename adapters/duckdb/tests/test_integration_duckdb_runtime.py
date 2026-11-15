@@ -6,7 +6,6 @@ from decimal import Decimal
 import duckdb
 import pyarrow as pa
 import pytest
-import yaml
 
 from continuo_python_runtime.harness import run_node
 
@@ -162,22 +161,22 @@ def test_a_schema_named_like_the_catalog_alias_is_not_ambiguous(adapter):
         adapter.drop_schema("lake")
 
 
-def _csv_contract_dir(tmp_path, schema):
-    (tmp_path / "contracts").mkdir()
-    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
-        "schema": schema, "table": "orders_csv", "owner": "m", "schedule": "daily",
-        "criticality": "SECONDARY", "kind": "python-csv",
-        "reads": {"csv": f"s3://{BUCKET}/drops/orders.csv"},
-        "output_columns": [
+def _csv_contract_dir(write_contract, tmp_path, schema):
+    write_contract(
+        tmp_path / "contracts",
+        schema=schema, table="orders_csv", owner="m", schedule="daily",
+        criticality="SECONDARY", kind="python-csv",
+        reads={"csv": f"s3://{BUCKET}/drops/orders.csv"},
+        output_columns=[
             {"name": "order_id", "type": "INTEGER", "nullable": False},
             {"name": "amount", "type": "DOUBLE PRECISION"},
         ],
-    }]}))
+    )
     return tmp_path
 
 
 def test_run_node_csv_kind_loads_a_minio_csv_into_duckdb(
-    adapter, adapter_factory, schema, s3, columns_of, monkeypatch, tmp_path,
+    adapter, adapter_factory, schema, s3, columns_of, monkeypatch, tmp_path, write_contract,
 ):
     """The full production path: real minio csv -> harness -> DuckDBAdapter -> real DuckLake."""
     s3.put_object(Bucket=BUCKET, Key="drops/orders.csv", Body=b"order_id,amount\n1,10.5\n2,20.0\n3,5.25\n")
@@ -185,7 +184,7 @@ def test_run_node_csv_kind_loads_a_minio_csv_into_duckdb(
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "minioadmin")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "minioadmin")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    repo = _csv_contract_dir(tmp_path, schema)
+    repo = _csv_contract_dir(write_contract, tmp_path, schema)
     env = {
         "NODE_ID": f"python-csv.svc.{schema}.orders_csv",
         "TABLE_NAME": "orders_csv",
@@ -275,32 +274,35 @@ _FX_SCRIPT = (
 )
 
 
-def _fx_run_env(repo, schema, run, rows, **mode):
-    """A python-api fx node returning *rows*, with a script file unique to *run*.
+@pytest.fixture()
+def fx_run_env(write_contract):
+    """Build the env of a python-api fx node returning *rows*, with a script file unique to *run*.
 
     One file per run: rewriting the same file within a second at the same size
     would let Python reuse its cached bytecode and return the previous rows.
     """
-    (repo / "contracts").mkdir(exist_ok=True)
-    (repo / "scripts").mkdir(exist_ok=True)
-    script = f"scripts/fx_{run}.py"
-    (repo / script).write_text(_FX_SCRIPT.format(rows=rows))
-    node = {
-        "schema": schema, "table": "fx_rates", "owner": "m", "schedule": "hourly",
-        "criticality": "SECONDARY", "kind": "python-api", "script": script,
-        "output_columns": _FX_COLUMNS, **mode,
-    }
-    (repo / "contracts" / "fx.yml").write_text(yaml.safe_dump({"nodes": [node]}))
-    return {
-        "NODE_ID": f"python-api.svc.{schema}.fx_rates", "TABLE_NAME": "fx_rates",
-        "TARGET_SCHEMA": schema, "CONTRACT_DIR": str(repo / "contracts"), "APP_ROOT": str(repo),
-    }
+    def build(repo, schema, run, rows, **mode):
+        (repo / "scripts").mkdir(exist_ok=True)
+        script = f"scripts/fx_{run}.py"
+        (repo / script).write_text(_FX_SCRIPT.format(rows=rows))
+        write_contract(
+            repo / "contracts",
+            schema=schema, table="fx_rates", owner="m", schedule="hourly",
+            criticality="SECONDARY", kind="python-api", script=script,
+            output_columns=_FX_COLUMNS, **mode,
+        )
+        return {
+            "NODE_ID": f"python-api.svc.{schema}.fx_rates", "TABLE_NAME": "fx_rates",
+            "TARGET_SCHEMA": schema, "CONTRACT_DIR": str(repo / "contracts"), "APP_ROOT": str(repo),
+        }
+
+    return build
 
 
-def test_run_node_append_keeps_the_rows_of_earlier_runs(adapter_factory, schema, scalar, tmp_path):
-    env = _fx_run_env(tmp_path, schema, "run1", [("2026-10-08", "EUR", "1.081200")], mode_type="append")
+def test_run_node_append_keeps_the_rows_of_earlier_runs(adapter_factory, schema, scalar, tmp_path, fx_run_env):
+    env = fx_run_env(tmp_path, schema, "run1", [("2026-10-08", "EUR", "1.081200")], mode_type="append")
     assert run_node(env, adapter=adapter_factory()) == 0
-    env = _fx_run_env(
+    env = fx_run_env(
         tmp_path, schema, "run2",
         [("2026-10-08", "EUR", "1.081200"), ("2026-10-09", "EUR", "1.090000")],
         mode_type="append",
@@ -309,14 +311,14 @@ def test_run_node_append_keeps_the_rows_of_earlier_runs(adapter_factory, schema,
     assert scalar(f'SELECT count(*) AS n FROM "{schema}"."fx_rates"') == 3
 
 
-def test_run_node_upsert_overwrites_by_key(adapter, adapter_factory, schema, tmp_path):
+def test_run_node_upsert_overwrites_by_key(adapter, adapter_factory, schema, tmp_path, fx_run_env):
     key = {"mode_type": "upsert", "primary_key": ["rate_date", "base"]}
-    env = _fx_run_env(
+    env = fx_run_env(
         tmp_path, schema, "run1",
         [("2026-10-08", "EUR", "1.081200"), ("2026-10-08", "GBP", "0.861000")], **key,
     )
     assert run_node(env, adapter=adapter_factory()) == 0
-    env = _fx_run_env(
+    env = fx_run_env(
         tmp_path, schema, "run2",
         [("2026-10-08", "EUR", "1.090000"), ("2026-10-09", "EUR", "1.100000")], **key,
     )

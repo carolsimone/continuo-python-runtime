@@ -25,10 +25,11 @@ from pathlib import Path
 
 import psycopg2
 import pytest
-import yaml
 
 from continuo_engine_contract import result
-from continuo_python_runtime.contract.merge import build_wire_contract
+from continuo_python_runtime.contract.loader import load_contract_dir
+from continuo_python_runtime.hash_inputs import gather_hash_inputs
+from continuo_python_runtime.hashing import hash_parts
 
 from .test_integration_postgres_conformance import PG
 
@@ -70,6 +71,13 @@ def _block(proc: subprocess.CompletedProcess) -> dict:
     assert len(lines) == 3, f"stdout is not exactly one block: {proc.stdout!r}\nstderr: {proc.stderr}"
     assert lines[0] == result.SENTINEL_BEGIN and lines[2] == result.SENTINEL_END
     return json.loads(lines[1])
+
+
+def _released_content_hash(repo: Path) -> str:
+    """The content_hash the release records for the repository's only node, from its files as they are now."""
+    (node,) = load_contract_dir(repo / "contracts")
+    inputs = gather_hash_inputs(node, repo)
+    return hash_parts(node, inputs.primary, inputs.units)["content_hash"]
 
 
 def _connect():
@@ -172,18 +180,18 @@ def test_a_bad_input_exits_2_and_the_process_does_not_ask_for_a_candidate_schema
     assert block["message"] in proc.stderr
 
 
-def test_the_harness_refuses_an_image_that_differs_from_the_release_and_writes_nothing(tmp_path: Path):
-    (tmp_path / "contracts").mkdir()
+def test_the_harness_refuses_an_image_that_differs_from_the_release_and_writes_nothing(tmp_path: Path, write_contract):
     (tmp_path / "scripts").mkdir()
     script = tmp_path / "scripts" / "t.py"
     script.write_text("def run(ctx):\n    return ctx.read('ids')\n")
-    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
-        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
-        "criticality": "SECONDARY", "script": "scripts/t.py",
-        "reads": {"ids": "select id from analytics.a"},
-        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
-    }]}))
-    released = build_wire_contract(tmp_path / "contracts", tmp_path, "s")["nodes"][0]["content_hash"]
+    write_contract(
+        tmp_path / "contracts",
+        schema="analytics", table="t", owner="m", schedule="daily",
+        criticality="SECONDARY", script="scripts/t.py",
+        reads={"ids": "select id from analytics.a"},
+        output_columns=[{"name": "id", "type": "INTEGER", "nullable": False}],
+    )
+    released = _released_content_hash(tmp_path)
     script.write_text("def run(ctx):\n    return ctx.read('ids')  # edited after the release\n")
     target = f"ep_{uuid.uuid4().hex[:10]}"
     env = {

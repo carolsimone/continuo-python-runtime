@@ -10,7 +10,7 @@ keeps for itself and builds its :class:`~continuo_python_runtime.contract.model
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +115,11 @@ def _upsert_key(python: PythonNode, label: str) -> tuple[str, ...]:
     return tuple(python.primary_key)
 
 
+def issue_lines(file: Path | str, issues: Iterable[object]) -> list[str]:
+    """One line per issue of the contract in ``file``, ``f"{file}: {issue}"``."""
+    return [f"{file}: {issue}" for issue in issues]
+
+
 def node_from_contract(
     doc: Mapping[str, Any], file: Path, *, dialect: str | None, check_reads: bool
 ) -> Node:
@@ -123,8 +128,8 @@ def node_from_contract(
     continuo-contracts checks the contract first
     (``validate_python_contract``, with no service, of which only the base
     name of ``file`` counts for the file-name rule). When it finds issues they
-    become one :class:`ContractError` with one line per issue,
-    ``f"{file}: {issue}"``, and nothing else runs.
+    become one :class:`ContractError` with one :func:`issue_lines` line per
+    issue, and nothing else runs.
 
     The runtime's own rules follow, each naming ``file`` and the relation:
     the kind's reads rule (:mod:`~continuo_python_runtime.contract.kinds`),
@@ -144,7 +149,7 @@ def node_from_contract(
     """
     issues = validate_python_contract(doc, path=str(file), service=None)
     if issues:
-        raise ContractError("\n".join(f"{file}: {issue}" for issue in issues))
+        raise ContractError("\n".join(issue_lines(file, issues)))
     python = node_from_odcs(doc)
     label = f"{file} ({python.relation})"
 
@@ -182,12 +187,19 @@ def node_from_contract(
     )
 
 
-def _read_contract(file: Path) -> Mapping[str, Any]:
-    """Return the document of a contract file, read strictly by continuo-contracts."""
+def read_contract_text(file: Path) -> str:
+    """Return the text of the contract ``file`` exactly as written, line endings included."""
     try:
-        text = file.read_text(encoding="utf-8")
+        return file.read_bytes().decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ContractError(f"{file}: the file is not UTF-8 text ({exc})") from None
+
+
+def parse_contract(text: str, file: Path | str) -> Mapping[str, Any]:
+    """Return the document of the contract ``text``, read strictly by continuo-contracts.
+
+    ``file`` is only the name the refusals carry.
+    """
     try:
         doc = yaml_strict.load(text)
     except StrictYamlError as exc:
@@ -265,9 +277,8 @@ def load_contract_dir(
     nodes: list[Node] = []
     relation_files: dict[str, Path] = {}
     for file in files:
-        node = node_from_contract(
-            _read_contract(file), file, dialect=dialect, check_reads=check_reads
-        )
+        doc = parse_contract(read_contract_text(file), file)
+        node = node_from_contract(doc, file, dialect=dialect, check_reads=check_reads)
         existing = relation_files.get(node.relation)
         if existing is not None:
             raise ContractError(

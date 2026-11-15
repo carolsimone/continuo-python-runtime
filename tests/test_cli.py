@@ -1,18 +1,20 @@
-"""Tests for CLI subcommands: validate, merge, hash, run."""
+"""Tests for CLI subcommands: validate, pack, hash, packages, lint, run and validation-op."""
 
+import hashlib
 import json
 from importlib import metadata
 
 import pyarrow as pa
 import pytest
-import yaml
 
 import continuo_python_runtime.cli as cli_module
 from continuo_python_runtime.cli import main
 from continuo_python_runtime.hash_inputs import gather_hash_inputs
-from continuo_python_runtime.hashing import hash_parts
-from tests.conftest import NODE_T, FakeWarehouseAdapter
+from continuo_python_runtime.hashing import hash_parts, shared_code_hash
+from tests.conftest import DEMO_SCRIPTS, NODE_T, FakeWarehouseAdapter
 from tests.odcs_builder import write_contract
+
+__version__ = metadata.version("continuo-python-runtime")
 
 
 def test_version_prints_the_installed_runtime_version(capsys):
@@ -106,78 +108,159 @@ def test_validate_refuses_a_read_that_starts_with_a_semicolon_without_a_tracebac
     assert any("'reads.ids' must be a single read query" in r.message for r in caplog.records)
 
 
-def test_merge_writes_artifact(contract_repo, tmp_path):
-    out = tmp_path / "contract.yaml"
-    rc = main(
-        [
-            "merge",
-            str(contract_repo / "contracts"),
-            "--service",
-            "s",
-            "--repo-root",
-            str(contract_repo),
-            "--out",
-            str(out),
-        ]
+def test_pack_writes_the_bundle(demo_repo, tmp_path):
+    out = tmp_path / "odcs-bundle.json"
+    assert main(["pack", str(demo_repo.contracts), "--service", "service-py", "--repo-root", str(demo_repo.root),
+                 "--image-packages", str(demo_repo.packages_file), "--out", str(out)]) == 0
+    doc = json.loads(out.read_text())
+    assert doc["bundle_version"] == 1 and doc["service"] == "service-py"
+    assert doc["producer"] == {"continuo_python_runtime": __version__, "continuo_contracts": "0.2.0"}
+    assert doc["image_packages"] == {"pyarrow": "26.0.0"}
+    assert [n["path"] for n in doc["nodes"]] == [
+        "contracts/demo_orders_csv.odcs.yaml", "contracts/fx_eur_usd_rates.odcs.yaml", "contracts/py_daily_kpis.odcs.yaml"
+    ]
+    kpis = doc["nodes"][2]
+    assert kpis["text"] == (demo_repo.contracts / "py_daily_kpis.odcs.yaml").read_text()
+    assert kpis["shared_code_hash"] == shared_code_hash({"scripts/kpi_math.py": DEMO_SCRIPTS["scripts/kpi_math.py"]})
+    assert doc["nodes"][0]["source_hash"] == hashlib.sha256(b"s3://continuo-dev/static-files/demo/orders.csv").hexdigest()
+    assert doc["nodes"][0]["shared_code_hash"] == ""
+    assert out.read_bytes() == (json.dumps(doc, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def test_pack_records_the_packages_of_the_image_not_of_this_environment(demo_repo, tmp_path, fake_docker):
+    docker = fake_docker(stdout='{"pyarrow": "26.0.0", "somelib": "1.2.3"}\n')
+    out = tmp_path / "odcs-bundle.json"
+    assert main(["pack", str(demo_repo.contracts), "--service", "service-py", "--repo-root", str(demo_repo.root),
+                 "--image", "registry/service-py:7", "--out", str(out)]) == 0
+    assert json.loads(out.read_text())["image_packages"] == {"pyarrow": "26.0.0", "somelib": "1.2.3"}
+    assert docker.calls == ["run", "--rm", "--entrypoint", "continuo-runtime", "registry/service-py:7", "packages"]
+
+
+def test_pack_with_no_docker_writes_nothing(demo_repo, tmp_path, no_docker, caplog):
+    out = tmp_path / "odcs-bundle.json"
+    rc = main(["pack", str(demo_repo.contracts), "--service", "service-py", "--repo-root", str(demo_repo.root),
+               "--image", "registry/service-py:7", "--out", str(out)])
+    assert rc == 1
+    assert not out.exists()
+    assert any("registry/service-py:7" in r.message and "docker" in r.message for r in caplog.records)
+
+
+def test_pack_refuses_an_image_without_the_packages_command(demo_repo, tmp_path, fake_docker, caplog):
+    fake_docker(stderr="continuo-runtime: error: argument command: invalid choice: 'packages'\n", exit_code=2)
+    out = tmp_path / "odcs-bundle.json"
+    rc = main(["pack", str(demo_repo.contracts), "--service", "service-py", "--repo-root", str(demo_repo.root),
+               "--image", "registry/service-py:7", "--out", str(out)])
+    assert rc == 1
+    assert not out.exists()
+    assert any(
+        "registry/service-py:7" in r.message
+        and "the image has no `packages` command: build it on continuo-python-runtime 0.13.0 or later" in r.message
+        for r in caplog.records
     )
-    assert rc == 0
-    assert yaml.safe_load(out.read_text())["service"] == "s"
 
 
-def _fake_build_wire_contract(captured):
-    def fake(contract_dir, repo_root, service, *, dialect=None):
+@pytest.mark.parametrize("flags", ["neither", "both"])
+def test_pack_needs_exactly_one_package_source(demo_repo, tmp_path, capsys, flags):
+    out = tmp_path / "odcs-bundle.json"
+    argv = ["pack", str(demo_repo.contracts), "--service", "service-py", "--repo-root", str(demo_repo.root),
+            "--out", str(out)]
+    if flags == "both":
+        argv += ["--image", "registry/service-py:7", "--image-packages", str(demo_repo.packages_file)]
+    with pytest.raises(SystemExit) as exc:
+        main(argv)
+    assert exc.value.code == 2
+    assert "records the package list of the image" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_pack_refuses_a_contract_of_another_service(demo_repo, tmp_path, caplog):
+    write_contract(demo_repo.contracts, **{**NODE_T, "table": "other_service", "script": "scripts/t.py", "service": "other"})
+    out = tmp_path / "odcs-bundle.json"
+    rc = main(["pack", str(demo_repo.contracts), "--service", "service-py", "--repo-root", str(demo_repo.root),
+               "--image-packages", str(demo_repo.packages_file), "--out", str(out)])
+    assert rc == 1
+    assert not out.exists()
+    assert any("contracts/other_service.odcs.yaml" in r.message and "'other'" in r.message for r in caplog.records)
+
+
+def test_pack_lints_each_closure(demo_repo, tmp_path, caplog):
+    (demo_repo.root / "scripts" / "kpi_math.py").write_text("import psycopg2\n")
+    out = tmp_path / "odcs-bundle.json"
+    rc = main(["pack", str(demo_repo.contracts), "--service", "service-py", "--repo-root", str(demo_repo.root),
+               "--image-packages", str(demo_repo.packages_file), "--out", str(out)])
+    assert rc == 1
+    assert not out.exists()
+    assert any(
+        "analytics.py_daily_kpis" in r.message and "scripts/kpi_math.py:1: forbidden warehouse driver import 'psycopg2'" in r.message
+        for r in caplog.records
+    )
+
+
+def test_pack_refuses_a_startup_hook_at_the_repository_root(demo_repo, tmp_path, caplog):
+    (demo_repo.root / "sitecustomize.py").write_text("X = 1\n")
+    out = tmp_path / "odcs-bundle.json"
+    rc = main(["pack", str(demo_repo.contracts), "--service", "service-py", "--repo-root", str(demo_repo.root),
+               "--image-packages", str(demo_repo.packages_file), "--out", str(out)])
+    assert rc == 1
+    assert not out.exists()
+    assert any("sitecustomize.py at the repository root" in r.message for r in caplog.records)
+
+
+def test_pack_never_asks_this_environment_for_its_packages(demo_repo, tmp_path, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("pack listed the distributions of the environment it runs in")
+
+    monkeypatch.setattr(metadata, "distributions", refuse)
+    out = tmp_path / "odcs-bundle.json"
+    assert main(["pack", str(demo_repo.contracts), "--service", "service-py", "--repo-root", str(demo_repo.root),
+                 "--image-packages", str(demo_repo.packages_file), "--out", str(out)]) == 0
+
+
+def test_merge_is_gone(contract_repo, tmp_path, capsys):
+    out = tmp_path / "contract.yaml"
+    with pytest.raises(SystemExit) as exc:
+        main(["merge", str(contract_repo / "contracts"), "--service", "s", "--repo-root", str(contract_repo),
+              "--out", str(out)])
+    assert exc.value.code == 2
+    assert "invalid choice: 'merge'" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def _fake_build_bundle(captured):
+    def fake(contract_dir, repo_root, service, image_packages, *, dialect=None):
         captured["dialect"] = dialect
-        return {"contract_version": 1, "service": service, "nodes": []}
+        captured["image_packages"] = image_packages
+        return {"bundle_version": 1, "service": service, "nodes": []}
 
     return fake
 
 
-def test_merge_dialect_flag_threads_to_build_wire_contract(
-    contract_repo, tmp_path, monkeypatch
-):
+def test_pack_dialect_flag_threads_to_build_bundle(demo_repo, tmp_path, monkeypatch):
     captured = {}
-    monkeypatch.setattr(
-        cli_module, "build_wire_contract", _fake_build_wire_contract(captured)
-    )
-    out = tmp_path / "contract.yaml"
-    rc = main(
-        [
-            "merge",
-            str(contract_repo / "contracts"),
-            "--service",
-            "s",
-            "--repo-root",
-            str(contract_repo),
-            "--out",
-            str(out),
-            "--dialect",
-            "trino",
-        ]
-    )
+    monkeypatch.setattr(cli_module, "build_bundle", _fake_build_bundle(captured))
+    rc = main(["pack", str(demo_repo.contracts), "--service", "s", "--repo-root", str(demo_repo.root),
+               "--image-packages", str(demo_repo.packages_file), "--out", str(tmp_path / "b.json"),
+               "--dialect", "trino"])
     assert rc == 0
     assert captured["dialect"] == "trino"
+    assert captured["image_packages"] == {"pyarrow": "26.0.0"}
 
 
-def test_merge_dialect_defaults_to_none(contract_repo, tmp_path, monkeypatch):
+def test_pack_dialect_defaults_to_none(demo_repo, tmp_path, monkeypatch):
     captured = {}
-    monkeypatch.setattr(
-        cli_module, "build_wire_contract", _fake_build_wire_contract(captured)
-    )
-    out = tmp_path / "contract.yaml"
-    rc = main(
-        [
-            "merge",
-            str(contract_repo / "contracts"),
-            "--service",
-            "s",
-            "--repo-root",
-            str(contract_repo),
-            "--out",
-            str(out),
-        ]
-    )
+    monkeypatch.setattr(cli_module, "build_bundle", _fake_build_bundle(captured))
+    rc = main(["pack", str(demo_repo.contracts), "--service", "s", "--repo-root", str(demo_repo.root),
+               "--image-packages", str(demo_repo.packages_file), "--out", str(tmp_path / "b.json")])
     assert rc == 0
     assert captured["dialect"] is None
+
+
+def test_pack_creates_a_missing_out_dir(demo_repo, tmp_path):
+    out = tmp_path / "nested" / "dir" / "odcs-bundle.json"
+    rc = main(["pack", str(demo_repo.contracts), "--service", "service-py", "--repo-root", str(demo_repo.root),
+               "--image-packages", str(demo_repo.packages_file), "--out", str(out)])
+    assert rc == 0
+    assert out.exists()
 
 
 def test_hash_prints_relation_and_hash(contract_repo, capsys):
@@ -298,24 +381,6 @@ def test_lint_nonexistent_path_returns_1(caplog):
     assert any("path does not exist" in r.message for r in caplog.records)
 
 
-def test_merge_creates_missing_out_dir(contract_repo, tmp_path):
-    out = tmp_path / "nested" / "dir" / "contract.yaml"
-    rc = main(
-        [
-            "merge",
-            str(contract_repo / "contracts"),
-            "--service",
-            "s",
-            "--repo-root",
-            str(contract_repo),
-            "--out",
-            str(out),
-        ]
-    )
-    assert rc == 0
-    assert out.exists()
-
-
 def test_lint_unreadable_file_reports_violation_and_exits_1(tmp_path, caplog):
     """A non-UTF-8 .py file should yield an 'unreadable' violation and exit 1
     instead of raising UnicodeDecodeError."""
@@ -327,39 +392,18 @@ def test_lint_unreadable_file_reports_violation_and_exits_1(tmp_path, caplog):
     assert any("unreadable" in r.message for r in caplog.records)
 
 
-def test_main_oserror_backstop_returns_1_no_traceback(tmp_path, caplog):
-    """An OSError anywhere in a subcommand should be caught by the CLI
-    backstop and turned into exit code 1, not a raw traceback."""
-    # merge with a --repo-root that doesn't exist and a script that can't be
-    # resolved should surface as a ContractError normally; to exercise the
-    # OSError backstop directly, point --out at a path whose parent creation
-    # is impossible (a file where a directory is expected).
+def test_main_oserror_backstop_returns_1_no_traceback(demo_repo, tmp_path, caplog):
+    """An OSError anywhere in a subcommand is caught by the CLI backstop and turned into
+    exit code 1, not a raw traceback. Here --out sits below a file, so its folder cannot exist."""
     blocker = tmp_path / "blocker"
     blocker.write_text("x")
-    out = blocker / "contract.yaml"
+    out = blocker / "odcs-bundle.json"
 
-    from continuo_python_runtime.cli import main as cli_main
-
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    (scripts_dir / "t.py").write_text("def run(ctx):\n    return ctx.read('ids')\n")
-    contracts_dir = tmp_path / "contracts"
-    write_contract(contracts_dir, **NODE_T)
-
-    rc = cli_main(
-        [
-            "merge",
-            str(contracts_dir),
-            "--service",
-            "s",
-            "--repo-root",
-            str(tmp_path),
-            "--out",
-            str(out),
-        ]
-    )
+    rc = main(["pack", str(demo_repo.contracts), "--service", "service-py", "--repo-root", str(demo_repo.root),
+               "--image-packages", str(demo_repo.packages_file), "--out", str(out)])
     assert rc == 1
     assert any("blocker" in r.message or "Not a directory" in r.message or "Errno" in r.message for r in caplog.records)
+    assert blocker.read_text() == "x"
 
 
 def test_run_success_emits_sentinel_block(harness_repo, monkeypatch, capsys):

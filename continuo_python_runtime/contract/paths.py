@@ -1,4 +1,4 @@
-"""Shared script-path resolution used by both the merger and the harness."""
+"""Shared script-path resolution used by both hashing and the harness."""
 
 from __future__ import annotations
 

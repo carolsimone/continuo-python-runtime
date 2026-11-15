@@ -20,9 +20,9 @@ Each field maps to one place of the contract:
   `primaryKeyPosition` from 1 in the order given when it names more than one.
 - `reads` is the `readQueries` property, or, on a `python-csv` node, the
   `csvSource` property, which `reads` then gives as `{"csv": <uri>}`.
-- `kind`, `schedule`, `criticality`, `timeout_minutes`, `script`,
+- `kind`, `service`, `schedule`, `criticality`, `timeout_minutes`, `script`,
   `extra_columns`, `config`, `secret_ref`, `mode_type` and `assets` are the
-  `continuo` custom properties `kind`, `schedule`, `criticality`,
+  `continuo` custom properties `kind`, `service`, `schedule`, `criticality`,
   `timeoutMinutes`, `script`, `extraColumns`, `config`, `secretRef`,
   `modeType` and `assets`.
 
@@ -53,6 +53,7 @@ def contract_text(
     criticality: str,
     output_columns: Sequence[Mapping[str, Any]],
     kind: str | None = None,
+    service: str | None = None,
     script: str | None = None,
     reads: Mapping[str, str] | None = None,
     description: str | None = None,
@@ -72,6 +73,7 @@ def contract_text(
     """
     custom: list[tuple[str, Any]] = [
         ("kind", kind),
+        ("service", service),
         ("schedule", schedule),
         ("criticality", criticality),
         ("timeoutMinutes", timeout_minutes),

@@ -1,6 +1,8 @@
 """Shared test fixtures."""
 
+import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -116,11 +118,13 @@ def demo_contracts(tmp_path):
 @dataclass(frozen=True)
 class DemoRepo:
     """The demo's repository: ``contracts`` holds its three ODCS contracts, ``old`` the
-    ``nodes:`` files of the format they replaced, and ``root`` the scripts they name."""
+    ``nodes:`` files of the format they replaced, ``root`` the scripts they name and
+    ``packages_file`` the package list of the image it runs, as ``pack`` reads it."""
 
     root: Path
     contracts: Path
     old: Path
+    packages_file: Path
 
     def old_entry(self, table: str) -> dict[str, Any]:
         """The one ``nodes:`` entry of ``old/<table>.yml``."""
@@ -141,7 +145,53 @@ def demo_repo(tmp_path, demo_contracts):
         script.parent.mkdir(parents=True, exist_ok=True)
         script.write_bytes(data)
     old = Path(shutil.copytree(DEMO_OLD, tmp_path / "old"))
-    return DemoRepo(root=tmp_path, contracts=demo_contracts, old=old)
+    packages_file = tmp_path / "image-packages.json"
+    packages_file.write_text(json.dumps({"pyarrow": "26.0.0"}), encoding="utf-8")
+    return DemoRepo(root=tmp_path, contracts=demo_contracts, old=old, packages_file=packages_file)
+
+
+@dataclass(frozen=True)
+class FakeDocker:
+    """The ``docker`` executable `fake_docker` put first on ``PATH``: ``calls`` reads the
+    arguments of its last call, one per line."""
+
+    executable: Path
+
+    @property
+    def calls(self) -> list[str]:
+        return (self.executable.parent / "calls").read_text(encoding="utf-8").splitlines()
+
+
+@pytest.fixture
+def fake_docker(tmp_path, monkeypatch):
+    """Return a function that installs a ``docker`` which records its arguments, prints
+    ``stdout`` and ``stderr`` and exits with ``exit_code``, first on ``PATH``."""
+
+    def install(*, stdout: str = "", stderr: str = "", exit_code: int = 0) -> FakeDocker:
+        folder = tmp_path / "fake-docker"
+        folder.mkdir(exist_ok=True)
+        executable = folder / "docker"
+        executable.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' \"$@\" > {shlex.quote(str(folder / 'calls'))}\n"
+            f"printf '%s' {shlex.quote(stdout)}\n"
+            f"printf '%s' {shlex.quote(stderr)} >&2\n"
+            f"exit {exit_code}\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ['PATH']}")
+        return FakeDocker(executable)
+
+    return install
+
+
+@pytest.fixture
+def no_docker(tmp_path, monkeypatch):
+    """Leave no ``docker`` on ``PATH``: it holds one empty folder."""
+    empty = tmp_path / "empty-path"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
 
 
 @pytest.fixture

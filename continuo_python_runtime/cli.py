@@ -1,4 +1,4 @@
-"""CLI for continuo-runtime: validate, merge, hash, lint, and run contract workflows."""
+"""CLI for continuo-runtime: validate, pack, hash, packages, lint, run and validation-op."""
 
 import argparse
 import json
@@ -9,9 +9,11 @@ from importlib import metadata
 from pathlib import Path
 
 from continuo_python_runtime.contract.loader import load_contract_dir
-from continuo_python_runtime.contract.merge import (
-    build_wire_contract,
-    write_wire_contract,
+from continuo_python_runtime.contract.pack import (
+    PACKAGE_SOURCE_USAGE,
+    build_bundle,
+    image_packages_from,
+    write_bundle,
 )
 from continuo_python_runtime.errors import HarnessError
 from continuo_python_runtime.hash_inputs import gather_hash_inputs
@@ -24,7 +26,11 @@ logger = logging.getLogger(__name__)
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Main CLI entry point with validate, merge, and hash subcommands."""
+    """Run the subcommand ``argv`` names and return its exit code.
+
+    A usage error exits 2 through argparse. A :class:`HarnessError` or an
+    ``OSError`` raised by a subcommand is logged and returns 1.
+    """
     # Configure logging once
     logging.basicConfig(
         stream=sys.stderr,
@@ -52,15 +58,31 @@ def main(argv: list[str] | None = None) -> int:
     validate_parser.add_argument("contract_dir", help="Path to contract directory")
     validate_parser.add_argument("--dialect", default=None, help=dialect_help)
 
-    # merge subcommand
-    merge_parser = subparsers.add_parser(
-        "merge", help="Merge contracts into wire contract"
+    # pack subcommand
+    pack_parser = subparsers.add_parser(
+        "pack",
+        help="Pack the contracts into the bundle (odcs-bundle.json) a release carries",
+        description=(
+            "Check every contract of the folder, lint every script it runs and write "
+            "the bundle. " + PACKAGE_SOURCE_USAGE + "."
+        ),
     )
-    merge_parser.add_argument("contract_dir", help="Path to contract directory")
-    merge_parser.add_argument("--service", required=True, help="Service name")
-    merge_parser.add_argument("--repo-root", required=True, help="Repository root path")
-    merge_parser.add_argument("--out", required=True, help="Output file path")
-    merge_parser.add_argument("--dialect", default=None, help=dialect_help)
+    pack_parser.add_argument("contract_dir", help="Path to contract directory")
+    pack_parser.add_argument("--service", required=True, help="Service name")
+    pack_parser.add_argument("--repo-root", required=True, help="Repository root path")
+    pack_parser.add_argument(
+        "--image",
+        default=None,
+        help="Image the service runs; its package list is read with "
+             "`docker run --entrypoint continuo-runtime <image> packages`",
+    )
+    pack_parser.add_argument(
+        "--image-packages",
+        default=None,
+        help="File holding the package list of that image, one JSON object of name to version",
+    )
+    pack_parser.add_argument("--out", required=True, help="Output file path")
+    pack_parser.add_argument("--dialect", default=None, help=dialect_help)
 
     # hash subcommand
     hash_parser = subparsers.add_parser(
@@ -98,13 +120,21 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+    if args.command == "pack" and (args.image is None) == (args.image_packages is None):
+        pack_parser.error(PACKAGE_SOURCE_USAGE)
 
     try:
         if args.command == "validate":
             return cmd_validate(args.contract_dir, args.dialect)
-        elif args.command == "merge":
-            return cmd_merge(
-                args.contract_dir, args.service, args.repo_root, args.out, args.dialect
+        elif args.command == "pack":
+            return cmd_pack(
+                args.contract_dir,
+                args.service,
+                args.repo_root,
+                args.out,
+                image=args.image,
+                image_packages=args.image_packages,
+                dialect=args.dialect,
             )
         elif args.command == "hash":
             return cmd_hash(args.contract_dir, args.repo_root, args.dialect)
@@ -134,16 +164,27 @@ def cmd_validate(contract_dir: str, dialect: str | None = None) -> int:
     return 0
 
 
-def cmd_merge(
+def cmd_pack(
     contract_dir: str,
     service: str,
     repo_root: str,
     out: str,
+    *,
+    image: str | None,
+    image_packages: str | None,
     dialect: str | None = None,
 ) -> int:
-    """Merge contracts into a wire contract file."""
-    doc = build_wire_contract(Path(contract_dir), Path(repo_root), service, dialect=dialect)
-    write_wire_contract(doc, Path(out))
+    """Pack the contracts into the bundle file ``out``.
+
+    The bundle records the package list of ``image``, or the one ``image_packages``
+    holds, never the packages of the environment this command runs in. Nothing is
+    written to ``out`` unless every check passed.
+    """
+    packages = image_packages_from(
+        image=image, image_packages=None if image_packages is None else Path(image_packages)
+    )
+    doc = build_bundle(Path(contract_dir), Path(repo_root), service, packages, dialect=dialect)
+    write_bundle(doc, Path(out))
     return 0
 
 

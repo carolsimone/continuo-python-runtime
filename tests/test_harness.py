@@ -382,7 +382,7 @@ def _repo_with_read(tmp_path, sql):
 def test_dialect_specific_read_does_not_fail_at_container_start(tmp_path, sql, capsys):
     """A read CI accepted under --dialect postgres must not be re-judged neutrally.
 
-    --dialect reaches validate/merge/hash but not run_node, which would
+    --dialect reaches validate/pack/hash but not run_node, which would
     otherwise re-parse every read with sqlglot's stricter dialect-neutral
     grammar at container start -- turning ordinary postgres into a node that
     fails on every run after a green release.

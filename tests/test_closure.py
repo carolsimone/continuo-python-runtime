@@ -276,7 +276,7 @@ def test_aliased_builtins_import_dunder_import_rejected(tmp_path):
     """`from builtins import __import__ as load` then `load("helpers")`
     creates no `ast.Name` named `__import__` (the alias is `load`), and the
     old ImportFrom branch checked only `importlib` - this passed lint and
-    merge while the dynamically loaded helper was omitted from the closure."""
+    pack while the dynamically loaded helper was omitted from the closure."""
     repo = tmp_path
     (repo / "node.py").write_text("from builtins import __import__ as load\nload('x')\n")
 

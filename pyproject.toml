@@ -29,15 +29,14 @@ dependencies = [
     # compute the same hashes.
     "continuo-contracts==0.2.0",
     # Pinned in lockstep with continuo-engine-contract's OWN sqlglot pin
-    # (currently ==30.23.0) -- bump this whenever that pin moves.
-    # continuo_python_runtime/contract/loader.py imports sqlglot.errors
-    # directly to catch TokenError, which escapes
-    # continuo_engine_contract.sql.ensure_single_read uncaught despite
-    # its docstring's guarantee that only ValueError does (an unterminated
-    # string literal or comment fails sqlglot's tokenizer before the
-    # parser's own ParseError handling ever runs). Once that contract bug is
-    # fixed upstream, this direct import -- and this explicit pin, since
-    # sqlglot would then again be needed only transitively -- can be dropped.
+    # (currently ==30.23.0) -- bump this whenever that pin moves; two different
+    # exact pins cannot resolve together. The runtime also uses sqlglot
+    # directly: it parses each read query itself to name the tables the read
+    # leaves without a schema (contract/read_tables.py), catches sqlglot's
+    # tokenizer and parser errors (contract/kinds.py) and checks the --dialect
+    # name against sqlglot's dialects (contract/loader.py). Exact, like every
+    # other dependency here, so CI, the harness and the engine contract's SQL
+    # guard parse a read with one grammar.
     "sqlglot==30.23.0",
 ]
 classifiers = [

@@ -778,7 +778,8 @@ def test_the_harness_refuses_a_folder_with_an_old_file(harness_repo, capsys, cap
 
     refusal = (
         f"{old_file}: runtime 0.13.0 reads only ODCS contracts named <table>.odcs.yaml; "
-        "convert this file (docs/boundary-contract.md)"
+        "convert this file (https://github.com/carolsimone/continuo-python-runtime/blob/main/"
+        "docs/boundary-contract.md#converting-a-contract-file)"
     )
     assert _sentinel_body(capsys.readouterr().out)["message"] == f"ContractError: {refusal}"
     errors = _harness_errors(caplog)

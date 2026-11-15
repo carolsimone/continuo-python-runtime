@@ -9,6 +9,8 @@ import importlib.util
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location("check_version_bumps", ROOT / "scripts" / "check_version_bumps.py")
 assert _spec and _spec.loader
@@ -61,6 +63,11 @@ _PACKAGE_DIRS = {
 }
 
 
+# The files the root package's pyproject.toml names as its readme and license
+# files: they reach the wheel's metadata, so a change to one needs a bump.
+_ROOT_METADATA_FILES = ("README.md", "LICENSE", "NOTICE")
+
+
 def _write(repo: Path, rel: str, text: str) -> None:
     target = repo / rel
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -80,6 +87,8 @@ def _released_repo(repo: Path) -> None:
         _write(repo, f"{base}pyproject.toml", f'[project]\nname = "{dist}"\nversion = "1.0.0"\n')
         _write(repo, f"{base}{package}/__init__.py", "")
         _write(repo, f"{base}tests/test_x.py", "")
+    for name in _ROOT_METADATA_FILES:
+        _write(repo, name, name)
     _commit_all(repo, "release 1.0.0")
     _git(repo, "tag", "v1.0.0")
 
@@ -148,3 +157,54 @@ def test_a_bumped_version_passes_whatever_changed(tmp_path, monkeypatch, capsys)
     _commit_all(tmp_path, "source change with a bump")
     code, err = _check(tmp_path, monkeypatch, capsys)
     assert code == 0, err
+
+
+@pytest.mark.parametrize("name", _ROOT_METADATA_FILES)
+def test_a_change_only_to_the_root_packages_readme_or_license_needs_a_bump(
+    name, tmp_path, monkeypatch, capsys
+):
+    _released_repo(tmp_path)
+    _write(tmp_path, name, "changed\n")
+    _commit_all(tmp_path, f"{name} change")
+    code, err = _check(tmp_path, monkeypatch, capsys)
+    assert code == 1
+    assert "continuo-python-runtime" in err
+    assert name in err
+
+
+def test_a_change_only_under_the_root_packages_tests_needs_no_bump(tmp_path, monkeypatch, capsys):
+    _released_repo(tmp_path)
+    _write(tmp_path, "tests/test_x.py", "def test_new(): ...\n")
+    _commit_all(tmp_path, "test change")
+    code, err = _check(tmp_path, monkeypatch, capsys)
+    assert code == 0, err
+
+
+def _offender_line(err: str, dist: str) -> str:
+    (line,) = [line for line in err.splitlines() if line.strip().startswith(f"{dist} (")]
+    return line
+
+
+def test_the_root_offender_line_names_its_paths_and_no_tests_exclusion(tmp_path, monkeypatch, capsys):
+    _released_repo(tmp_path)
+    _write(tmp_path, "continuo_python_runtime/__init__.py", "x = 1\n")
+    _commit_all(tmp_path, "source change")
+    code, err = _check(tmp_path, monkeypatch, capsys)
+    assert code == 1
+    line = _offender_line(err, "continuo-python-runtime")
+    assert "outside tests/" not in line
+    assert line.strip() == (
+        "continuo-python-runtime (pyproject.toml, continuo_python_runtime, README.md, LICENSE, NOTICE "
+        "changed since v1.0.0 but version stayed 1.0.0)"
+    )
+
+
+def test_an_offender_line_with_a_tests_exclusion_says_so(tmp_path, monkeypatch, capsys):
+    _released_repo(tmp_path)
+    _write(tmp_path, "contract/continuo_engine_contract/__init__.py", "x = 1\n")
+    _commit_all(tmp_path, "source change")
+    code, err = _check(tmp_path, monkeypatch, capsys)
+    assert code == 1
+    assert _offender_line(err, "continuo-engine-contract").strip() == (
+        "continuo-engine-contract (contract changed outside tests/ since v1.0.0 but version stayed 1.0.0)"
+    )

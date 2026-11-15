@@ -88,7 +88,9 @@ def test_an_old_nodes_file_is_refused_with_how_to_convert_it(tmp_path):
 def _refusal(file):
     return (
         f"{file}: runtime 0.13.0 reads only ODCS contracts named "
-        "<table>.odcs.yaml; convert this file (docs/boundary-contract.md)"
+        "<table>.odcs.yaml; convert this file ("
+        "https://github.com/carolsimone/continuo-python-runtime/blob/main/"
+        "docs/boundary-contract.md#converting-a-contract-file)"
     )
 
 
@@ -150,6 +152,47 @@ def test_two_files_for_one_table_are_refused_when_reads_are_not_checked(demo_con
     )
     with pytest.raises(ContractError, match="duplicate node analytics.py_daily_kpis"):
         load_contract_dir(demo_contracts, check_reads=False)
+
+
+def _mixed_case_pair(demo_contracts):
+    """Two files for one table that differ only in the case of its name.
+
+    The first holds the demo's ``py_daily_kpis`` contract as ``<table>.odcs.yaml``;
+    the second is the same contract with the table named ``Py_Daily_Kpis``, in the
+    ``<schema>.<table>`` form (two plain ``<table>`` files that differ only in case
+    cannot coexist on a case-insensitive filesystem). Its id stays lower case, which
+    the library accepts because it compares the id and the table in lower case.
+    """
+    plain = demo_contracts / "py_daily_kpis.odcs.yaml"
+    mixed = demo_contracts / "analytics.Py_Daily_Kpis.odcs.yaml"
+    text = plain.read_text(encoding="utf-8")
+    mixed.write_text(
+        text.replace("name: py_daily_kpis", "name: Py_Daily_Kpis"), encoding="utf-8"
+    )
+    return plain, mixed
+
+
+def test_two_files_for_one_table_in_another_case_are_refused(demo_contracts):
+    plain, mixed = _mixed_case_pair(demo_contracts)
+    with pytest.raises(ContractError) as exc:
+        load_contract_dir(demo_contracts)
+    assert str(exc.value) == f"duplicate node analytics.py_daily_kpis (in {mixed} and {plain})"
+
+
+def test_the_mixed_case_table_is_a_node_of_its_own_in_the_library(demo_contracts):
+    """The library accepts the mixed-case table, so the loader's check alone refuses the pair."""
+    _, mixed = _mixed_case_pair(demo_contracts)
+    node = node_from_contract(
+        yaml_strict.load(mixed.read_text(encoding="utf-8")), mixed, dialect=None, check_reads=False
+    )
+    assert node.relation == "analytics.Py_Daily_Kpis"
+
+
+def test_the_conversion_link_names_a_heading_of_the_boundary_contract():
+    """The refusal's link ends in the anchor of a heading that docs/boundary-contract.md has."""
+    docs = (DEMO.parents[3] / "docs" / "boundary-contract.md").read_text(encoding="utf-8")
+    assert "\n### Converting a contract file\n" in docs
+    assert _refusal("t.yml").endswith("/docs/boundary-contract.md#converting-a-contract-file)")
 
 
 def test_a_folder_without_contracts_is_refused(tmp_path):

@@ -14,7 +14,6 @@ DEFAULT_KIND = "python-node"
 # primary_key exists and keeps the rest.
 MODE_TYPES = frozenset({"append", "upsert", "replace"})
 DEFAULT_MODE_TYPE = "replace"
-CONTRACT_VERSION = 1
 
 
 @dataclass(frozen=True)

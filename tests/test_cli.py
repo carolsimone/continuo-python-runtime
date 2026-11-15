@@ -183,6 +183,24 @@ def test_pack_refuses_a_contract_of_another_service(demo_repo, tmp_path, caplog)
     assert any("contracts/other_service.odcs.yaml" in r.message and "'other'" in r.message for r in caplog.records)
 
 
+def test_pack_refuses_two_contracts_for_one_table_in_another_case(demo_repo, tmp_path, caplog):
+    plain = demo_repo.contracts / "py_daily_kpis.odcs.yaml"
+    mixed = demo_repo.contracts / "analytics.Py_Daily_Kpis.odcs.yaml"
+    mixed.write_text(
+        plain.read_text(encoding="utf-8").replace("name: py_daily_kpis", "name: Py_Daily_Kpis"),
+        encoding="utf-8",
+    )
+    out = tmp_path / "odcs-bundle.json"
+    rc = main(["pack", str(demo_repo.contracts), "--service", "service-py", "--repo-root", str(demo_repo.root),
+               "--image-packages", str(demo_repo.packages_file), "--out", str(out)])
+    assert rc == 1
+    assert not out.exists()
+    assert any(
+        f"duplicate node analytics.py_daily_kpis (in {mixed} and {plain})" in r.message
+        for r in caplog.records
+    )
+
+
 def test_pack_lints_each_closure(demo_repo, tmp_path, caplog):
     (demo_repo.root / "scripts" / "kpi_math.py").write_text("import psycopg2\n")
     out = tmp_path / "odcs-bundle.json"

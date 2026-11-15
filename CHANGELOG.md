@@ -47,6 +47,11 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   submits the release with kind `python-odcs`.
 - The release check no longer asks for a version bump when only a package's
   `tests/` folder changed, because the wheel does not ship it.
+- `hash` only hashes: the lint of a node's import closure and the refusal of a
+  `sitecustomize.py` or `usercustomize.py` at the repository root run in
+  `pack`, and the lint also runs in `lint`.
+- Two contract files whose tables differ only in the case of their names are
+  refused as one table.
 
 ## [0.12.0] - 2026-11-11
 

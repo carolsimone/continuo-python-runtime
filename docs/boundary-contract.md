@@ -93,7 +93,8 @@ over `--out` once it is complete. A refusal writes nothing.
   case (`legacy.YML`, `t.odcs.yml`), is refused, with a message that points
   here ("Converting a contract file" below). Files with any other extension
   are not read.
-- Two files that declare the same `<schema>.<table>` are refused, and the
+- Two files that declare the same `<schema>.<table>`, compared in lower case
+  (`Py_Daily_Kpis` and `py_daily_kpis` are one table), are refused, and the
   message names both. A folder with no contract file is refused.
 
 Each file holds one ODCS v3.2.0 data contract. The `continuo-contracts`

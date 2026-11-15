@@ -138,7 +138,8 @@ named after its table, `<table>.odcs.yaml`, or `<schema>.<table>.odcs.yaml`
 when two nodes of one service share a table name. The `continuo-contracts`
 library reads each file strictly (YAML 1.2 core, with no aliases, no duplicate
 keys and one document per file) and checks it. `validate`, `pack`, `hash` and
-the harness load the folder the same way.
+the harness load the folder the same way; the harness skips the read-query
+checks.
 
 ```yaml
 apiVersion: v3.2.0

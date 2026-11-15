@@ -30,6 +30,14 @@ CONTRACT_SUFFIX = ".odcs.yaml"
 # in one of them and not exactly in CONTRACT_SUFFIX is refused.
 _YAML_SUFFIXES = (".yml", ".yaml")
 
+# Where a refused file's author finds how to convert it: the refusal is read in
+# the CI of the domain team that owns the repository, which does not hold this
+# repository's docs.
+_CONVERSION_GUIDE = (
+    "https://github.com/carolsimone/continuo-python-runtime/blob/main/"
+    "docs/boundary-contract.md#converting-a-contract-file"
+)
+
 _JSON_SCALARS = (str, int, float, bool, type(None))
 
 # What a document that is not a mapping is, as the words of a message.
@@ -249,7 +257,7 @@ def load_contract_dir(
 
     Raises ``ContractError`` for an unknown ``dialect``, a file in another
     format, a folder with no contract, a contract that is refused, and two
-    files that declare the same ``<schema>.<table>``.
+    files that declare the same ``<schema>.<table>``, compared in lower case.
     """
     if dialect is not None:
         try:
@@ -267,7 +275,7 @@ def load_contract_dir(
         raise ContractError(
             "\n".join(
                 f"{other}: runtime 0.13.0 reads only ODCS contracts named "
-                "<table>.odcs.yaml; convert this file (docs/boundary-contract.md)"
+                f"<table>.odcs.yaml; convert this file ({_CONVERSION_GUIDE})"
                 for other in others
             )
         )
@@ -279,11 +287,15 @@ def load_contract_dir(
     for file in files:
         doc = parse_contract(read_contract_text(file), file)
         node = node_from_contract(doc, file, dialect=dialect, check_reads=check_reads)
-        existing = relation_files.get(node.relation)
+        # Relations are compared in lower case, as continuo compares them: a
+        # warehouse folds the case of an unquoted name, so two contracts whose
+        # tables differ only in case would build one table.
+        key = node.relation.lower()
+        existing = relation_files.get(key)
         if existing is not None:
             raise ContractError(
                 f"duplicate node {node.relation} (in {existing} and {file})"
             )
-        relation_files[node.relation] = file
+        relation_files[key] = file
         nodes.append(node)
     return nodes

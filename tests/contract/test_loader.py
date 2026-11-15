@@ -85,15 +85,38 @@ def test_an_old_nodes_file_is_refused_with_how_to_convert_it(tmp_path):
         load_contract_dir(tmp_path)
 
 
+def _refusal(file):
+    return (
+        f"{file}: runtime 0.13.0 reads only ODCS contracts named "
+        "<table>.odcs.yaml; convert this file (docs/boundary-contract.md)"
+    )
+
+
 @pytest.mark.parametrize("name", ["py_daily_kpis.yml", "nodes.yaml"])
 def test_an_old_file_beside_odcs_contracts_is_refused(demo_contracts, name):
     (demo_contracts / name).write_text(OLD_KPIS)
     with pytest.raises(ContractError) as exc:
         load_contract_dir(demo_contracts)
-    assert str(exc.value) == (
-        f"{demo_contracts / name}: runtime 0.13.0 reads only ODCS contracts named "
-        "<table>.odcs.yaml; convert this file (docs/boundary-contract.md)"
-    )
+    assert str(exc.value) == _refusal(demo_contracts / name)
+
+
+@pytest.mark.parametrize("name", ["legacy.YML", "t.odcs.YAML", "notes.Yaml"])
+def test_an_extension_in_another_case_is_refused_too(demo_contracts, name):
+    (demo_contracts / name).write_text(OLD_KPIS)
+    with pytest.raises(ContractError) as exc:
+        load_contract_dir(demo_contracts)
+    assert str(exc.value) == _refusal(demo_contracts / name)
+
+
+def test_every_file_in_another_format_is_named(demo_contracts):
+    leftovers = ["nodes.yaml", "legacy.YML", "py_daily_kpis.odcs.yml"]
+    for name in leftovers:
+        (demo_contracts / name).write_text(OLD_KPIS)
+    with pytest.raises(ContractError) as exc:
+        load_contract_dir(demo_contracts)
+    assert str(exc.value).splitlines() == [
+        _refusal(demo_contracts / name) for name in sorted(leftovers)
+    ]
 
 
 def test_a_dot_odcs_dot_yml_file_is_refused(demo_contracts):
@@ -232,27 +255,40 @@ def test_the_config_keeps_a_key_no_engine_reads():
     assert _node(config={"sortkey": ["id"]}).config == {"sortkey": ["id"]}
 
 
-# Spellings in and around the column-type grammar. The library refuses each one
-# its grammar does not hold, and the harness maps each one it accepts to an
-# Arrow type through parse_sql_type, so CI accepts no column type the harness
-# cannot write.
-COLUMN_TYPES = [
+# Spellings in and around the column-type grammar. The loader does not parse a
+# column type itself: the library's grammar decides, and the harness maps each
+# type to an Arrow type through parse_sql_type. These pin the two together, so
+# CI accepts no column type the harness cannot write.
+ACCEPTED_COLUMN_TYPES = [
     "BIGINT", "int", "INTEGER", "DOUBLE PRECISION", "double precision", "TEXT", "TIMESTAMP",
     "date", "BOOLEAN", "NUMERIC(10,2)", "DECIMAL(5, 2)", "numeric(38,38)", "VARCHAR(255)",
     "CHAR(1)", " INTEGER ", "NUMERIC(012,2)", "INTEGER\n",
+]
+REFUSED_COLUMN_TYPES = [
     "NUMERIC(39,0)", "NUMERIC(5,6)", "NUMERIC(0,0)", "VARCHAR(0)", "VARCHAR", "CHAR",
     "DOUBLE  PRECISION", "REAL", "FLOAT", "SMALLINT", "JSONB", "UUID", "TIMESTAMPTZ",
     "TIMESTAMP WITH TIME ZONE", "BLOB", "INTEGER;", "ınt",
 ]
 
 
-@pytest.mark.parametrize("sql_type", COLUMN_TYPES)
-def test_every_column_type_the_library_accepts_the_harness_parses(sql_type):
-    try:
-        _node(output_columns=[{"name": "c", "type": sql_type}])
-    except ContractError:
-        return
+def _with_column_type(sql_type):
+    return _node(output_columns=[{"name": "c", "type": sql_type}])
+
+
+@pytest.mark.parametrize("sql_type", ACCEPTED_COLUMN_TYPES)
+def test_a_column_type_the_library_accepts_the_harness_parses(sql_type):
+    node = _with_column_type(sql_type)
+    assert node.output_columns == (Column("c", sql_type, nullable=True),)
     parse_sql_type(sql_type)
+
+
+@pytest.mark.parametrize("sql_type", REFUSED_COLUMN_TYPES)
+def test_a_column_type_outside_the_grammar_is_refused(sql_type):
+    with pytest.raises(
+        ContractError,
+        match=r"^t\.odcs\.yaml: schema\[0\]\.properties\[0\]\.physicalType: .* is not a type continuo accepts",
+    ):
+        _with_column_type(sql_type)
 
 
 # --- the reads: one SELECT each, under the dialect ----------------------------------

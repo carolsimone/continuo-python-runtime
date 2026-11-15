@@ -26,6 +26,9 @@ from continuo_python_runtime.contract.model import Column, Node
 from continuo_python_runtime.errors import ContractError
 
 CONTRACT_SUFFIX = ".odcs.yaml"
+# The endings of a YAML file's name, compared in lower case: any file that ends
+# in one of them and not exactly in CONTRACT_SUFFIX is refused.
+_YAML_SUFFIXES = (".yml", ".yaml")
 
 _JSON_SCALARS = (str, int, float, bool, type(None))
 
@@ -201,10 +204,12 @@ def load_contract_dir(
 ) -> list[Node]:
     """Load and check every ``*.odcs.yaml`` contract in ``path``, in file-name order.
 
-    Any other ``*.yml`` or ``*.yaml`` file in the folder is refused, naming the
-    file and how to convert it: an image pairs a runtime with its contracts,
-    so a contract in another format is a mistake, never a node to skip. Files
-    with any other extension are not read.
+    Any other file whose name ends in ``.yml`` or ``.yaml``, in any case
+    (``legacy.YML``, ``t.odcs.YAML``, ``t.odcs.yml``), is refused: one
+    :class:`ContractError` names every such file, one line each, with how to
+    convert it. An image pairs a runtime with its contracts, so a contract in
+    another format is a mistake, never a node to skip. Files with any other
+    extension are not read.
 
     ``check_reads=False`` skips only the check that each read of a python-node
     parses as one read query; every other rule of :func:`node_from_contract`
@@ -238,12 +243,19 @@ def load_contract_dir(
         except ValueError as exc:
             raise ContractError(f"unknown --dialect {dialect!r}: {exc}") from exc
 
-    files = sorted(path.glob(f"*{CONTRACT_SUFFIX}"))
-    others = sorted({*path.glob("*.yml"), *path.glob("*.yaml")} - set(files))
+    entries = sorted(path.iterdir()) if path.is_dir() else []
+    yaml_files = [
+        entry for entry in entries if entry.name.lower().endswith(_YAML_SUFFIXES)
+    ]
+    files = [entry for entry in yaml_files if entry.name.endswith(CONTRACT_SUFFIX)]
+    others = [entry for entry in yaml_files if not entry.name.endswith(CONTRACT_SUFFIX)]
     if others:
         raise ContractError(
-            f"{others[0]}: runtime 0.13.0 reads only ODCS contracts named "
-            "<table>.odcs.yaml; convert this file (docs/boundary-contract.md)"
+            "\n".join(
+                f"{other}: runtime 0.13.0 reads only ODCS contracts named "
+                "<table>.odcs.yaml; convert this file (docs/boundary-contract.md)"
+                for other in others
+            )
         )
     if not files:
         raise ContractError(f"no contract files found in {path}")

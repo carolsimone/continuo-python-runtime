@@ -1,6 +1,7 @@
 """CLI for continuo-runtime: validate, merge, hash, lint, and run contract workflows."""
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -16,6 +17,7 @@ from continuo_python_runtime.errors import HarnessError
 from continuo_python_runtime.hash_inputs import gather_hash_inputs
 from continuo_python_runtime.hashing import hash_parts
 from continuo_python_runtime.lint import lint_paths
+from continuo_python_runtime.packages import installed_packages
 from continuo_python_runtime import harness
 
 logger = logging.getLogger(__name__)
@@ -70,6 +72,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     hash_parser.add_argument("--dialect", default=None, help=dialect_help)
 
+    # packages subcommand
+    subparsers.add_parser(
+        "packages",
+        help="Print the installed packages of this environment as one JSON object "
+             "({normalised name: version})",
+    )
+
     # lint subcommand
     lint_parser = subparsers.add_parser(
         "lint", help="Lint Python scripts for forbidden imports and SQL literals"
@@ -99,6 +108,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "hash":
             return cmd_hash(args.contract_dir, args.repo_root, args.dialect)
+        elif args.command == "packages":
+            return cmd_packages()
         elif args.command == "lint":
             return cmd_lint(args.path)
         elif args.command == "run":
@@ -152,6 +163,16 @@ def cmd_hash(contract_dir: str, repo_root: str, dialect: str | None = None) -> i
     for relation, content_hash in sorted(hashes.items()):
         print(f"{relation}\t{content_hash}")
 
+    return 0
+
+
+def cmd_packages() -> int:
+    """Print every installed package as one JSON object, ``{normalised name: version}``, and a newline.
+
+    The object is the only thing on stdout: a caller that runs this command in an image
+    parses it as the image's package list.
+    """
+    print(json.dumps(installed_packages(), sort_keys=True))
     return 0
 
 

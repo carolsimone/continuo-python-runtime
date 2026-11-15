@@ -1,0 +1,21 @@
+# A python-api node that upserts its rows on the key (rate_date, base).
+apiVersion: v3.2.0
+kind: DataContract
+id: fixture.upsert_node
+name: upsert_node
+version: "0"
+team:
+  name: data-team
+customProperties:
+  - {vendor: continuo, property: kind, value: python-api}
+  - {vendor: continuo, property: schedule, value: hourly}
+  - {vendor: continuo, property: criticality, value: SECONDARY}
+  - {vendor: continuo, property: script, value: scripts/upsert_node.py}
+  - {vendor: continuo, property: modeType, value: upsert}
+schema:
+  - name: upsert_node
+    physicalType: table
+    properties:
+      - {name: rate_date, physicalType: DATE, required: true, primaryKey: true, primaryKeyPosition: 1}
+      - {name: base, physicalType: "VARCHAR(3)", required: true, primaryKey: true, primaryKeyPosition: 2}
+      - {name: rate, physicalType: "DECIMAL(12,6)"}

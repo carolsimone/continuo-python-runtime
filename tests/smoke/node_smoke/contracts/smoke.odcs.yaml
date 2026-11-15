@@ -1,0 +1,20 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: analytics.smoke
+name: smoke
+version: "0"
+team:
+  name: platform
+customProperties:
+  - {vendor: continuo, property: schedule, value: daily}
+  - {vendor: continuo, property: criticality, value: SECONDARY}
+  - {vendor: continuo, property: script, value: scripts/smoke.py}
+  - vendor: continuo
+    property: readQueries
+    value:
+      ids: select id from analytics.src
+schema:
+  - name: smoke
+    physicalType: table
+    properties:
+      - {name: id, physicalType: INTEGER, required: true}

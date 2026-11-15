@@ -1,12 +1,15 @@
 """Harness write modes: writer dispatch, capability check and error mapping."""
 import json
+import shutil
+from pathlib import Path
 
-import yaml
-
+import pyarrow as pa
+import pytest
 from continuo_engine_contract.port import LiveColumn, WarehouseAdapter
 
 from continuo_python_runtime.harness import run_node
 from tests.conftest import FakeAppendAdapter, FakeUpsertAdapter, FakeWarehouseAdapter
+from tests.odcs_builder import write_contract
 
 FX_COLUMNS = [
     {"name": "rate_date", "type": "DATE", "nullable": False},
@@ -40,15 +43,13 @@ UPSERT = {"mode_type": "upsert", "primary_key": ["rate_date", "base"]}
 
 def _repo(tmp_path, script=TWO_KEYS, **node_extra):
     tmp_path.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "contracts").mkdir()
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "fx.py").write_text(script)
-    node = {
-        "schema": "fx", "table": "fx_rates", "owner": "m", "schedule": "hourly",
-        "criticality": "SECONDARY", "kind": "python-api", "script": "scripts/fx.py",
-        "output_columns": FX_COLUMNS, **node_extra,
-    }
-    (tmp_path / "contracts" / "fx.yml").write_text(yaml.safe_dump({"nodes": [node]}))
+    write_contract(
+        tmp_path / "contracts",
+        schema="fx", table="fx_rates", owner="m", schedule="hourly", criticality="SECONDARY",
+        kind="python-api", script="scripts/fx.py", output_columns=FX_COLUMNS, **node_extra,
+    )
     return tmp_path
 
 
@@ -257,3 +258,50 @@ def test_a_table_columns_failure_is_a_load_error(tmp_path, capsys):
     assert _message(capsys.readouterr().out) == (
         "LoadError: failed to write fx.fx_rates: table fx.fx_rates does not exist"
     )
+
+
+# The four write-mode contracts of tests/fixtures/write_modes, run from one contracts folder.
+# Each case names the script of its node, the adapter that can write its mode and the attribute
+# of that adapter that records the write.
+WRITE_MODES = Path(__file__).resolve().parent / "fixtures" / "write_modes"
+SRC_SQL = "SELECT id FROM fixture.src"
+READ_SRC = "def run(ctx):\n    return ctx.read('src')\n"
+COLLECTED = (
+    "import datetime\n"
+    "from decimal import Decimal\n\n"
+    "import pyarrow as pa\n\n\n"
+    "def run(ctx):\n"
+    "    return pa.table({\n"
+    "        'collected_at': pa.array([datetime.datetime(2026, 10, 8, 12, 0)] * 2, pa.timestamp('us')),\n"
+    "        'rate': pa.array([Decimal('1.081200'), Decimal('0.861000')], pa.decimal128(12, 6)),\n"
+    "    })\n"
+)
+WRITE_MODE_CASES = [
+    pytest.param("replace_node", READ_SRC, FakeWarehouseAdapter, "loaded", id="replace"),
+    pytest.param("assets_node", READ_SRC, FakeWarehouseAdapter, "loaded", id="replace-with-assets"),
+    pytest.param("append_node", COLLECTED, FakeAppendAdapter, "appended", id="append"),
+    pytest.param("upsert_node", TWO_KEYS, FakeUpsertAdapter, "upserted", id="upsert"),
+]
+
+
+@pytest.mark.parametrize("table, script, adapter_class, written", WRITE_MODE_CASES)
+def test_each_write_mode_runs_from_its_odcs_file(table, script, adapter_class, written, tmp_path, capsys):
+    shutil.copytree(WRITE_MODES, tmp_path / "contracts")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / f"{table}.py").write_text(script)
+    env = {
+        "NODE_ID": f"svc.fixture.{table}", "TABLE_NAME": table, "TARGET_SCHEMA": "fixture",
+        "CONTRACT_DIR": str(tmp_path / "contracts"), "APP_ROOT": str(tmp_path),
+    }
+    adapter = adapter_class({SRC_SQL: pa.table({"id": [1, 2]})})
+
+    assert run_node(env, adapter=adapter) == 0
+
+    body = json.loads(capsys.readouterr().out.split("BEGIN===\n")[1].split("\n===CONTINUO")[0])
+    assert body["status"] == "success" and body["message"] == "rows=2"
+    schema, name, data, *key = getattr(adapter, written)
+    assert (schema, name, data.num_rows) == ("fixture", table, 2)
+    # An upsert is the one write that carries its key, and only it passes the key to ensure_table.
+    assert key == ([("rate_date", "base")] if written == "upserted" else [])
+    assert getattr(adapter, "ensured_primary_key", ()) == (("rate_date", "base") if key else ())
+    assert [getattr(adapter, other, None) for other in {"loaded", "appended", "upserted"} - {written}] == [None, None]

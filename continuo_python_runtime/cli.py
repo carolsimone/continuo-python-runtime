@@ -109,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # run subcommand
     subparsers.add_parser(
-        "run", help="Execute a node script (container entrypoint)"
+        "run", help="Run the node the environment names (container entrypoint)"
     )
 
     # validation-op subcommand
@@ -231,10 +231,12 @@ def cmd_lint(paths: list[str]) -> int:
 
 
 def cmd_run() -> int:
-    """Execute a node script reading configuration from os.environ.
+    """Run the node ``os.environ`` names and return its exit code.
 
-    This is the container entrypoint: reads NODE_ID, TABLE_NAME, TARGET_SCHEMA,
-    CONTRACT_DIR, and APP_ROOT from environment, then calls harness.run_node()
-    which produces exactly one sentinel result block.
+    This is the container entrypoint. ``harness.run_node`` reads ``NODE_ID``,
+    ``TABLE_NAME`` and ``TARGET_SCHEMA``, and, when set, ``CONTRACT_DIR`` (the
+    folder of the image's ``*.odcs.yaml`` contracts) and ``APP_ROOT`` (the
+    repository root a script path is resolved against), runs the node and
+    prints exactly one sentinel result block.
     """
     return harness.run_node(os.environ)

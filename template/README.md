@@ -8,7 +8,7 @@ This is a copy-ready template for implementing a [continuo Python domain repo](h
 2. **Rename the service**: Edit `.github/workflows/release.yml` and update the `SERVICE` environment variable to your service name
 3. **Configure repository variables** in GitHub (Settings → Secrets and variables → Actions):
    - `REGISTRY`: Your Docker registry (e.g., `ghcr.io/org`)
-   - `BUCKET`: Your S3 bucket for contract artifacts
+   - `BUCKET`: Your S3 bucket for the contract bundle (`odcs-bundle.json`)
    - `RELEASE_ENDPOINT`: the base URL of your continuo install. It must be
      exactly the origin of continuo's `auth.publicUrl`: lowercase host, no
      default port, no path (for example `https://continuo.example.com`). The
@@ -33,7 +33,14 @@ This is a copy-ready template for implementing a [continuo Python domain repo](h
    production version to validate against, so an operator promotes it with
    `"bootstrap": true`; the workflow never sends that flag. Releases from the
    workflow work once the service has been bootstrapped.
-7. **Write your contracts** in `contracts/` and **implement scripts** in `scripts/`
+7. **Write your contracts** in `contracts/` and **implement scripts** in `scripts/`.
+   Each node has one ODCS v3.2.0 contract, named after its table:
+   `contracts/<table>.odcs.yaml`, or `contracts/<schema>.<table>.odcs.yaml` when
+   two nodes share a table name. `contracts/example.odcs.yaml` is a script node
+   that reads two tables, and `contracts/example_csv.odcs.yaml` loads a csv file
+   with no script. `validate` refuses any other file in `contracts/` whose name
+   ends in `.yml` or `.yaml`. Each read query names the schema of every table it
+   reads (`analytics.orders`, never `orders`); only a CTE goes without one.
 8. **Push to main** to trigger the release pipeline
 
 ## Choosing a base
@@ -67,7 +74,7 @@ Regenerate `requirements.lock` for your engine and versions with:
 
 ```bash
 uv pip compile --generate-hashes --python-version 3.14 - -o requirements.lock <<'EOF'
-continuo-python-runtime==0.4.0
+continuo-python-runtime==X.Y.Z
 continuo-<engine>-adapter==X.Y.Z
 EOF
 ```
@@ -101,22 +108,29 @@ engine, same version, same runtime behavior, different packaging.
 
 ## Pipeline Overview
 
-The CI/CD pipeline (`release.yml`) performs the seven-step orchestration:
+The CI/CD pipeline (`release.yml`) runs these steps:
 1. **Install the runtime the image runs**: CI reads the version from the
    Dockerfile's `FROM ghcr.io/carolsimone/continuo-python-runtime-<engine>:vX.Y.Z`
    line, installs exactly that `continuo-python-runtime`, and fails when the
-   installed version differs or the Dockerfile has no such line. The harness
-   recomputes `content_hash` with the image's runtime at start, so CI must hash
-   with the same one
+   installed version differs or the Dockerfile has no such line. `pack` computes
+   part of each node's `content_hash`, and the harness recomputes the whole
+   hash with the image's runtime at start, so CI must use the same runtime. The
+   workflow needs runtime 0.13.0 or later
 2. **Lint** scripts for hand-written SQL (forbidden)
-3. **Validate** contracts against the schema
+3. **Validate** the ODCS contracts in `contracts/` and parse every read query
 4. **Run domain tests** (optional, if `tests/` exists)
-5. **Merge** contracts into a single artifact
-6. **Build and push** Docker image
-7. **Upload contract**, then **submit the release** to continuo's
-   `POST /api/v1/releases` and poll `GET /api/v1/releases/{id}` for up to about
-   50 minutes (the job's `timeout-minutes` is 60). The job succeeds when the release is `promoted` and fails when it
-   is `rejected` or `superseded`
+5. **Build and push** the Docker image
+6. **Pack** the contracts into `odcs-bundle.json`: `continuo-runtime pack`
+   checks every contract again, also against `SERVICE`, lints each node's
+   script and its in-repo import closure, computes the hashes only CI can
+   compute, and records the package list of the pushed image (it runs
+   `continuo-runtime packages` in it, so it needs the image built first)
+7. **Upload the bundle** to
+   `s3://<BUCKET>/<SERVICE>/<release id>/odcs-bundle.json`, then **submit the
+   release** to continuo's `POST /api/v1/releases` with `"kind": "python-odcs"`
+   and poll `GET /api/v1/releases/{id}` for up to about 50 minutes (the job's
+   `timeout-minutes` is 60). The job succeeds when the release is `promoted`
+   and fails when it is `rejected` or `superseded`
 
 ## Resources
 

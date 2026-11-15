@@ -10,7 +10,7 @@ def run(ctx):
 
     joined = orders.join(customers, keys="customer_id", join_type="left outer")
 
-    # Project to the declared output_columns, in order and under their
+    # Project to the columns the contract declares, in order and under their
     # declared names; conform() then enforces types and nullability.
     return joined.select(["order_id", "name", "amount"]).rename_columns(
         ["order_id", "customer_name", "amount"]

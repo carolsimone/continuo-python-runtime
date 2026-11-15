@@ -45,6 +45,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The template ships `contracts/example.odcs.yaml` and
   `contracts/example_csv.odcs.yaml`, and its release workflow runs `pack` and
   submits the release with kind `python-odcs`.
+- The release check no longer asks for a version bump when only a package's
+  `tests/` folder changed, because the wheel does not ship it.
 
 ## [0.12.0] - 2026-11-11
 

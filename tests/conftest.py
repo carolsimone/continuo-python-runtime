@@ -8,14 +8,29 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 from continuo_engine_contract.port import AppendCapable, LiveColumn, UpsertCapable
 
+from continuo_python_runtime.contract.loader import load_contract_dir
+from continuo_python_runtime.contract.model import Node
 from tests.odcs_builder import contract_node, write_contract
 
-DEMO_CONTRACTS = Path(__file__).resolve().parent / "fixtures" / "demo" / "service-py" / "contracts"
+DEMO = Path(__file__).resolve().parent / "fixtures" / "demo" / "service-py"
+DEMO_CONTRACTS = DEMO / "contracts"
+DEMO_OLD = DEMO / "old"
+
+# The scripts the demo contracts name, with fixed bytes so that every hash made from them is a
+# constant. py_daily_kpis imports kpi_math, so its import closure is not empty.
+DEMO_SCRIPTS = {
+    "scripts/py_daily_kpis.py": b"import kpi_math\n\n\ndef run(ctx):\n    return kpi_math.total(ctx.read('daily'))\n",
+    "scripts/kpi_math.py": b"def total(rows):\n    return rows\n",
+    "scripts/fx_eur_usd_rates.py": b"def run(ctx):\n    return None\n",
+}
 
 # The one node of `contract_repo` and `harness_repo`, and of `node_fixture`.
 NODE_T = {
@@ -96,6 +111,37 @@ def contract_repo(tmp_path):
 def demo_contracts(tmp_path):
     """A copy of the demo's three ODCS contracts, in ``<tmp>/contracts``."""
     return Path(shutil.copytree(DEMO_CONTRACTS, tmp_path / "contracts"))
+
+
+@dataclass(frozen=True)
+class DemoRepo:
+    """The demo's repository: ``contracts`` holds its three ODCS contracts, ``old`` the
+    ``nodes:`` files of the format they replaced, and ``root`` the scripts they name."""
+
+    root: Path
+    contracts: Path
+    old: Path
+
+    def old_entry(self, table: str) -> dict[str, Any]:
+        """The one ``nodes:`` entry of ``old/<table>.yml``."""
+        (entry,) = yaml.safe_load((self.old / f"{table}.yml").read_text(encoding="utf-8"))["nodes"]
+        return entry
+
+    def node(self, table: str) -> Node:
+        """The node ``contracts/<table>.odcs.yaml`` declares, as the loader reads it."""
+        (node,) = (n for n in load_contract_dir(self.contracts) if n.table == table)
+        return node
+
+
+@pytest.fixture
+def demo_repo(tmp_path, demo_contracts):
+    """The demo's contracts in ``<tmp>/contracts``, the old files in ``<tmp>/old`` and its scripts."""
+    for relative, data in DEMO_SCRIPTS.items():
+        script = tmp_path / relative
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_bytes(data)
+    old = Path(shutil.copytree(DEMO_OLD, tmp_path / "old"))
+    return DemoRepo(root=tmp_path, contracts=demo_contracts, old=old)
 
 
 @pytest.fixture

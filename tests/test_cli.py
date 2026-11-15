@@ -9,7 +9,9 @@ import yaml
 
 import continuo_python_runtime.cli as cli_module
 from continuo_python_runtime.cli import main
-from tests.conftest import FakeWarehouseAdapter
+from continuo_python_runtime.hash_inputs import gather_hash_inputs
+from continuo_python_runtime.hashing import hash_parts
+from tests.conftest import NODE_T, FakeWarehouseAdapter
 from tests.odcs_builder import write_contract
 
 
@@ -188,11 +190,47 @@ def test_hash_prints_relation_and_hash(contract_repo, capsys):
     assert rel == "analytics.t" and h.startswith("sha256:")
 
 
-def test_hash_dialect_flag_threads_to_build_wire_contract(contract_repo, monkeypatch):
+def test_hash_prints_one_line_per_node(demo_repo, capsys):
+    rc = main(["hash", str(demo_repo.contracts), "--repo-root", str(demo_repo.root)])
+    assert rc == 0
+    lines = capsys.readouterr().out.splitlines()
+    tables = ["demo_orders_csv", "fx_eur_usd_rates", "py_daily_kpis"]
+    assert [line.split("\t")[0] for line in lines] == [f"analytics.{table}" for table in tables]
+    for line, table in zip(lines, tables):
+        inputs = gather_hash_inputs(demo_repo.node(table), demo_repo.root)
+        expected = hash_parts(demo_repo.node(table), inputs.primary, inputs.units)["content_hash"]
+        assert line == f"analytics.{table}\t{expected}"
+
+
+def test_hash_sorts_by_relation_not_by_file_name(tmp_path, capsys):
+    contracts = tmp_path / "contracts"
+    for schema, table in (("zeta", "a_table"), ("alpha", "z_table")):
+        write_contract(
+            contracts, schema=schema, table=table, owner="o", schedule="daily",
+            criticality="SECONDARY", kind="python-csv", reads={"csv": f"s3://b/{table}.csv"},
+            output_columns=[{"name": "id", "type": "INTEGER"}],
+        )
+    assert main(["hash", str(contracts), "--repo-root", str(tmp_path)]) == 0
+    relations = [line.split("\t")[0] for line in capsys.readouterr().out.splitlines()]
+    assert relations == ["alpha.z_table", "zeta.a_table"]
+
+
+def test_hash_prints_nothing_when_a_node_cannot_be_hashed(demo_repo, capsys, caplog):
+    (demo_repo.root / "scripts" / "fx_eur_usd_rates.py").unlink()
+    rc = main(["hash", str(demo_repo.contracts), "--repo-root", str(demo_repo.root)])
+    assert rc == 1
+    assert capsys.readouterr().out == ""
+    assert any("analytics.fx_eur_usd_rates" in r.message and "script not found" in r.message for r in caplog.records)
+
+
+def test_hash_dialect_flag_threads_to_the_loader(contract_repo, monkeypatch):
     captured = {}
-    monkeypatch.setattr(
-        cli_module, "build_wire_contract", _fake_build_wire_contract(captured)
-    )
+
+    def fake_load_contract_dir(path, *, dialect=None):
+        captured["dialect"] = dialect
+        return []
+
+    monkeypatch.setattr(cli_module, "load_contract_dir", fake_load_contract_dir)
     rc = main(
         [
             "hash",
@@ -209,9 +247,12 @@ def test_hash_dialect_flag_threads_to_build_wire_contract(contract_repo, monkeyp
 
 def test_hash_dialect_defaults_to_none(contract_repo, monkeypatch):
     captured = {}
-    monkeypatch.setattr(
-        cli_module, "build_wire_contract", _fake_build_wire_contract(captured)
-    )
+
+    def fake_load_contract_dir(path, *, dialect=None):
+        captured["dialect"] = dialect
+        return []
+
+    monkeypatch.setattr(cli_module, "load_contract_dir", fake_load_contract_dir)
     rc = main(
         ["hash", str(contract_repo / "contracts"), "--repo-root", str(contract_repo)]
     )
@@ -220,11 +261,7 @@ def test_hash_dialect_defaults_to_none(contract_repo, monkeypatch):
 
 
 def test_hash_missing_script_exits_1(contract_repo, caplog):
-    # Modify contract to point to non-existent script
-    contract_file = contract_repo / "contracts" / "t.yml"
-    content = yaml.safe_load(contract_file.read_text())
-    content["nodes"][0]["script"] = "scripts/nonexistent.py"
-    contract_file.write_text(yaml.safe_dump(content))
+    write_contract(contract_repo / "contracts", **{**NODE_T, "script": "scripts/nonexistent.py"})
 
     rc = main(
         ["hash", str(contract_repo / "contracts"), "--repo-root", str(contract_repo)]
@@ -307,15 +344,7 @@ def test_main_oserror_backstop_returns_1_no_traceback(tmp_path, caplog):
     scripts_dir.mkdir()
     (scripts_dir / "t.py").write_text("def run(ctx):\n    return ctx.read('ids')\n")
     contracts_dir = tmp_path / "contracts"
-    contracts_dir.mkdir()
-    import yaml as _yaml
-
-    (contracts_dir / "t.yml").write_text(_yaml.safe_dump({"nodes": [{
-        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
-        "criticality": "SECONDARY", "script": "scripts/t.py",
-        "reads": {"ids": "select id from analytics.a"},
-        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
-    }]}))
+    write_contract(contracts_dir, **NODE_T)
 
     rc = cli_main(
         [

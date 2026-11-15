@@ -5,7 +5,7 @@ from importlib import resources
 import pytest
 from continuo_contracts.python import code_projection
 
-from continuo_python_runtime.hashing import config_hash, to_python_node
+from continuo_python_runtime.hashing import config_hash
 from tests.odcs_builder import contract_node
 
 VECTORS = json.loads(resources.files("continuo_contracts").joinpath("vectors/projection.json").read_text())
@@ -30,5 +30,5 @@ def test_the_library_ships_a_vector_for_every_kind():
 @pytest.mark.parametrize("vector", VECTORS, ids=lambda vector: vector["name"])
 def test_the_runtime_reproduces_each_projection_vector(vector):
     node = contract_node(**_authored(vector["node"]))
-    assert json.loads(json.dumps(code_projection(to_python_node(node)))) == vector["projection"]
+    assert json.loads(json.dumps(code_projection(node.python))) == vector["projection"]
     assert config_hash(node) == vector["projection_hash"]

@@ -13,6 +13,8 @@ from continuo_python_runtime.contract.merge import (
     write_wire_contract,
 )
 from continuo_python_runtime.errors import HarnessError
+from continuo_python_runtime.hash_inputs import gather_hash_inputs
+from continuo_python_runtime.hashing import hash_parts
 from continuo_python_runtime.lint import lint_paths
 from continuo_python_runtime import harness
 
@@ -135,21 +137,20 @@ def cmd_merge(
 
 
 def cmd_hash(contract_dir: str, repo_root: str, dialect: str | None = None) -> int:
-    """Print relation and content hash for each node.
+    """Print ``<relation>\\t<content_hash>`` for each node, one line each, sorted by relation.
 
-    Reuses build_wire_contract for consistent hashing and error handling.
-    Service value is irrelevant to per-node hashes since entries don't include it.
+    Each node is the one a contract in ``contract_dir`` declares, hashed from the
+    files of ``repo_root`` it names. Every node is hashed before the first line
+    is printed, so a node that cannot be hashed leaves stdout empty.
     """
-    # Reuse build_wire_contract for consistent hashing and error handling
-    doc = build_wire_contract(
-        Path(contract_dir), Path(repo_root), service="_hash", dialect=dialect
-    )
+    root = Path(repo_root)
+    hashes = {}
+    for node in load_contract_dir(Path(contract_dir), dialect=dialect):
+        inputs = gather_hash_inputs(node, root)
+        hashes[node.relation] = hash_parts(node, inputs.primary, inputs.units)["content_hash"]
 
-    # Print relation\thash from wire contract nodes (already sorted by relation)
-    for node_entry in doc["nodes"]:
-        relation = f"{node_entry['schema']}.{node_entry['table']}"
-        hash_value = node_entry["content_hash"]
-        print(f"{relation}\t{hash_value}")
+    for relation, content_hash in sorted(hashes.items()):
+        print(f"{relation}\t{content_hash}")
 
     return 0
 

@@ -1,16 +1,21 @@
 """The harness's start check: the image must reproduce the released content_hash."""
 
+import contextlib
+import io
 import json
 import logging
 from importlib import metadata
 
 import pyarrow as pa
 import pytest
-import yaml
 
-from continuo_python_runtime.contract.merge import build_wire_contract
+from continuo_python_runtime.cli import main
+from continuo_python_runtime.contract.loader import load_contract_dir
+from continuo_python_runtime.hash_inputs import gather_hash_inputs
 from continuo_python_runtime.harness import run_node
-from tests.conftest import FakeWarehouseAdapter
+from continuo_python_runtime.hashing import hash_parts
+from tests.conftest import NODE_T, FakeWarehouseAdapter
+from tests.odcs_builder import write_contract
 
 READ = "select id from analytics.a"
 
@@ -20,12 +25,20 @@ def _env(repo, **extra):
             "CONTRACT_DIR": str(repo / "contracts"), "APP_ROOT": str(repo), **extra}
 
 
-def _entry(repo) -> dict:
-    return build_wire_contract(repo / "contracts", repo, "s")["nodes"][0]
+def _image_parts(repo) -> dict[str, str]:
+    """The four hash fields of the repository's only node, from the files as they are now."""
+    (node,) = load_contract_dir(repo / "contracts")
+    inputs = gather_hash_inputs(node, repo)
+    return hash_parts(node, inputs.primary, inputs.units)
 
 
 def _released(repo) -> str:
-    return _entry(repo)["content_hash"]
+    """The content_hash `continuo-runtime hash` prints for the repository's only node."""
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        assert main(["hash", str(repo / "contracts"), "--repo-root", str(repo)]) == 0
+    (line,) = printed.getvalue().splitlines()
+    return line.split("\t")[1]
 
 
 def _block(out: str) -> dict:
@@ -38,31 +51,42 @@ def _adapter():
 
 
 def _declare_assets(repo, assets):
-    contract = repo / "contracts" / "t.yml"
-    doc = yaml.safe_load(contract.read_text())
-    doc["nodes"][0]["assets"] = assets
-    contract.write_text(yaml.safe_dump(doc))
+    write_contract(repo / "contracts", **{**NODE_T, "assets": assets})
 
 
-def test_a_matching_image_runs(harness_repo, capsys):
+def _change_the_read(repo):
+    contract = repo / "contracts" / "t.odcs.yaml"
+    assert READ in contract.read_text()
+    contract.write_text(contract.read_text().replace(READ, "select id from analytics.b"))
+
+
+def test_the_start_check_passes_on_an_odcs_image(harness_repo, capsys):
     assert run_node(_env(harness_repo, CONTENT_HASH=_released(harness_repo)), adapter=_adapter()) == 0
     assert "reason" not in _block(capsys.readouterr().out)
 
 
-@pytest.mark.parametrize("edit", [
-    lambda repo: (repo / "scripts" / "t.py").write_text("def run(ctx):\n    return ctx.read('ids')  # edited\n"),
-    lambda repo: (repo / "contracts" / "t.yml").write_text(
-        (repo / "contracts" / "t.yml").read_text().replace(READ, "select id from analytics.b")),
-], ids=["script", "contract"])
-def test_an_image_that_differs_from_the_release_fails_closed(harness_repo, capsys, edit):
-    released = _released(harness_repo)
-    edit(harness_repo)
+def _assert_fails_closed(repo, capsys, released):
     adapter = _adapter()
-    assert run_node(_env(harness_repo, CONTENT_HASH=released), adapter=adapter) == 1
+    assert run_node(_env(repo, CONTENT_HASH=released), adapter=adapter) == 1
     block = _block(capsys.readouterr().out)
     assert (block["status"], block["reason"], block["failures"]) == ("error", "image_contract_mismatch", 1)
     assert block["message"].startswith("ImageContractMismatch: ")
     assert adapter.ensured is None and adapter.loaded is None
+    return block
+
+
+def test_the_start_check_fails_on_a_changed_read(harness_repo, capsys):
+    released = _released(harness_repo)
+    _change_the_read(harness_repo)
+    block = _assert_fails_closed(harness_repo, capsys, released)
+    assert f"CONTENT_HASH {released} differs from the image's content_hash" in block["message"]
+    assert "analytics.t" in block["message"]
+
+
+def test_an_edited_script_fails_closed(harness_repo, capsys):
+    released = _released(harness_repo)
+    (harness_repo / "scripts" / "t.py").write_text("def run(ctx):\n    return ctx.read('ids')  # edited\n")
+    _assert_fails_closed(harness_repo, capsys, released)
 
 
 def test_an_edited_helper_module_fails_closed(harness_repo, capsys):
@@ -111,7 +135,7 @@ def test_mismatch_message_names_the_node_both_hashes_the_parts_and_the_runtime_v
     released = _released(harness_repo)
     (harness_repo / "scripts" / "t.py").write_text(
         "import helpers\n\n\ndef run(ctx):\n    return ctx.read('ids')  # edited\n")
-    image = _entry(harness_repo)
+    image = _image_parts(harness_repo)
     run_node(_env(harness_repo, CONTENT_HASH=released), adapter=_adapter())
     message = _block(capsys.readouterr().out)["message"]
     assert "analytics.t" in message
@@ -156,15 +180,13 @@ def test_a_matching_image_logs_info(harness_repo, caplog):
 
 
 def test_a_csv_node_is_checked_too(tmp_path, capsys):
-    (tmp_path / "contracts").mkdir()
-    contract = tmp_path / "contracts" / "t.yml"
-    contract.write_text(yaml.safe_dump({"nodes": [{
-        "schema": "analytics", "table": "orders_csv", "owner": "m", "schedule": "daily",
-        "criticality": "SECONDARY", "kind": "python-csv",
-        "reads": {"csv": "s3://drops/orders.csv"},
-        "output_columns": [{"name": "order_id", "type": "INTEGER", "nullable": False}],
-    }]}))
-    released = build_wire_contract(tmp_path / "contracts", tmp_path, "s")["nodes"][0]["content_hash"]
+    write_contract(
+        tmp_path / "contracts", schema="analytics", table="orders_csv", owner="m", schedule="daily",
+        criticality="SECONDARY", kind="python-csv", reads={"csv": "s3://drops/orders.csv"},
+        output_columns=[{"name": "order_id", "type": "INTEGER", "nullable": False}],
+    )
+    released = _released(tmp_path)
+    contract = tmp_path / "contracts" / "orders_csv.odcs.yaml"
     contract.write_text(contract.read_text().replace("orders.csv", "orders_v2.csv"))
     env = {"NODE_ID": "python-csv.svc.analytics.orders_csv", "TABLE_NAME": "orders_csv",
            "TARGET_SCHEMA": "analytics", "CONTRACT_DIR": str(tmp_path / "contracts"),

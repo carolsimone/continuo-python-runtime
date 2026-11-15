@@ -5,6 +5,47 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Breaking
+
+- The runtime reads only ODCS contracts, through continuo-contracts 0.2.0:
+  one file per node, named `<table>.odcs.yaml`, or `<schema>.<table>.odcs.yaml`
+  for two nodes of one service that share a table name. The `nodes:` format is
+  no longer read, and any other `.yml` or `.yaml` file in the contracts folder
+  is refused, with a message that points to the conversion table in
+  `docs/boundary-contract.md`.
+- `continuo-runtime merge` is gone. `continuo-runtime pack` replaces it and
+  writes `odcs-bundle.json` where `merge` wrote `contract.yaml`.
+- The release kind for these services is `python-odcs` (it was `python`), and
+  the artifact a release carries is `odcs-bundle.json`.
+
+### Added
+
+- `continuo-runtime pack <contracts> --service <name> --repo-root <dir> --out <file>`
+  writes `odcs-bundle.json`: each contract's text as written, the two hash
+  parts the repository's files give (`source_hash` and `shared_code_hash`),
+  the service, and the versions of the runtime and the library. It records the
+  package list of the image the service runs, read with `--image <ref>` or
+  taken from a file with `--image-packages` (give exactly one). It checks each
+  contract against `--service`, lints every node's script and its in-repo
+  import closure, and writes nothing unless every check passed.
+- `continuo-runtime packages` prints every installed package of the
+  environment as one JSON object of normalised name to version. Run in the
+  service's image, it gives the list `pack` records.
+- `validate` and the loader refuse a read query that names a table without its
+  schema. A CTE of the same query is the one exception.
+- A node of kind `python-model` is read as `python-node`, as the library reads
+  it.
+
+### Changed
+
+- The runtime pins `continuo-contracts==0.2.0`, which adds `jsonschema` and
+  needs Python 3.14, as the runtime already does.
+- A node's hashes come from the library's node, read from its ODCS contract. A
+  node converted to ODCS with the same values keeps its `content_hash`.
+- The template ships `contracts/example.odcs.yaml` and
+  `contracts/example_csv.odcs.yaml`, and its release workflow runs `pack` and
+  submits the release with kind `python-odcs`.
+
 ## [0.12.0] - 2026-11-11
 
 **TL;DR**

@@ -13,10 +13,11 @@ library does, so every producer of a hash writes the same bytes. The fold is
 the three-part fold that older topology-controllers check on the wire, so an
 entry this module writes passes their re-computation unchanged.
 
-The library refuses a few ``config`` values the contract loader accepts (an
-integer beyond 2**53 - 1, NaN or an infinity, nesting deeper than 99 levels, a
-lone surrogate). Each refusal reaches the caller as a ``ContractError`` naming
-the node.
+The library refuses a few ``config`` values (an integer beyond 2**53 - 1, NaN
+or an infinity, nesting deeper than 99 levels, a lone surrogate). No contract
+file holds one, since the loader reads each file with the library's strict
+YAML reader, which refuses them too; a refusal for a node built in code
+reaches the caller as a ``ContractError`` naming the node.
 """
 
 from collections.abc import Mapping

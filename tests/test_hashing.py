@@ -1,15 +1,16 @@
 """The three hash parts, computed through continuo-contracts."""
+import dataclasses
 import hashlib
 import json
 
 import pytest
 from continuo_contracts.python import code_projection
 
-from continuo_python_runtime.contract.loader import parse_node
 from continuo_python_runtime.errors import ContractError
 from continuo_python_runtime.hashing import (
     config_hash, content_hash_fold, hash_parts, shared_code_hash, source_hash, to_python_node,
 )
+from tests.odcs_builder import contract_node
 
 PY_DAILY_KPIS = {
     "schema": "analytics", "table": "py_daily_kpis", "owner": "service-py", "schedule": "daily",
@@ -67,7 +68,7 @@ FX = {
 
 
 def _node(raw):
-    return parse_node(raw, "f.yml")
+    return contract_node(**raw)
 
 
 def _json(value):
@@ -178,8 +179,9 @@ def _nested(levels: int) -> dict:
     return config
 
 
-# The loader accepts these config values; continuo-contracts refuses them, and the runtime
-# reports the refusal as its own ContractError.
+# Config values canonical JSON cannot write. No contract file holds one (yaml_strict refuses
+# each), so the test gives them to a loaded node; continuo-contracts refuses to hash them, and
+# the runtime reports the refusal as its own ContractError.
 UNHASHABLE_CONFIGS = {
     "integer-beyond-2^53-1": {"n": 2**53},
     "nan": {"n": float("nan")},
@@ -191,6 +193,6 @@ UNHASHABLE_CONFIGS = {
 
 @pytest.mark.parametrize("config", UNHASHABLE_CONFIGS.values(), ids=UNHASHABLE_CONFIGS.keys())
 def test_a_config_the_library_refuses_is_a_contract_error(config):
-    node = _node({**PY_DAILY_KPIS, "config": config})
+    node = dataclasses.replace(_node(PY_DAILY_KPIS), config=config)
     with pytest.raises(ContractError, match=r"analytics\.py_daily_kpis"):
         config_hash(node)

@@ -1,120 +1,60 @@
-"""Contract v1 loader and validator.
+"""The contract loader: one ODCS contract per node.
 
-Parses YAML contract files into validated :class:`~continuo_python_runtime
-.contract.model.Node` instances, raising :class:`ContractError` for any
-structural or semantic violation.
+A contracts folder holds one ODCS v3.2.0 contract per node, in a file named
+``<table>.odcs.yaml``, or ``<schema>.<table>.odcs.yaml`` when two nodes of one
+service share a table name. continuo-contracts reads each file strictly, checks
+it and maps it to its ``PythonNode``; the runtime then applies the rules it
+keeps for itself and builds its :class:`~continuo_python_runtime.contract.model
+.Node`. Every refusal is a :class:`ContractError` that names the file.
 """
 
 from __future__ import annotations
 
-import re
-from pathlib import Path, PurePosixPath
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
-import yaml
+from continuo_contracts import yaml_strict
+from continuo_contracts.errors import StrictYamlError
+from continuo_contracts.python import PythonNode, node_from_odcs
+from continuo_contracts.validate import validate_python_contract
+from continuo_contracts.vocabulary import continuo_values
 from sqlglot import Dialect
 
-from continuo_python_runtime.contract.kinds import KindRules, rules_for
-from continuo_python_runtime.contract.model import (
-    CRITICALITIES,
-    DEFAULT_KIND,
-    DEFAULT_MODE_TYPE,
-    EXTRA_COLUMNS_POLICIES,
-    MODE_TYPES,
-    Column,
-    Node,
-)
-from continuo_python_runtime.contract.secret_ref import validate_secret_ref
+from continuo_python_runtime.contract.kinds import rules_for
+from continuo_python_runtime.contract.model import Column, Node
 from continuo_python_runtime.errors import ContractError
-from continuo_python_runtime.types import parse_sql_type
 
-_ALLOWED_KEYS = {
-    "schema",
-    "table",
-    "description",
-    "owner",
-    "schedule",
-    "criticality",
-    "kind",
-    "script",
-    "extra_columns",
-    "reads",
-    "output_columns",
-    "config",
-    "content_hash",
-    "secret_ref",
-    "mode_type",
-    "primary_key",
-    "timeout_minutes",
-    "assets",
-}
-
-# Bounds of a node's declared task timeout, in minutes (one minute to one week).
-MIN_TIMEOUT_MINUTES = 1
-MAX_TIMEOUT_MINUTES = 10_080
-
-_REQUIRED_STRING_FIELDS = ("schema", "table", "owner", "schedule")
-
-_ALLOWED_OUTPUT_COLUMN_KEYS = {"name", "type", "nullable"}
-
-
-class _StrictLoader(yaml.SafeLoader):
-    """SafeLoader that rejects duplicate mapping keys instead of keeping the last."""
-
-
-def _strict_construct_mapping(
-    loader: _StrictLoader, node: yaml.MappingNode, deep: bool = False
-):
-    seen = set()
-    for key_node, _ in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if key in seen:
-            raise ContractError(f"duplicate key {key!r} at {key_node.start_mark}")
-        seen.add(key)
-    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
-
-
-_StrictLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _strict_construct_mapping
-)
-
-
-def _node_label(raw: dict[str, Any], source: str) -> str:
-    """Build a `source (schema.table)`-style label for error messages."""
-    schema = raw.get("schema")
-    table = raw.get("table")
-    if isinstance(schema, str) and schema and isinstance(table, str) and table:
-        return f"{source} ({schema}.{table})"
-    return source
-
+CONTRACT_SUFFIX = ".odcs.yaml"
 
 _JSON_SCALARS = (str, int, float, bool, type(None))
 
+# What a document that is not a mapping is, as the words of a message.
+_DOCUMENT_KINDS = {
+    list: "a list",
+    str: "a string",
+    bool: "a boolean",
+    int: "a number",
+    float: "a number",
+}
+
 
 def _validate_config(raw: Any, label: str) -> dict[str, Any]:
-    """Validate the node's physical-layout `config` as a JSON-shaped mapping.
+    """Validate the node's physical-layout ``config`` as a JSON-shaped mapping.
 
-    The engine's adapter — not this loader — owns the vocabulary (§3.3), so the
-    only rules here are the ones the hash and the wire format need: it is a
-    mapping, every key at every level is a string, and every value is
-    JSON-serializable. Non-string keys would make `json.dumps(..., sort_keys=True)`
-    raise inside the hasher, and a non-serializable value would break the wire
-    artifact — both must surface here, naming the node, not deep in CI.
+    The engine's adapter, not this loader, owns the vocabulary, so the only
+    rules here are the ones the hash and the adapters need: it is a mapping,
+    every key at every level is a string, and every value is a JSON scalar, a
+    list or a mapping. A contract file always passes, since ``yaml_strict``
+    reads nothing else; a document built in code can hold a key that is not a
+    string, a value JSON cannot write or a container that contains itself, and
+    each is refused here, naming the node.
 
-    YAML aliases (``&anchor`` / ``*anchor``) can make PyYAML construct a
-    genuinely cyclic object graph — a mapping whose own value (however deeply
-    nested) is itself. Recursing into that without tracking what is already
-    on the call stack raises an uncaught ``RecursionError`` instead of this
-    function's promised ``ContractError``. ``active`` holds the ``id()`` of
-    every dict/list container currently being descended into; a container is
-    added just before recursing into its items and discarded right after, so
-    re-entering one still on the stack is a genuine back-edge (a cycle), while
-    the *same* container reached twice at sibling positions — a legal DAG,
-    e.g. one list aliased under two different keys — is not: its first visit
-    finishes (and is discarded) before the second begins.
+    ``active`` holds the ``id()`` of every dict or list being descended into:
+    a container is added just before its items are checked and discarded right
+    after, so meeting one that is still in ``active`` is a cycle, while one
+    container reached twice at sibling positions is not.
     """
-    if raw is None:
-        return {}
     if not isinstance(raw, dict):
         raise ContractError(f"{label}: 'config' must be a mapping")
 
@@ -151,339 +91,146 @@ def _validate_config(raw: Any, label: str) -> dict[str, Any]:
     return raw
 
 
-def _validate_primary_key(
-    raw: dict[str, Any], mode_type: str, columns: list[Column], label: str
-) -> tuple[str, ...]:
-    """Validate ``primary_key`` against ``mode_type`` and the declared columns.
+def _upsert_key(python: PythonNode, label: str) -> tuple[str, ...]:
+    """Return the key the harness upserts on: the node's key when it upserts, else none.
 
-    Required for ``upsert`` and rejected otherwise: a key on ``append`` or
-    ``replace`` would look enforced when it is not. Names keep their order,
-    which is what the wire entry carries. Each must be spelled exactly as an
-    output column (postgres quotes identifiers, so ``Rate_Date`` is not
-    ``rate_date``) declared ``nullable: false``, because a NULL key never
-    matches an existing row. Repeats are refused case-insensitively too, so a
-    key cannot name two columns that differ only in case. A floating-point
-    column is refused as well: the warehouse treats ``0.0`` and ``-0.0`` as
-    one key, so ``ensure_unique_key`` would reject the rows at write time --
-    failing here instead keeps an unwritable upsert out of the contract.
+    On a replace or append node a key only describes the table. The names of
+    an upsert key are compared case-insensitively too, so a key cannot name
+    two columns that differ only in case.
     """
-    if mode_type != "upsert":
-        if "primary_key" in raw:
-            raise ContractError(
-                f"{label}: 'primary_key' is only allowed when mode_type is upsert "
-                f"(got {mode_type})"
-            )
+    if python.mode_type != "upsert":
         return ()
-    if "primary_key" not in raw:
-        raise ContractError(f"{label}: 'primary_key' is required when mode_type is upsert")
-    raw_key = raw["primary_key"]
-    if not isinstance(raw_key, list) or not raw_key:
-        raise ContractError(
-            f"{label}: 'primary_key' must be a non-empty list of output column names"
-        )
-    by_name = {column.name: column for column in columns}
     seen: set[str] = set()
-    for name in raw_key:
-        if not isinstance(name, str) or not name.strip():
-            raise ContractError(
-                f"{label}: 'primary_key' entry {name!r} must be a non-empty string"
-            )
-        folded = name.lower()  # same folding as continuo's parser
+    for name in python.primary_key:
+        folded = name.lower()
         if folded in seen:
             raise ContractError(
-                f"{label}: 'primary_key' names {name!r} more than once "
+                f"{label}: the upsert key names {name!r} more than once "
                 "(names are compared case-insensitively)"
             )
         seen.add(folded)
-        column = by_name.get(name)
-        if column is None:
-            raise ContractError(
-                f"{label}: 'primary_key' column {name!r} is not in output_columns"
-            )
-        if column.nullable:
-            raise ContractError(
-                f"{label}: 'primary_key' column {name!r} must be declared nullable: false"
-            )
-        if parse_sql_type(column.type).base == "DOUBLE_PRECISION":
-            raise ContractError(
-                f"{label}: 'primary_key' column {name!r} is floating-point "
-                f"({column.type}); a floating-point column cannot be a primary key"
-            )
-    return tuple(raw_key)
+    return tuple(python.primary_key)
 
 
-_DRIVE_PATH = re.compile(r"^[A-Za-z]:")
-
-
-def _validate_assets(
-    raw: dict[str, Any], rules: KindRules, kind: str, label: str
-) -> tuple[str, ...]:
-    """Validate ``assets``: repo-relative paths of the files a script reads.
-
-    A kind without a script has nothing that reads a file, so it refuses the
-    key. Each path is written with forward slashes, relative to the repository
-    root and without a ``..`` segment; it is normalised (``./data//ref.json``
-    is ``data/ref.json``) and keeps its declared position. A repeat after
-    normalising is refused. Whether the file exists is checked where a
-    repository root is known.
-    """
-    if "assets" not in raw:
-        return ()
-    if not rules.assets_allowed:
-        raise ContractError(
-            f"{label}: 'assets' is not allowed for kind {kind} (it has no script to read files)"
-        )
-    raw_assets = raw["assets"]
-    if not isinstance(raw_assets, list):
-        raise ContractError(f"{label}: 'assets' must be a list of repository-relative paths")
-    assets: list[str] = []
-    for entry in raw_assets:
-        if not isinstance(entry, str) or not entry.strip():
-            raise ContractError(f"{label}: 'assets' entry {entry!r} must be a non-empty string")
-        if "\\" in entry:
-            raise ContractError(f"{label}: 'assets' entry {entry!r} must use forward slashes")
-        path = PurePosixPath(entry)
-        if path.is_absolute() or _DRIVE_PATH.match(entry):
-            raise ContractError(
-                f"{label}: 'assets' entry {entry!r} must be relative to the repository root"
-            )
-        if ".." in path.parts:
-            raise ContractError(f"{label}: 'assets' entry {entry!r} must not contain '..'")
-        normalised = path.as_posix()
-        if normalised == ".":
-            raise ContractError(f"{label}: 'assets' entry {entry!r} must name a file")
-        if normalised in assets:
-            raise ContractError(f"{label}: 'assets' names {normalised!r} more than once")
-        assets.append(normalised)
-    return tuple(assets)
-
-
-def parse_node(
-    raw: dict[str, Any],
-    source: str,
-    *,
-    dialect: str | None = None,
-    check_reads: bool = True,
+def node_from_contract(
+    doc: Mapping[str, Any], file: Path, *, dialect: str | None, check_reads: bool
 ) -> Node:
-    """Validate a single raw mapping and build a :class:`Node`.
+    """Check the ODCS contract ``doc``, read from ``file``, and build its :class:`Node`.
 
-    ``source`` is the originating filename; it appears in every error message.
-    ``dialect`` is a sqlglot dialect name (e.g. ``"postgres"``, ``"trino"``)
-    each declared read is checked against via
-    :func:`~continuo_engine_contract.sql.ensure_single_read`; ``None``
-    (the default) uses sqlglot's dialect-neutral parser.
+    continuo-contracts checks the contract first
+    (``validate_python_contract``, with no service, of which only the base
+    name of ``file`` counts for the file-name rule). When it finds issues they
+    become one :class:`ContractError` with one line per issue,
+    ``f"{file}: {issue}"``, and nothing else runs.
 
-    ``check_reads=False`` skips *only* that :func:`ensure_single_read` call —
-    the read-shape gate — leaving every other rule here (required fields,
-    criticality, the ``reads`` map's own shape, output-column types and
-    uniqueness, ``mode_type`` and ``primary_key``, ``config``,
-    ``content_hash``) in force. It exists for
-    :func:`~continuo_python_runtime.harness.run_node`; see
-    :func:`load_contract_dir` for why the runtime opts out.
+    The runtime's own rules follow, each naming ``file`` and the relation:
+    the kind's reads rule (:mod:`~continuo_python_runtime.contract.kinds`),
+    which parses each read of a python-node as one read query under
+    ``dialect`` unless ``check_reads`` is false; the shape of ``config``; and
+    the case-insensitive uniqueness of an upsert key's names.
+
+    The node takes ``owner`` from ``team.name``, ``description`` from
+    ``description.purpose`` (``""`` when absent), and ``schedule``,
+    ``criticality`` and ``timeout_minutes`` (``None`` when absent) from the
+    contract's ``continuo`` custom properties. Every other field is the
+    library's ``PythonNode``, kept as ``python``: the kind as the library
+    reads it, the script, the reads, the columns (nullable unless
+    ``required``), ``extra_columns``, ``config``, ``secret_ref``,
+    ``mode_type``, the key when the node upserts and the assets.
     """
-    if not isinstance(raw, dict):
-        raise ContractError(
-            f"{source}: node must be a mapping, got {type(raw).__name__}"
-        )
+    issues = validate_python_contract(doc, path=str(file), service=None)
+    if issues:
+        raise ContractError("\n".join(f"{file}: {issue}" for issue in issues))
+    python = node_from_odcs(doc)
+    label = f"{file} ({python.relation})"
 
-    label = _node_label(raw, source)
-
-    unknown = set(raw) - _ALLOWED_KEYS
-    if unknown:
-        raise ContractError(f"{label}: unknown key(s) {sorted(unknown)}")
-
-    kind = raw.get("kind", DEFAULT_KIND)
-    rules = rules_for(kind, label)
-
-    for field in _REQUIRED_STRING_FIELDS:
-        value = raw.get(field)
-        if not isinstance(value, str) or not value.strip():
-            raise ContractError(
-                f"{label}: required field '{field}' must be a non-empty string"
-            )
-
-    schema = raw["schema"]
-    table = raw["table"]
-    owner = raw["owner"]
-    schedule = raw["schedule"]
-
-    if rules.script_required:
-        raw_script = raw.get("script")
-        if not isinstance(raw_script, str) or not raw_script.strip():
-            raise ContractError(
-                f"{label}: required field 'script' must be a non-empty string"
-            )
-        script = raw_script
-    else:
-        if "script" in raw:
-            raise ContractError(
-                f"{label}: 'script' is forbidden for kind {kind} "
-                "(it is a contract-only kind)"
-            )
-        script = ""
-
-    criticality = raw.get("criticality")
-    if not isinstance(criticality, str) or criticality not in CRITICALITIES:
-        raise ContractError(
-            f"{label}: 'criticality' must be one of {sorted(CRITICALITIES)}, got {criticality!r}"
-        )
-
-    extra_columns = raw.get("extra_columns", "raise")
-    if (
-        not isinstance(extra_columns, str)
-        or extra_columns not in EXTRA_COLUMNS_POLICIES
-    ):
-        raise ContractError(
-            f"{label}: 'extra_columns' must be one of {sorted(EXTRA_COLUMNS_POLICIES)}, "
-            f"got {extra_columns!r}"
-        )
-
-    reads = rules.reads.validate(
-        raw.get("reads"), label, dialect=dialect, check_reads=check_reads
+    reads = rules_for(python.kind, label).reads.validate(
+        dict(python.reads), label, dialect=dialect, check_reads=check_reads
     )
+    config = _validate_config(python.config, label)
+    primary_key = _upsert_key(python, label)
 
-    secret_ref = ""
-    if "secret_ref" in raw:
-        if not rules.secret_allowed:
-            raise ContractError(f"{label}: 'secret_ref' is not allowed for kind {kind}")
-        secret_ref = validate_secret_ref(raw["secret_ref"], label)
-
-    timeout_minutes = raw.get("timeout_minutes")
-    if "timeout_minutes" in raw and (
-        type(timeout_minutes) is not int
-        or not MIN_TIMEOUT_MINUTES <= timeout_minutes <= MAX_TIMEOUT_MINUTES
-    ):
-        raise ContractError(
-            f"{label}: 'timeout_minutes' must be an integer between "
-            f"{MIN_TIMEOUT_MINUTES} and {MAX_TIMEOUT_MINUTES}, got {timeout_minutes!r}"
-        )
-
-    mode_type = raw.get("mode_type", DEFAULT_MODE_TYPE)
-    if not isinstance(mode_type, str) or mode_type not in MODE_TYPES:
-        raise ContractError(
-            f"{label}: 'mode_type' must be one of {sorted(MODE_TYPES)}, got {mode_type!r}"
-        )
-    if mode_type not in rules.mode_types:
-        raise ContractError(
-            f"{label}: 'mode_type' {mode_type!r} is not allowed for kind {kind!r} "
-            f"(allowed: {sorted(rules.mode_types)})"
-        )
-
-    raw_columns = raw.get("output_columns")
-    if not isinstance(raw_columns, list) or not raw_columns:
-        raise ContractError(f"{label}: 'output_columns' must be a non-empty list")
-
-    seen_names: set[str] = set()
-    columns: list[Column] = []
-    for entry in raw_columns:
-        if not isinstance(entry, dict):
-            raise ContractError(
-                f"{label}: each 'output_columns' entry must be a mapping, got {entry!r}"
-            )
-        unknown_col_keys = set(entry) - _ALLOWED_OUTPUT_COLUMN_KEYS
-        if unknown_col_keys:
-            raise ContractError(
-                f"{label}: output column has unknown key(s) {sorted(unknown_col_keys)}"
-            )
-        name = entry.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise ContractError(f"{label}: output column missing non-empty 'name'")
-        col_type = entry.get("type")
-        if not isinstance(col_type, str):
-            raise ContractError(
-                f"{label}: output column '{name}' has unsupported 'type' {col_type!r}"
-            )
-        try:
-            parse_sql_type(col_type)
-        except ContractError as e:
-            raise ContractError(
-                f"{label}: output column '{name}' has unsupported {str(e)}"
-            ) from e
-        nullable = entry.get("nullable", True)
-        if not isinstance(nullable, bool):
-            raise ContractError(
-                f"{label}: output column '{name}' has non-boolean 'nullable' {nullable!r}"
-            )
-        if name in seen_names:
-            raise ContractError(f"{label}: duplicate column '{name}' in output_columns")
-        seen_names.add(name)
-        columns.append(Column(name=name, type=col_type, nullable=nullable))
-
-    primary_key = _validate_primary_key(raw, mode_type, columns, label)
-    assets = _validate_assets(raw, rules, kind, label)
-
-    description = raw.get("description", "")
-    if not isinstance(description, str):
-        raise ContractError(f"{label}: 'description' must be a string")
-
-    config = _validate_config(raw.get("config"), label)
-
-    content_hash = raw.get("content_hash")
-    if content_hash is not None and not isinstance(content_hash, str):
-        raise ContractError(f"{label}: 'content_hash' must be a string")
-
+    values = continuo_values(doc.get("customProperties"))
+    description = doc.get("description", {}).get("purpose", "")
     return Node(
-        schema=schema,
-        table=table,
-        owner=owner,
-        schedule=schedule,
-        criticality=criticality,
-        script=script,
+        schema=python.schema,
+        table=python.table,
+        owner=doc["team"]["name"],
+        schedule=values["schedule"],
+        criticality=values["criticality"],
+        script=python.script,
         reads=reads,
-        output_columns=tuple(columns),
+        output_columns=tuple(
+            Column(name=column.name, type=column.type, nullable=column.nullable)
+            for column in python.output_columns
+        ),
+        python=python,
+        path=file,
         description=description,
-        extra_columns=extra_columns,
+        extra_columns=python.extra_columns,
         config=config,
-        content_hash=content_hash,
-        kind=kind,
-        secret_ref=secret_ref,
-        mode_type=mode_type,
+        kind=python.kind,
+        secret_ref=python.secret_ref,
+        mode_type=python.mode_type,
         primary_key=primary_key,
-        timeout_minutes=timeout_minutes,
-        assets=assets,
+        timeout_minutes=values.get("timeoutMinutes"),
+        assets=tuple(python.assets),
     )
+
+
+def _read_contract(file: Path) -> Mapping[str, Any]:
+    """Return the document of a contract file, read strictly by continuo-contracts."""
+    try:
+        text = file.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ContractError(f"{file}: the file is not UTF-8 text ({exc})") from None
+    try:
+        doc = yaml_strict.load(text)
+    except StrictYamlError as exc:
+        raise ContractError(f"{file}: {exc}") from None
+    if not isinstance(doc, Mapping):
+        holds = "nothing" if doc is None else _DOCUMENT_KINDS.get(type(doc), type(doc).__name__)
+        raise ContractError(
+            f"{file}: a contract file holds one ODCS contract, a mapping; this one holds {holds}"
+        )
+    return doc
 
 
 def load_contract_dir(
     path: Path, *, dialect: str | None = None, check_reads: bool = True
 ) -> list[Node]:
-    """Load and validate every `*.yml`/`*.yaml` contract file under ``path``.
+    """Load and check every ``*.odcs.yaml`` contract in ``path``, in file-name order.
 
-    ``check_reads=False`` skips the per-read
-    :func:`~continuo_engine_contract.sql.ensure_single_read` gate and
-    nothing else; every other rule in :func:`parse_node` and every rule here
-    (dialect validity, document shape, duplicate relations, "no contract
-    files found") still runs. The runtime
+    Any other ``*.yml`` or ``*.yaml`` file in the folder is refused, naming the
+    file and how to convert it: an image pairs a runtime with its contracts,
+    so a contract in another format is a mistake, never a node to skip. Files
+    with any other extension are not read.
+
+    ``check_reads=False`` skips only the check that each read of a python-node
+    parses as one read query; every other rule of :func:`node_from_contract`
+    and every rule here (the dialect name, the duplicate relations, the empty
+    folder) still runs. The harness
     (:func:`~continuo_python_runtime.harness.run_node`) passes it, because
-    re-running the read-shape gate at container start can only introduce a
-    disagreement, never catch a new problem:
+    parsing the reads again at container start can only disagree with the
+    checks already passed, never catch a new problem:
 
-    - CI already gated the reads (``continuo-runtime validate``), under the
-      repo's own ``--dialect``, and Continuo gated them again with its own
-      parser and bind-check before promoting the release.
-    - The runtime has no ``--dialect`` of its own, so it would re-parse with
-      the dialect-neutral grammar — a *different* and in places stricter
-      grammar than CI used. Ordinary postgres (``a ~ 'x'``, ``data @>
-      '{...}'``) parses under ``--dialect postgres`` and not under the
-      neutral parser, so a team following the docs would get a green
-      validate, a green merge, an accepted release, and a node that fails on
-      every single run.
-    - Nothing at run time consumes the parse: ``ctx.read`` resolves declared
-      reads by name and hands the SQL to the adapter verbatim.
+    - CI already checked the reads (``continuo-runtime validate``) under the
+      repository's ``--dialect``, and continuo checked them again with its own
+      parser before promoting the release.
+    - The harness has no ``--dialect`` of its own, so it would parse with
+      sqlglot's dialect-neutral grammar, which refuses ordinary postgres such
+      as ``a ~ 'x'`` that parses under ``--dialect postgres``.
+    - Nothing at run time reads the parse: ``ctx.read`` finds a read by name
+      and hands its SQL to the adapter as written.
 
-    ``dialect`` is validated once, up front, then forwarded to
-    :func:`parse_node` for every node, so every declared read is checked
-    against that sqlglot dialect (``None`` -- the default -- uses sqlglot's
-    dialect-neutral parser). Validating it here rather than leaving it to
-    the per-read ``ensure_single_read`` call matters: an unrecognized
-    dialect name (e.g. a typo'd ``--dialect POSTGRES`` instead of
-    ``postgres``) raises the same bare ``ValueError`` a genuinely
-    unparseable read would, and would otherwise be misreported as a
-    rejected read instead of a bad flag -- blaming an innocent, valid read.
+    ``dialect`` is checked once, before any file is read: sqlglot raises the
+    same ``ValueError`` for an unknown dialect name as for a read it cannot
+    parse, so a typo such as ``--dialect POSTGRES`` is reported as a bad flag
+    instead of blaming a valid read.
 
-    Raises `ContractError` if ``dialect`` is not a sqlglot dialect name, if
-    no nodes are found, if any file's document is malformed, or if two nodes
-    across files share the same `(schema, table)`.
+    Raises ``ContractError`` for an unknown ``dialect``, a file in another
+    format, a folder with no contract, a contract that is refused, and two
+    files that declare the same ``<schema>.<table>``.
     """
     if dialect is not None:
         try:
@@ -491,43 +238,27 @@ def load_contract_dir(
         except ValueError as exc:
             raise ContractError(f"unknown --dialect {dialect!r}: {exc}") from exc
 
-    files = sorted(path.glob("*.yml")) + sorted(path.glob("*.yaml"))
-
-    nodes: list[Node] = []
-    relation_sources: dict[str, str] = {}
-
-    for file in files:
-        text = file.read_text()
-        try:
-            document = yaml.load(text, Loader=_StrictLoader)  # noqa: S506 — SafeLoader subclass
-        except ContractError as exc:
-            raise ContractError(f"{file.name}: {exc}") from None
-        except yaml.YAMLError as exc:
-            raise ContractError(f"{file.name}: invalid YAML: {exc}") from None
-        if document is None:
-            document = {}
-        if not isinstance(document, dict):
-            raise ContractError(
-                f"{file.name}: contract document must be a mapping, "
-                f"got {type(document).__name__}"
-            )
-        raw_nodes = document.get("nodes")
-        if not isinstance(raw_nodes, list):
-            raise ContractError(f"{file.name}: 'nodes' must be a list")
-
-        for raw_node in raw_nodes:
-            node = parse_node(
-                raw_node, file.name, dialect=dialect, check_reads=check_reads
-            )
-            existing_source = relation_sources.get(node.relation)
-            if existing_source is not None:
-                raise ContractError(
-                    f"duplicate node {node.relation} (in {existing_source} and {file.name})"
-                )
-            relation_sources[node.relation] = file.name
-            nodes.append(node)
-
-    if not nodes:
+    files = sorted(path.glob(f"*{CONTRACT_SUFFIX}"))
+    others = sorted({*path.glob("*.yml"), *path.glob("*.yaml")} - set(files))
+    if others:
+        raise ContractError(
+            f"{others[0]}: runtime 0.13.0 reads only ODCS contracts named "
+            "<table>.odcs.yaml; convert this file (docs/boundary-contract.md)"
+        )
+    if not files:
         raise ContractError(f"no contract files found in {path}")
 
+    nodes: list[Node] = []
+    relation_files: dict[str, Path] = {}
+    for file in files:
+        node = node_from_contract(
+            _read_contract(file), file, dialect=dialect, check_reads=check_reads
+        )
+        existing = relation_files.get(node.relation)
+        if existing is not None:
+            raise ContractError(
+                f"duplicate node {node.relation} (in {existing} and {file})"
+            )
+        relation_files[node.relation] = file
+        nodes.append(node)
     return nodes

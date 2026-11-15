@@ -1,15 +1,25 @@
-"""Tests for the contract v1 loader/validator."""
+"""The contract loader: one ODCS contract per node, read from a contracts folder."""
 
-import yaml
+import re
+import shutil
+from pathlib import Path
+
 import pytest
+from continuo_contracts import yaml_strict
+from continuo_contracts.python import node_from_odcs
 
-from continuo_python_runtime.contract.loader import load_contract_dir, parse_node
+from continuo_python_runtime.contract.loader import load_contract_dir, node_from_contract
+from continuo_python_runtime.contract.model import Column
 from continuo_python_runtime.errors import ContractError
+from continuo_python_runtime.types import parse_sql_type
+from tests.odcs_builder import contract_text, write_contract
 
-VALID = {
+DEMO = Path(__file__).resolve().parent.parent / "fixtures" / "demo" / "service-py"
+OLD_KPIS = (DEMO / "old" / "py_daily_kpis.yml").read_text(encoding="utf-8")
+
+FIELDS = {
     "schema": "analytics",
     "table": "t",
-    "description": "d",
     "owner": "marketing",
     "schedule": "daily",
     "criticality": "SECONDARY",
@@ -22,927 +32,331 @@ VALID = {
 }
 
 
-def test_parse_valid_node():
-    n = parse_node(VALID, "f.yml")
-    assert n.relation == "analytics.t"
-    assert n.output_columns[1].type == "NUMERIC(10,2)"
-    assert n.output_columns[0].nullable is False
-    assert n.output_columns[1].nullable is True
-    assert n.extra_columns == "raise"
-    assert n.content_hash is None
-
-
-def test_parse_valid_node_accepts_content_hash():
-    n = parse_node({**VALID, "content_hash": "abc123"}, "f.yml")
-    assert n.content_hash == "abc123"
-
-
-def test_parse_node_without_config_defaults_to_empty_mapping():
-    n = parse_node(VALID, "f.yml")
-    assert n.config == {}
-
-
-def test_config_preserves_nested_structure():
-    config = {"indexes": [{"columns": ["id"], "unique": True}]}
-    n = parse_node({**VALID, "config": config}, "f.yml")
-    assert n.config == config
-
-
-def test_config_empty_mapping_loads():
-    n = parse_node({**VALID, "config": {}}, "f.yml")
-    assert n.config == {}
-
-
-def test_config_not_a_mapping_rejected():
-    with pytest.raises(ContractError, match="config"):
-        parse_node({**VALID, "config": "not-a-mapping"}, "f.yml")
-
-
-def test_config_non_string_key_rejected():
-    with pytest.raises(ContractError, match="config"):
-        parse_node({**VALID, "config": {1: "x"}}, "f.yml")
-
-
-def test_config_nested_non_string_key_rejected():
-    with pytest.raises(ContractError, match="config"):
-        parse_node({**VALID, "config": {"indexes": [{1: "x"}]}}, "f.yml")
-
-
-def test_config_allows_unknown_vocabulary_key():
-    """The loader stays engine-blind (design §3.3): an unrecognized
-    physical-layout key such as 'sortkey' is not this loader's concern.
-    The engine adapter enforces its own vocabulary later (Task 6)."""
-    n = parse_node({**VALID, "config": {"sortkey": ["id"]}}, "f.yml")
-    assert n.config == {"sortkey": ["id"]}
-
-
-def test_config_non_json_serializable_value_rejected():
-    with pytest.raises(ContractError, match="not JSON-serializable"):
-        parse_node({**VALID, "config": {"foo": object()}}, "f.yml")
-
-
-def test_load_dir_config_unquoted_yaml_date_rejected(tmp_path):
-    """An unquoted date under 'config' (e.g. 'effective_date: 2026-08-07') is
-    parsed by the YAML loader into a `datetime.date`, which is not a JSON
-    scalar/list/dict. This is a realistic authoring mistake -- someone
-    forgets to quote a date-shaped value -- and must be caught here rather
-    than surfacing as an obscure serialization failure later in CI."""
-    a = tmp_path / "a.yml"
-    a.write_text(
-        "nodes:\n"
-        "  - schema: analytics\n"
-        "    table: t\n"
-        "    owner: marketing\n"
-        "    schedule: daily\n"
-        "    criticality: SECONDARY\n"
-        "    script: scripts/t.py\n"
-        "    reads:\n"
-        "      ids: select id from analytics.a\n"
-        "    output_columns:\n"
-        "      - {name: id, type: INTEGER}\n"
-        "    config:\n"
-        "      effective_date: 2026-08-07\n"
+def _node(*, dialect=None, check_reads=True, **over):
+    """The node the loader reads from the contract of FIELDS changed by ``over``."""
+    fields = {**FIELDS, **over}
+    return node_from_contract(
+        yaml_strict.load(contract_text(**fields)),
+        Path(f"{fields['table']}.odcs.yaml"),
+        dialect=dialect,
+        check_reads=check_reads,
     )
-    with pytest.raises(ContractError, match="not JSON-serializable"):
+
+
+def _with_read(sql, **kwargs):
+    return _node(reads={"ids": sql}, **kwargs)
+
+
+# --- the folder -----------------------------------------------------------------
+
+
+def test_the_demo_contracts_load(demo_contracts):
+    nodes = load_contract_dir(demo_contracts, dialect="postgres")
+    assert [n.relation for n in nodes] == [
+        "analytics.demo_orders_csv", "analytics.fx_eur_usd_rates", "analytics.py_daily_kpis",
+    ]
+    kpis = nodes[2]
+    assert (kpis.owner, kpis.schedule, kpis.criticality, kpis.kind) == (
+        "service-py", "daily", "SECONDARY", "python-node",
+    )
+    assert kpis.reads == {"daily": "select created_at, amount_eur from analytics.daily_transactions"}
+    assert kpis.python.table == "py_daily_kpis"
+
+
+def test_each_node_keeps_its_file_and_the_library_node(demo_contracts):
+    csv, api, kpis = load_contract_dir(demo_contracts)
+    for node in (csv, api, kpis):
+        assert node.path == demo_contracts / f"{node.table}.odcs.yaml"
+        assert node.python == node_from_odcs(yaml_strict.load(node.path.read_text(encoding="utf-8")))
+    assert (csv.kind, csv.script, csv.reads) == (
+        "python-csv", "", {"csv": "s3://continuo-dev/static-files/demo/orders.csv"},
+    )
+    assert (api.kind, api.script, api.reads, api.secret_ref) == (
+        "python-api", "scripts/fx_eur_usd_rates.py", {}, "continuo-api-demo-fx",
+    )
+
+
+def test_an_old_nodes_file_is_refused_with_how_to_convert_it(tmp_path):
+    (tmp_path / "py_daily_kpis.yml").write_text(OLD_KPIS)
+    with pytest.raises(
+        ContractError,
+        match=r"py_daily_kpis\.yml: runtime 0\.13\.0 reads only ODCS contracts named <table>\.odcs\.yaml",
+    ):
         load_contract_dir(tmp_path)
+
+
+@pytest.mark.parametrize("name", ["py_daily_kpis.yml", "nodes.yaml"])
+def test_an_old_file_beside_odcs_contracts_is_refused(demo_contracts, name):
+    (demo_contracts / name).write_text(OLD_KPIS)
+    with pytest.raises(ContractError) as exc:
+        load_contract_dir(demo_contracts)
+    assert str(exc.value) == (
+        f"{demo_contracts / name}: runtime 0.13.0 reads only ODCS contracts named "
+        "<table>.odcs.yaml; convert this file (docs/boundary-contract.md)"
+    )
+
+
+def test_a_dot_odcs_dot_yml_file_is_refused(demo_contracts):
+    kpis = demo_contracts / "py_daily_kpis.odcs.yaml"
+    kpis.rename(demo_contracts / "py_daily_kpis.odcs.yml")
+    with pytest.raises(
+        ContractError,
+        match=r"py_daily_kpis\.odcs\.yml: runtime 0\.13\.0 reads only ODCS contracts named <table>\.odcs\.yaml",
+    ):
+        load_contract_dir(demo_contracts)
+
+
+def test_a_file_that_is_not_yaml_is_not_read(demo_contracts):
+    (demo_contracts / "README.md").write_text("# contracts\n")
+    (demo_contracts / "notes.json").write_text("{}\n")
+    assert len(load_contract_dir(demo_contracts)) == 3
+
+
+def test_two_files_for_one_table_are_refused(demo_contracts):
+    first = demo_contracts / "analytics.py_daily_kpis.odcs.yaml"
+    second = demo_contracts / "py_daily_kpis.odcs.yaml"
+    shutil.copyfile(second, first)
+    with pytest.raises(ContractError) as exc:
+        load_contract_dir(demo_contracts)
+    assert str(exc.value) == f"duplicate node analytics.py_daily_kpis (in {first} and {second})"
+
+
+def test_two_files_for_one_table_are_refused_when_reads_are_not_checked(demo_contracts):
+    shutil.copyfile(
+        demo_contracts / "py_daily_kpis.odcs.yaml", demo_contracts / "analytics.py_daily_kpis.odcs.yaml"
+    )
+    with pytest.raises(ContractError, match="duplicate node analytics.py_daily_kpis"):
+        load_contract_dir(demo_contracts, check_reads=False)
+
+
+def test_a_folder_without_contracts_is_refused(tmp_path):
+    with pytest.raises(ContractError, match=f"no contract files found in {re.escape(str(tmp_path))}"):
+        load_contract_dir(tmp_path)
+
+
+def test_every_library_issue_is_listed(tmp_path):
+    file = write_contract(tmp_path, **{**FIELDS, "criticality": "HIGH", "timeout_minutes": 0})
+    with pytest.raises(ContractError) as exc:
+        load_contract_dir(tmp_path)
+    lines = str(exc.value).splitlines()
+    assert len(lines) == 2
+    assert all(line.startswith(f"{file}: customProperties[") for line in lines)
+    assert "`criticality` is 'HIGH'" in lines[0]
+    assert "`timeoutMinutes` is 0" in lines[1]
+
+
+def test_a_strict_yaml_error_names_the_file_and_line(tmp_path):
+    file = tmp_path / "t.odcs.yaml"
+    file.write_text("apiVersion: v3.2.0\nkind: DataContract\nkind: DataContract\n")
+    with pytest.raises(ContractError) as exc:
+        load_contract_dir(tmp_path)
+    assert str(exc.value) == f"{file}: line 3, column 1: duplicate key 'kind'"
+
+
+@pytest.mark.parametrize(("text", "holds"), [("", "nothing"), ("- a\n- b\n", "a list")])
+def test_a_file_that_holds_no_contract_is_refused(tmp_path, text, holds):
+    file = tmp_path / "t.odcs.yaml"
+    file.write_text(text)
+    with pytest.raises(ContractError) as exc:
+        load_contract_dir(tmp_path)
+    assert str(exc.value) == f"{file}: a contract file holds one ODCS contract, a mapping; this one holds {holds}"
+
+
+def test_a_file_that_is_not_utf8_is_refused(tmp_path):
+    file = tmp_path / "t.odcs.yaml"
+    file.write_bytes(contract_text(**FIELDS).encode("utf-8") + b"# caf\xe9\n")
+    with pytest.raises(ContractError, match=rf"^{re.escape(str(file))}: the file is not UTF-8 text"):
+        load_contract_dir(tmp_path)
+
+
+# --- the node's fields ------------------------------------------------------------
+
+
+def test_a_contract_maps_onto_the_node(tmp_path):
+    write_contract(
+        tmp_path,
+        schema="fx", table="fx_rates", owner="markets", schedule="hourly", criticality="CORE",
+        kind="python-api", script="scripts/fx.py", description="EUR rates",
+        extra_columns="warn", config={"indexes": [{"columns": ["base"], "unique": True}]},
+        secret_ref="continuo-api-fx", mode_type="upsert", primary_key=["rate_date", "base"],
+        timeout_minutes=120, assets=["data/ref.json"],
+        output_columns=[
+            {"name": "rate_date", "type": "DATE", "nullable": False},
+            {"name": "base", "type": "VARCHAR(3)", "nullable": False},
+            {"name": "rate", "type": "decimal(12, 6)"},
+        ],
+    )
+    (node,) = load_contract_dir(tmp_path)
+    assert node.relation == "fx.fx_rates"
+    assert (node.owner, node.description, node.schedule, node.criticality) == (
+        "markets", "EUR rates", "hourly", "CORE",
+    )
+    assert (node.kind, node.script, node.reads, node.secret_ref) == (
+        "python-api", "scripts/fx.py", {}, "continuo-api-fx",
+    )
+    assert node.output_columns == (
+        Column("rate_date", "DATE", nullable=False),
+        Column("base", "VARCHAR(3)", nullable=False),
+        Column("rate", "decimal(12, 6)", nullable=True),
+    )
+    assert node.extra_columns == "warn"
+    assert node.config == {"indexes": [{"columns": ["base"], "unique": True}]}
+    assert (node.mode_type, node.primary_key) == ("upsert", ("rate_date", "base"))
+    assert node.timeout_minutes == 120
+    assert node.assets == ("data/ref.json",)
+
+
+def test_left_out_fields_take_their_defaults():
+    node = _node()
+    assert node.description == ""
+    assert node.kind == "python-node"
+    assert node.extra_columns == "raise"
+    assert node.config == {}
+    assert node.secret_ref == ""
+    assert (node.mode_type, node.primary_key) == ("replace", ())
+    assert node.timeout_minutes is None
+    assert node.assets == ()
+
+
+def test_an_upsert_key_comes_in_the_order_of_its_positions():
+    columns = [
+        {"name": "rate_date", "type": "DATE", "nullable": False},
+        {"name": "base", "type": "VARCHAR(3)", "nullable": False},
+    ]
+    node = _node(output_columns=columns, mode_type="upsert", primary_key=["base", "rate_date"])
+    assert node.primary_key == ("base", "rate_date")
+
+
+def test_the_config_keeps_a_key_no_engine_reads():
+    """The loader stays engine-blind: the engine's adapter owns the config vocabulary."""
+    assert _node(config={"sortkey": ["id"]}).config == {"sortkey": ["id"]}
+
+
+# Spellings in and around the column-type grammar. The library refuses each one
+# its grammar does not hold, and the harness maps each one it accepts to an
+# Arrow type through parse_sql_type, so CI accepts no column type the harness
+# cannot write.
+COLUMN_TYPES = [
+    "BIGINT", "int", "INTEGER", "DOUBLE PRECISION", "double precision", "TEXT", "TIMESTAMP",
+    "date", "BOOLEAN", "NUMERIC(10,2)", "DECIMAL(5, 2)", "numeric(38,38)", "VARCHAR(255)",
+    "CHAR(1)", " INTEGER ", "NUMERIC(012,2)", "INTEGER\n",
+    "NUMERIC(39,0)", "NUMERIC(5,6)", "NUMERIC(0,0)", "VARCHAR(0)", "VARCHAR", "CHAR",
+    "DOUBLE  PRECISION", "REAL", "FLOAT", "SMALLINT", "JSONB", "UUID", "TIMESTAMPTZ",
+    "TIMESTAMP WITH TIME ZONE", "BLOB", "INTEGER;", "ınt",
+]
+
+
+@pytest.mark.parametrize("sql_type", COLUMN_TYPES)
+def test_every_column_type_the_library_accepts_the_harness_parses(sql_type):
+    try:
+        _node(output_columns=[{"name": "c", "type": sql_type}])
+    except ContractError:
+        return
+    parse_sql_type(sql_type)
+
+
+# --- the reads: one SELECT each, under the dialect ----------------------------------
 
 
 @pytest.mark.parametrize(
-    "missing",
-    ["schema", "table", "owner", "schedule", "script", "reads", "output_columns"],
+    "sql",
+    [
+        "WITH c AS (select 1) select * from c",
+        "select id from analytics.a;",
+        "select split_part(tags, ';', 1) as tag from analytics.a",
+        "-- note\nselect id from analytics.a",
+        "/* note */ select id from analytics.a",
+        "(select 1) union all (select 2)",
+        "select 'it''s fine' as tag from analytics.a",
+    ],
 )
-def test_missing_required_field_rejected(missing):
-    raw = {k: v for k, v in VALID.items() if k != missing}
-    with pytest.raises(ContractError, match=missing):
-        parse_node(raw, "f.yml")
-
-
-@pytest.mark.parametrize("field", ["schema", "table", "owner", "schedule", "script"])
-def test_empty_required_string_rejected(field):
-    with pytest.raises(ContractError, match=field):
-        parse_node({**VALID, field: ""}, "f.yml")
-
-
-def test_unknown_key_rejected():
-    with pytest.raises(ContractError, match="unknown"):
-        parse_node({**VALID, "schdule": "daily"}, "f.yml")
-
-
-def test_unknown_key_error_names_source_and_node():
-    try:
-        parse_node({**VALID, "bogus": "x"}, "f.yml")
-        pytest.fail("expected ContractError")
-    except ContractError as exc:
-        assert "f.yml" in str(exc)
-        assert "analytics.t" in str(exc)
-
-
-def _node_entry(**over):
-    entry = dict(VALID)
-    entry.update(over)
-    return entry
-
-
-def _csv_entry(**over):
-    entry = {
-        "schema": "analytics", "table": "orders_csv", "owner": "team",
-        "schedule": "daily", "criticality": "SECONDARY",
-        "kind": "python-csv",
-        "reads": {"csv": "s3://drops/orders.csv"},
-        "output_columns": [{"name": "order_id", "type": "INTEGER", "nullable": False}],
-    }
-    entry.update(over)
-    return entry
-
-
-def test_kind_defaults_to_python_node():
-    node = parse_node(_node_entry(), "f.yml")
-    assert node.kind == "python-node"
-
-
-def test_csv_node_parses():
-    node = parse_node(_csv_entry(), "f.yml", check_reads=False)
-    assert node.kind == "python-csv"
-    assert node.reads == {"csv": "s3://drops/orders.csv"}
-    assert node.script == ""
-
-
-def test_csv_node_with_script_is_a_contract_error():
-    with pytest.raises(ContractError, match="'script' is forbidden"):
-        parse_node(_csv_entry(script="scripts/x.py"), "f.yml")
-
-
-def test_csv_node_reads_must_be_exactly_csv_uri():
-    with pytest.raises(ContractError, match="exactly"):
-        parse_node(_csv_entry(reads={"csv": "s3://b/k", "other": "select 1"}), "f.yml")
-    with pytest.raises(ContractError, match="exactly"):
-        parse_node(_csv_entry(reads={"dwh": "s3://b/k"}), "f.yml")
-
-
-def test_csv_node_bad_uri_is_a_contract_error():
-    with pytest.raises(ContractError, match="csv uri"):
-        parse_node(_csv_entry(reads={"csv": "http://insecure/x.csv"}), "f.yml")
-
-
-def test_unknown_kind_rejected():
-    with pytest.raises(ContractError, match="kind"):
-        parse_node(_csv_entry(kind="python-parquet"), "f.yml")
-
-
-def test_node_still_requires_script():
-    entry = _node_entry()
-    del entry["script"]
-    with pytest.raises(ContractError, match="script"):
-        parse_node(entry, "f.yml")
-
-
-def test_bad_criticality_and_policy_and_type():
-    with pytest.raises(ContractError, match="criticality"):
-        parse_node({**VALID, "criticality": "HIGH"}, "f.yml")
-    with pytest.raises(ContractError, match="extra_columns"):
-        parse_node({**VALID, "extra_columns": "ignore"}, "f.yml")
-    with pytest.raises(ContractError, match="type"):
-        parse_node(
-            {**VALID, "output_columns": [{"name": "x", "type": "JSONB"}]}, "f.yml"
-        )
-
-
-def test_valid_type_grammar_variants():
-    cols = [
-        {"name": "a", "type": "BIGINT"},
-        {"name": "b", "type": "INT"},
-        {"name": "c", "type": "DOUBLE PRECISION"},
-        {"name": "d", "type": "TEXT"},
-        {"name": "e", "type": "TIMESTAMP"},
-        {"name": "f", "type": "DATE"},
-        {"name": "g", "type": "BOOLEAN"},
-        {"name": "h", "type": "DECIMAL(5, 2)"},
-        {"name": "i", "type": "VARCHAR(255)"},
-        {"name": "j", "type": "CHAR(1)"},
-    ]
-    n = parse_node({**VALID, "output_columns": cols}, "f.yml")
-    assert len(n.output_columns) == len(cols)
-
-
-def test_duplicate_column_rejected():
-    cols = [{"name": "id", "type": "INTEGER"}, {"name": "id", "type": "BIGINT"}]
-    with pytest.raises(ContractError, match="duplicate column"):
-        parse_node({**VALID, "output_columns": cols}, "f.yml")
-
-
-def test_empty_output_columns_rejected():
-    with pytest.raises(ContractError, match="output_columns"):
-        parse_node({**VALID, "output_columns": []}, "f.yml")
-
-
-def test_output_column_missing_name_rejected():
-    with pytest.raises(ContractError, match="name"):
-        parse_node({**VALID, "output_columns": [{"type": "INTEGER"}]}, "f.yml")
-
-
-def test_output_column_missing_type_rejected():
-    with pytest.raises(ContractError, match="type"):
-        parse_node({**VALID, "output_columns": [{"name": "x"}]}, "f.yml")
-
-
-def test_output_column_not_mapping_rejected():
-    with pytest.raises(ContractError, match="output_columns"):
-        parse_node({**VALID, "output_columns": ["id"]}, "f.yml")
-
-
-def test_empty_reads_rejected():
-    with pytest.raises(ContractError, match="reads"):
-        parse_node({**VALID, "reads": {}}, "f.yml")
-
-
-def test_reads_empty_sql_rejected():
-    with pytest.raises(ContractError, match="reads"):
-        parse_node({**VALID, "reads": {"ids": ""}}, "f.yml")
-
-
-def test_reads_non_string_sql_rejected():
-    with pytest.raises(ContractError, match="reads"):
-        parse_node({**VALID, "reads": {"ids": 123}}, "f.yml")
-
-
-def test_reads_not_mapping_rejected():
-    with pytest.raises(ContractError, match="reads"):
-        parse_node({**VALID, "reads": ["select 1"]}, "f.yml")
-
-
-def test_reads_non_string_name_rejected():
-    with pytest.raises(ContractError, match="reads"):
-        parse_node({**VALID, "reads": {1: "select 1"}}, "f.yml")
-
-
-def test_reads_blank_name_rejected():
-    with pytest.raises(ContractError, match="reads"):
-        parse_node({**VALID, "reads": {" ": "select 1"}}, "f.yml")
-
-
-def test_reads_disallows_non_select_statement():
-    with pytest.raises(ContractError, match="reads.ids"):
-        parse_node({**VALID, "reads": {"ids": "drop table x; select 1"}}, "f.yml")
-
-
-def test_reads_disallows_delete():
-    with pytest.raises(ContractError, match="reads.ids"):
-        parse_node({**VALID, "reads": {"ids": "delete from t"}}, "f.yml")
-
-
-def test_reads_allows_with_clause():
-    n = parse_node(
-        {**VALID, "reads": {"ids": "WITH c AS (select 1) select * from c"}}, "f.yml"
-    )
-    assert n.reads["ids"] == "WITH c AS (select 1) select * from c"
-
-
-def test_reads_allows_single_trailing_semicolon():
-    n = parse_node({**VALID, "reads": {"ids": "select id from analytics.a;"}}, "f.yml")
-    assert n.reads["ids"] == "select id from analytics.a;"
-
-
-def test_reads_disallows_multiple_semicolons():
-    with pytest.raises(ContractError, match="reads.ids"):
-        parse_node({**VALID, "reads": {"ids": "select 1; select 2;"}}, "f.yml")
-
-
-def test_reads_allows_semicolon_inside_string_literal():
-    """A ';' inside a single-quoted string literal argument must not trip the
-    literal-unaware semicolon scan."""
-    sql = "select split_part(tags, ';', 1) as tag from analytics.a"
-    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
-    assert n.reads["ids"] == sql
-
-
-def test_reads_allows_leading_line_comment():
-    sql = "-- note\nselect id from analytics.a"
-    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
-    assert n.reads["ids"] == sql
-
-
-def test_reads_allows_leading_block_comment():
-    sql = "/* note */ select id from analytics.a"
-    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
-    assert n.reads["ids"] == sql
-
-
-def test_reads_unterminated_block_comment_rejected():
-    """An unterminated /* block comment fails sqlglot's tokenizer (a
-    TokenError, not a ValueError -- ensure_single_read's own docstring
-    guarantee that only ValueError escapes is not quite right for this
-    input), so the loader must still turn it into a clean ContractError
-    naming the read rather than letting the tokenizer error escape raw."""
-    sql = "/* not closed select id from analytics.a"
+def test_a_single_read_query_loads(sql):
+    assert _with_read(sql).reads == {"ids": sql}
+
+
+@pytest.mark.parametrize(
+    "sql",
+    ["drop table x; select 1", "delete from t", "select 1; select 2;", "select 1; select 2"],
+)
+def test_a_read_that_is_not_one_select_is_refused(sql):
+    with pytest.raises(
+        ContractError, match=r"t\.odcs\.yaml \(analytics\.t\): 'reads\.ids' must be a single read query"
+    ):
+        _with_read(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "/* not closed select id from analytics.a",
+        "select 'unterminated from analytics.a; drop table x",
+        'select "unterminated from analytics.a; drop table x',
+    ],
+)
+def test_a_read_the_tokenizer_refuses_is_a_contract_error(sql):
+    """sqlglot's tokenizer raises TokenError, not ValueError, for these."""
     with pytest.raises(ContractError, match=r"reads\.ids.*Error tokenizing"):
-        parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
+        _with_read(sql)
 
 
-def test_reads_allows_leading_parenthesized_select():
-    sql = "(select 1) union all (select 2)"
-    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
-    assert n.reads["ids"] == sql
-
-
-def test_reads_rejects_unterminated_single_quote():
-    """An unterminated single-quoted string literal must not silently let a
-    multi-statement read through -- sqlglot's tokenizer fails on it (a
-    TokenError), which the loader must still turn into a ContractError."""
-    sql = "select 'unterminated from analytics.a; drop table x"
-    with pytest.raises(ContractError, match=r"reads\.ids.*Error tokenizing"):
-        parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
-
-
-def test_reads_rejects_unterminated_double_quote():
-    sql = 'select "unterminated from analytics.a; drop table x'
-    with pytest.raises(ContractError, match=r"reads\.ids.*Error tokenizing"):
-        parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
-
-
-def test_reads_allows_properly_terminated_literal_with_doubled_quote_escape():
-    sql = "select 'it''s fine' as tag from analytics.a"
-    n = parse_node({**VALID, "reads": {"ids": sql}}, "f.yml")
-    assert n.reads["ids"] == sql
-
-
-def test_reads_still_rejects_drop_then_select():
-    with pytest.raises(ContractError, match="reads.ids"):
-        parse_node({**VALID, "reads": {"ids": "drop table x; select 1"}}, "f.yml")
-
-
-def test_reads_still_rejects_two_selects():
-    with pytest.raises(ContractError, match="reads.ids"):
-        parse_node({**VALID, "reads": {"ids": "select 1; select 2"}}, "f.yml")
-
-
-def test_output_column_unknown_key_rejected():
-    cols = [{"name": "id", "type": "INTEGER", "nullabel": True}]
-    with pytest.raises(ContractError, match="nullabel"):
-        parse_node({**VALID, "output_columns": cols}, "f.yml")
-
-
-def test_extra_columns_non_string_rejected():
-    with pytest.raises(ContractError, match="extra_columns"):
-        parse_node({**VALID, "extra_columns": ["raise"]}, "f.yml")
-
-
-def test_load_dir_duplicate_yaml_key_rejected(tmp_path):
-    a = tmp_path / "a.yml"
-    a.write_text(
-        "nodes:\n"
-        "  - schema: analytics\n"
-        "    table: t\n"
-        "    owner: marketing\n"
-        "    schedule: daily\n"
-        "    criticality: SECONDARY\n"
-        "    script: scripts/t.py\n"
-        "    reads:\n"
-        "      ids: select id from analytics.a\n"
-        "      ids: select id from analytics.b\n"
-        "    output_columns:\n"
-        "      - {name: id, type: INTEGER}\n"
-    )
-    with pytest.raises(ContractError, match="duplicate"):
-        load_contract_dir(tmp_path)
-
-
-def test_load_dir_yaml_syntax_error_rejected(tmp_path):
-    a = tmp_path / "a.yml"
-    a.write_text("nodes: [unclosed\n  bad: : :\n")
-    with pytest.raises(ContractError, match="a.yml"):
-        load_contract_dir(tmp_path)
-
-
-def test_load_dir_multi_document_rejected(tmp_path):
-    a = tmp_path / "a.yml"
-    a.write_text("nodes: []\n---\nnodes: []\n")
-    with pytest.raises(ContractError, match="a.yml"):
-        load_contract_dir(tmp_path)
-
-
-def test_load_dir_duplicate_relation_across_files_rejected(tmp_path):
-    a, b = tmp_path / "a.yml", tmp_path / "b.yml"
-    a.write_text(yaml.safe_dump({"nodes": [VALID]}))
-    b.write_text(yaml.safe_dump({"nodes": [VALID]}))
-    with pytest.raises(ContractError, match="duplicate node analytics.t"):
-        load_contract_dir(tmp_path)
-
-
-def test_load_dir_happy_path(tmp_path):
-    a = tmp_path / "a.yml"
-    a.write_text(yaml.safe_dump({"nodes": [VALID]}))
-    nodes = load_contract_dir(tmp_path)
-    assert len(nodes) == 1
-    assert nodes[0].relation == "analytics.t"
-
-
-def test_load_dir_supports_yaml_extension(tmp_path):
-    a = tmp_path / "a.yaml"
-    a.write_text(yaml.safe_dump({"nodes": [VALID]}))
-    nodes = load_contract_dir(tmp_path)
-    assert len(nodes) == 1
-
-
-def test_load_dir_empty_dir_rejected(tmp_path):
-    with pytest.raises(ContractError, match="no contract files"):
-        load_contract_dir(tmp_path)
-
-
-def test_load_dir_no_nodes_rejected(tmp_path):
-    a = tmp_path / "a.yml"
-    a.write_text(yaml.safe_dump({"nodes": []}))
-    with pytest.raises(ContractError, match="no contract files"):
-        load_contract_dir(tmp_path)
-
-
-def test_load_dir_non_mapping_document_rejected(tmp_path):
-    a = tmp_path / "a.yml"
-    a.write_text(yaml.safe_dump(["not", "a", "mapping"]))
-    with pytest.raises(ContractError, match="a.yml"):
-        load_contract_dir(tmp_path)
-
-
-def test_load_dir_missing_nodes_key_rejected(tmp_path):
-    a = tmp_path / "a.yml"
-    a.write_text(yaml.safe_dump({"not_nodes": []}))
-    with pytest.raises(ContractError, match="nodes"):
-        load_contract_dir(tmp_path)
-
-
-def test_load_dir_nodes_not_list_rejected(tmp_path):
-    a = tmp_path / "a.yml"
-    a.write_text(yaml.safe_dump({"nodes": "not-a-list"}))
-    with pytest.raises(ContractError, match="nodes"):
-        load_contract_dir(tmp_path)
-
-
-def test_load_dir_dialect_rejects_what_neutral_default_accepts(tmp_path):
-    """Proves --dialect threads from load_contract_dir through parse_node to
-    ensure_single_read, not just that the parameter exists: QUALIFY parses
-    under sqlglot's dialect-neutral default but not under its trino dialect
-    (verified against sqlglot 30.15.0, pinned transitively via
-    continuo-engine-contract 0.7.0's own dependency)."""
+def test_the_dialect_decides_which_reads_parse(tmp_path):
+    """QUALIFY parses under sqlglot's dialect-neutral grammar and not under trino's."""
     sql = "select a from analytics.a qualify row_number() over (order by a) = 1"
-    node = {**VALID, "reads": {"ids": sql}}
-    a = tmp_path / "a.yml"
-    a.write_text(yaml.safe_dump({"nodes": [node]}))
-
-    load_contract_dir(tmp_path)  # neutral default: accepted
-
+    write_contract(tmp_path, **{**FIELDS, "reads": {"ids": sql}})
+    load_contract_dir(tmp_path)
     with pytest.raises(ContractError, match="reads.ids"):
         load_contract_dir(tmp_path, dialect="trino")
 
 
-def test_load_dir_invalid_dialect_names_the_flag_not_the_read(tmp_path):
-    """A typo'd --dialect value (e.g. the uppercased 'POSTGRES' instead of
-    'postgres') must be reported as a bad flag, not confused with a rejected
-    read: sqlglot.Dialect.get_or_raise raises a plain ValueError
-    ("Unknown dialect 'POSTGRES'.") that is otherwise indistinguishable, at
-    the per-read ensure_single_read catch site, from a read that genuinely
-    fails to parse -- so dialect must be validated once, up front, before any
-    read is even looked at. A perfectly valid read must not be blamed."""
-    a = tmp_path / "a.yml"
-    a.write_text(yaml.safe_dump({"nodes": [VALID]}))
-
-    try:
+def test_an_unknown_dialect_names_the_flag_not_the_read(tmp_path):
+    write_contract(tmp_path, **FIELDS)
+    with pytest.raises(ContractError) as exc:
         load_contract_dir(tmp_path, dialect="POSTGRES")
-        pytest.fail("expected ContractError")
-    except ContractError as exc:
-        message = str(exc)
-        assert "--dialect" in message
-        assert "POSTGRES" in message
-        # must not be mistaken for a read rejection
-        assert "reads.ids" not in message
-        assert "must be a single read query" not in message
+    message = str(exc.value)
+    assert "--dialect" in message and "POSTGRES" in message
+    assert "reads.ids" not in message
 
 
-def test_parse_node_dialect_reaches_ensure_single_read(monkeypatch):
-    """A monkeypatched spy on ensure_single_read, guarding the wiring itself
-    independent of any one dialect's grammar (see the QUALIFY test above for
-    a real acceptance/rejection proof)."""
-    calls = []
-
-    def fake_ensure_single_read(sql, dialect=None):
-        calls.append((sql, dialect))
-
-    monkeypatch.setattr(
-        "continuo_python_runtime.contract.kinds.ensure_single_read",
-        fake_ensure_single_read,
-    )
-    parse_node(VALID, "f.yml", dialect="postgres")
-    assert calls == [(VALID["reads"]["ids"], "postgres")]
-
-
-def test_parse_node_dialect_defaults_to_none(monkeypatch):
-    calls = []
-
-    def fake_ensure_single_read(sql, dialect=None):
-        calls.append(dialect)
-
-    monkeypatch.setattr(
-        "continuo_python_runtime.contract.kinds.ensure_single_read",
-        fake_ensure_single_read,
-    )
-    parse_node(VALID, "f.yml")
-    assert calls == [None]
-
-
-# --- check_reads=False: the runtime's opt-out from the read-shape gate ---
-
-
-def test_check_reads_false_skips_ensure_single_read(monkeypatch):
-    """The one call the runtime opts out of; nothing else in parse_node moves."""
-    calls = []
-
-    def fake_ensure_single_read(sql, dialect=None):
-        calls.append((sql, dialect))
-
-    monkeypatch.setattr(
-        "continuo_python_runtime.contract.kinds.ensure_single_read",
-        fake_ensure_single_read,
-    )
-    node = parse_node(VALID, "f.yml", check_reads=False)
-    assert calls == []
-    assert node.relation == "analytics.t"
-    assert node.reads == VALID["reads"]
-
-
-def test_check_reads_false_accepts_a_read_the_neutral_parser_rejects():
-    """Ordinary postgres (`~`) that sqlglot's dialect-neutral grammar rejects."""
-    unparseable_neutrally = {**VALID, "reads": {"ids": "select id from a where b ~ 'x'"}}
-    with pytest.raises(ContractError):
-        parse_node(unparseable_neutrally, "f.yml")
-    assert parse_node(unparseable_neutrally, "f.yml", check_reads=False).relation
-
-
-def test_check_reads_false_still_enforces_the_reads_map_shape():
-    with pytest.raises(ContractError, match="non-empty mapping"):
-        parse_node({**VALID, "reads": {}}, "f.yml", check_reads=False)
-    with pytest.raises(ContractError, match="non-empty SQL string"):
-        parse_node({**VALID, "reads": {"ids": ""}}, "f.yml", check_reads=False)
-    with pytest.raises(ContractError, match="non-empty string"):
-        parse_node({**VALID, "reads": {"": "select 1"}}, "f.yml", check_reads=False)
-
-
-def test_check_reads_false_still_enforces_every_other_node_rule():
-    for bad, match in [
-        ({**VALID, "criticality": "WHENEVER"}, "criticality"),
-        ({**VALID, "output_columns": []}, "output_columns"),
-        ({**VALID, "output_columns": [{"name": "id", "type": "BLOB"}]}, "unsupported"),
-        ({**VALID, "config": ["not", "a", "mapping"]}, "must be a mapping"),
-        ({**VALID, "extra_columns": "shrug"}, "extra_columns"),
-        ({**VALID, "nope": 1}, "unknown key"),
-    ]:
-        with pytest.raises(ContractError, match=match):
-            parse_node(bad, "f.yml", check_reads=False)
-
-
-def test_load_contract_dir_check_reads_false_still_rejects_duplicate_relations(tmp_path):
-    for name in ("a.yml", "b.yml"):
-        (tmp_path / name).write_text(yaml.safe_dump({"nodes": [VALID]}))
-    with pytest.raises(ContractError, match="duplicate node"):
-        load_contract_dir(tmp_path, check_reads=False)
-
-
-def test_load_contract_dir_check_reads_false_still_validates_dialect(tmp_path):
-    """A bad --dialect is still a bad flag even when reads are not parsed."""
-    (tmp_path / "a.yml").write_text(yaml.safe_dump({"nodes": [VALID]}))
+def test_an_unknown_dialect_is_refused_when_reads_are_not_checked(tmp_path):
+    write_contract(tmp_path, **FIELDS)
     with pytest.raises(ContractError, match="unknown --dialect"):
         load_contract_dir(tmp_path, dialect="POSTGRESQL-9", check_reads=False)
 
 
-# --- cyclic `config` containers (P2-7) ---
-#
-# PyYAML's safe loader constructs genuinely recursive Python objects from
-# anchors/aliases (`&c` / `*c`), so `_validate_config`'s recursive `_check`
-# can be handed a container that contains itself. Without cycle detection
-# that recurses until RecursionError, an uncaught traceback instead of the
-# ContractError every other malformed `config` produces.
-
-
-def test_load_dir_config_yaml_anchor_cycle_raises_contract_error_not_recursion_error(tmp_path):
-    """A self-referential `config` (an anchored mapping whose own `indexes`
-    list aliases it) must raise ContractError naming the circular reference,
-    not propagate PyYAML's cyclic object as an uncaught RecursionError."""
-    a = tmp_path / "a.yml"
-    a.write_text(
-        "nodes:\n"
-        "  - schema: analytics\n"
-        "    table: t\n"
-        "    owner: marketing\n"
-        "    schedule: daily\n"
-        "    criticality: SECONDARY\n"
-        "    script: scripts/t.py\n"
-        "    reads:\n"
-        "      ids: select id from analytics.a\n"
-        "    output_columns:\n"
-        "      - {name: id, type: INTEGER}\n"
-        "    config: &cfg\n"
-        "      indexes:\n"
-        "        - *cfg\n"
-    )
-    with pytest.raises(ContractError, match="circular"):
-        load_contract_dir(a.parent)
-
-
-def test_load_dir_config_yaml_anchor_dag_not_a_cycle_still_validates(tmp_path):
-    """The same sub-mapping aliased twice at sibling positions is a legal
-    DAG, not a cycle -- it must not be misreported as a circular reference."""
-    a = tmp_path / "a.yml"
-    a.write_text(
-        "nodes:\n"
-        "  - schema: analytics\n"
-        "    table: t\n"
-        "    owner: marketing\n"
-        "    schedule: daily\n"
-        "    criticality: SECONDARY\n"
-        "    script: scripts/t.py\n"
-        "    reads:\n"
-        "      ids: select id from analytics.a\n"
-        "    output_columns:\n"
-        "      - {name: id, type: INTEGER}\n"
-        "    config:\n"
-        "      a:\n"
-        "        - &shared {columns: [id]}\n"
-        "      b:\n"
-        "        - *shared\n"
-    )
-    nodes = load_contract_dir(a.parent)
-    assert nodes[0].config == {"a": [{"columns": ["id"]}], "b": [{"columns": ["id"]}]}
-
-
-def test_load_contract_dir_threads_check_reads_to_parse_node(monkeypatch, tmp_path):
+def _spy_on_ensure_single_read(monkeypatch):
     calls = []
     monkeypatch.setattr(
         "continuo_python_runtime.contract.kinds.ensure_single_read",
-        lambda sql, dialect=None: calls.append(sql),
+        lambda sql, dialect=None: calls.append((sql, dialect)),
     )
-    (tmp_path / "a.yml").write_text(yaml.safe_dump({"nodes": [VALID]}))
-    load_contract_dir(tmp_path, check_reads=False)
-    assert calls == []
+    return calls
+
+
+def test_the_dialect_reaches_the_read_check(monkeypatch, tmp_path):
+    calls = _spy_on_ensure_single_read(monkeypatch)
+    write_contract(tmp_path, **FIELDS)
+    load_contract_dir(tmp_path, dialect="postgres")
     load_contract_dir(tmp_path)
-    assert calls == [VALID["reads"]["ids"]]
+    assert calls == [(FIELDS["reads"]["ids"], "postgres"), (FIELDS["reads"]["ids"], None)]
 
 
-def _api_entry(**overrides):
-    entry = {
-        "schema": "analytics", "table": "fx", "owner": "m", "schedule": "daily",
-        "criticality": "SECONDARY", "kind": "python-api", "script": "scripts/fx.py",
-        "output_columns": [{"name": "rate", "type": "DOUBLE PRECISION"}],
-    }
-    entry.update(overrides)
-    return entry
+def test_check_reads_false_skips_only_the_read_check(monkeypatch, tmp_path):
+    calls = _spy_on_ensure_single_read(monkeypatch)
+    write_contract(tmp_path, **FIELDS)
+    (node,) = load_contract_dir(tmp_path, check_reads=False)
+    assert calls == []
+    assert node.reads == FIELDS["reads"]
 
 
-def test_python_api_without_reads_loads_with_empty_reads():
-    node = parse_node(_api_entry(), "c.yml")
-    assert node.kind == "python-api"
-    assert node.reads == {}
-    assert node.secret_ref == ""
+def test_check_reads_false_accepts_a_read_the_neutral_parser_refuses():
+    """Ordinary postgres (`~`) that sqlglot's dialect-neutral grammar refuses."""
+    sql = "select id from analytics.a where b ~ 'x'"
+    with pytest.raises(ContractError):
+        _with_read(sql)
+    assert _with_read(sql, check_reads=False).reads == {"ids": sql}
 
 
-def test_python_api_with_secret_ref_keeps_it():
-    node = parse_node(_api_entry(secret_ref="continuo-api-fx"), "c.yml")
-    assert node.secret_ref == "continuo-api-fx"
-
-
-def test_python_api_with_reads_is_rejected():
-    with pytest.raises(ContractError, match="declares no 'reads'"):
-        parse_node(_api_entry(reads={"x": "select 1"}), "c.yml")
-
-
-def test_python_api_still_requires_a_script():
-    entry = _api_entry()
-    del entry["script"]
-    with pytest.raises(ContractError, match="required field 'script'"):
-        parse_node(entry, "c.yml")
-
-
-def test_secret_ref_on_python_node_is_rejected():
-    entry = _api_entry(kind="python-node", reads={"x": "select 1"}, secret_ref="continuo-api-fx")
-    with pytest.raises(ContractError, match="'secret_ref' is not allowed for kind python-node"):
-        parse_node(entry, "c.yml")
-
-
-def test_bad_secret_ref_is_rejected_naming_the_node():
-    with pytest.raises(ContractError, match=r"c\.yml \(analytics\.fx\): 'secret_ref'"):
-        parse_node(_api_entry(secret_ref="continuo-app-credentials"), "c.yml")
-
-
-# --- write modes: mode_type and primary_key ----------------------------------
-
-
-def _upsert_entry(**over):
-    entry = {
-        "schema": "fx", "table": "fx_rates", "owner": "m", "schedule": "hourly",
-        "criticality": "SECONDARY", "kind": "python-api", "script": "scripts/fx.py",
-        "mode_type": "upsert", "primary_key": ["rate_date", "base"],
-        "output_columns": [
-            {"name": "rate_date", "type": "DATE", "nullable": False},
-            {"name": "base", "type": "VARCHAR(3)", "nullable": False},
-            {"name": "rate", "type": "DECIMAL(12,6)"},
-        ],
-    }
-    entry.update(over)
-    return entry
-
-
-def test_mode_type_defaults_to_replace():
-    node = parse_node(_node_entry(), "f.yml")
-    assert node.mode_type == "replace"
-    assert node.primary_key == ()
-
-
-@pytest.mark.parametrize("mode", ["append", "replace"])
-def test_python_node_accepts_append_and_explicit_replace(mode):
-    node = parse_node(_node_entry(mode_type=mode), "f.yml")
-    assert node.mode_type == mode
-    assert node.primary_key == ()
-
-
-def test_python_node_accepts_upsert_with_a_key():
-    node = parse_node(_node_entry(mode_type="upsert", primary_key=["id"]), "f.yml")
-    assert node.mode_type == "upsert"
-    assert node.primary_key == ("id",)
-
-
-def test_upsert_node_keeps_its_key_in_authored_order():
-    node = parse_node(_upsert_entry(primary_key=["base", "rate_date"]), "c.yml")
-    assert node.mode_type == "upsert"
-    assert node.primary_key == ("base", "rate_date")
-
-
-@pytest.mark.parametrize("mode", ["APPEND", "merge", "", None, 1, ["append"]])
-def test_unknown_mode_type_is_rejected(mode):
-    with pytest.raises(
-        ContractError,
-        match=r"c\.yml \(fx\.fx_rates\): 'mode_type' must be one of \['append', 'replace', 'upsert'\]",
-    ):
-        parse_node(_upsert_entry(mode_type=mode), "c.yml")
-
-
-@pytest.mark.parametrize("mode", ["append", "upsert"])
-def test_python_csv_only_allows_replace(mode):
-    entry = _csv_entry(mode_type=mode)
-    if mode == "upsert":
-        entry["primary_key"] = ["order_id"]
-    with pytest.raises(ContractError, match=f"'mode_type' '{mode}' is not allowed for kind 'python-csv'"):
-        parse_node(entry, "f.yml", check_reads=False)
-
-
-def test_python_csv_accepts_explicit_replace():
-    node = parse_node(_csv_entry(mode_type="replace"), "f.yml", check_reads=False)
-    assert node.mode_type == "replace"
-
-
-def test_upsert_without_primary_key_is_rejected():
-    entry = _upsert_entry()
-    del entry["primary_key"]
-    with pytest.raises(ContractError, match="'primary_key' is required when mode_type is upsert"):
-        parse_node(entry, "c.yml")
-
-
-@pytest.mark.parametrize("mode", ["append", "replace"])
-def test_primary_key_without_upsert_is_rejected(mode):
-    with pytest.raises(
-        ContractError, match=rf"'primary_key' is only allowed when mode_type is upsert \(got {mode}\)"
-    ):
-        parse_node(_upsert_entry(mode_type=mode), "c.yml")
-
-
-def test_primary_key_on_the_default_mode_is_rejected():
-    entry = _upsert_entry()
-    del entry["mode_type"]
-    with pytest.raises(
-        ContractError, match=r"'primary_key' is only allowed when mode_type is upsert \(got replace\)"
-    ):
-        parse_node(entry, "c.yml")
-
-
-@pytest.mark.parametrize("key", [[], "rate_date", {"rate_date": 1}, None])
-def test_primary_key_must_be_a_non_empty_list(key):
-    with pytest.raises(
-        ContractError, match="'primary_key' must be a non-empty list of output column names"
-    ):
-        parse_node(_upsert_entry(primary_key=key), "c.yml")
-
-
-@pytest.mark.parametrize("name", ["", "  ", 3, None])
-def test_primary_key_entries_must_be_non_empty_strings(name):
-    with pytest.raises(ContractError, match="'primary_key' entry .* must be a non-empty string"):
-        parse_node(_upsert_entry(primary_key=["rate_date", name]), "c.yml")
-
-
-def test_primary_key_names_must_be_unique_case_insensitively():
-    with pytest.raises(ContractError, match="'primary_key' names 'RATE_DATE' more than once"):
-        parse_node(_upsert_entry(primary_key=["rate_date", "RATE_DATE"]), "c.yml")
-
-
-def test_primary_key_column_must_be_declared():
-    with pytest.raises(
-        ContractError,
-        match=r"c\.yml \(fx\.fx_rates\): 'primary_key' column 'quote' is not in output_columns",
-    ):
-        parse_node(_upsert_entry(primary_key=["rate_date", "quote"]), "c.yml")
-
-
-def test_primary_key_column_must_be_not_null():
-    with pytest.raises(
-        ContractError, match="'primary_key' column 'rate' must be declared nullable: false"
-    ):
-        parse_node(_upsert_entry(primary_key=["rate_date", "rate"]), "c.yml")
-
-
-def test_primary_key_column_cannot_be_floating_point():
-    """ensure_unique_key rejects float keys at write time; refuse them at validation."""
-    entry = _upsert_entry(primary_key=["rate_date", "score"])
-    entry["output_columns"].append({"name": "score", "type": "DOUBLE PRECISION", "nullable": False})
-    with pytest.raises(
-        ContractError, match="'primary_key' column 'score' is floating-point"
-    ):
-        parse_node(entry, "c.yml")
-
-
-def test_primary_key_names_must_match_output_columns_exactly():
-    """Review Focus 2: postgres quotes identifiers, so Rate_Date is not rate_date."""
-    with pytest.raises(
-        ContractError,
-        match=r"c\.yml \(fx\.fx_rates\): 'primary_key' column 'Rate_Date' is not in output_columns",
-    ):
-        parse_node(_upsert_entry(primary_key=["Rate_Date", "base"]), "c.yml")
-
-
-def test_primary_key_names_a_column_that_differs_only_in_case_from_another():
-    """With output columns base and Base, the key names exactly one of them."""
-    entry = _upsert_entry(primary_key=["rate_date", "Base"])
-    entry["output_columns"].append({"name": "Base", "type": "VARCHAR(3)", "nullable": False})
-    node = parse_node(entry, "c.yml")
-    assert node.primary_key == ("rate_date", "Base")
-
-
-# --- timeout_minutes ------------------------------------------------------------
-
-
-def test_timeout_minutes_is_read():
-    assert parse_node({**VALID, "timeout_minutes": 120}, "f.yml").timeout_minutes == 120
-    assert parse_node({**VALID, "timeout_minutes": 1}, "f.yml").timeout_minutes == 1
-    assert parse_node({**VALID, "timeout_minutes": 10080}, "f.yml").timeout_minutes == 10080
-
-
-def test_timeout_minutes_defaults_to_none():
-    assert parse_node(VALID, "f.yml").timeout_minutes is None
-
-
-@pytest.mark.parametrize("bad", [0, 10081, "2h", 1.5, True])
-def test_a_bad_timeout_minutes_is_refused(bad):
-    with pytest.raises(ContractError, match=r"f\.yml \(analytics\.t\): 'timeout_minutes'"):
-        parse_node({**VALID, "timeout_minutes": bad}, "f.yml")
-
-
-CSV = {
-    "schema": "analytics", "table": "c", "owner": "o", "schedule": "daily", "criticality": "SECONDARY",
-    "kind": "python-csv", "reads": {"csv": "s3://bucket/key.csv"},
-    "output_columns": [{"name": "id", "type": "INTEGER"}],
-}
-
-
-def test_assets_are_normalised_repo_relative_paths():
-    node = parse_node({**VALID, "assets": ["./data//ref.json", "lib/model.bin"]}, "f.yml")
-    assert node.assets == ("data/ref.json", "lib/model.bin")
-
-
-def test_an_empty_assets_list_is_no_assets():
-    assert parse_node({**VALID, "assets": []}, "f.yml").assets == ()
-
-
-@pytest.mark.parametrize(("bad", "match"), [
-    ("data/ref.json", "must be a list"),
-    ([""], "non-empty string"),
-    ([3], "non-empty string"),
-    (["/etc/passwd"], "relative to the repository root"),
-    (["C:/data/ref.json"], "relative to the repository root"),
-    (["../secrets.json"], r"must not contain '\.\.'"),
-    (["data/../../x"], r"must not contain '\.\.'"),
-    (["data\\ref.json"], "forward slashes"),
-    (["."], "must name a file"),
-    (["data/ref.json", "./data/ref.json"], "more than once"),
-])
-def test_bad_assets_are_refused(bad, match):
-    with pytest.raises(ContractError, match=match):
-        parse_node({**VALID, "assets": bad}, "f.yml")
-
-
-def test_assets_are_refused_on_a_csv_node():
-    with pytest.raises(ContractError, match="'assets' is not allowed for kind python-csv"):
-        parse_node({**CSV, "assets": ["data/ref.json"]}, "f.yml")
-
-
-def test_an_empty_assets_list_is_refused_on_a_csv_node_too():
-    with pytest.raises(ContractError, match="'assets' is not allowed for kind python-csv"):
-        parse_node({**CSV, "assets": []}, "f.yml")
-
-
-def test_assets_are_accepted_on_a_python_api_node():
-    api = {**VALID, "kind": "python-api", "assets": ["data/ref.json"]}
-    del api["reads"]
-    assert parse_node(api, "f.yml").assets == ("data/ref.json",)
+def test_check_reads_false_still_applies_every_contract_rule(tmp_path):
+    file = write_contract(tmp_path, **{**FIELDS, "criticality": "WHENEVER"})
+    with pytest.raises(ContractError, match=rf"{re.escape(str(file))}: .*`criticality` is 'WHENEVER'"):
+        load_contract_dir(tmp_path, check_reads=False)

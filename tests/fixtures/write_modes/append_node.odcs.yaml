@@ -1,0 +1,20 @@
+# A python-api node that appends its rows to a table that keeps those of earlier runs.
+apiVersion: v3.2.0
+kind: DataContract
+id: fixture.append_node
+name: append_node
+version: "0"
+team:
+  name: data-team
+customProperties:
+  - {vendor: continuo, property: kind, value: python-api}
+  - {vendor: continuo, property: schedule, value: hourly}
+  - {vendor: continuo, property: criticality, value: SECONDARY}
+  - {vendor: continuo, property: script, value: scripts/append_node.py}
+  - {vendor: continuo, property: modeType, value: append}
+schema:
+  - name: append_node
+    physicalType: table
+    properties:
+      - {name: collected_at, physicalType: TIMESTAMP, required: true}
+      - {name: rate, physicalType: "DECIMAL(12,6)"}

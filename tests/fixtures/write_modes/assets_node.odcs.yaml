@@ -1,0 +1,25 @@
+# A python-node that ships a data file, which its content hash covers.
+apiVersion: v3.2.0
+kind: DataContract
+id: fixture.assets_node
+name: assets_node
+version: "0"
+team:
+  name: data-team
+customProperties:
+  - {vendor: continuo, property: kind, value: python-node}
+  - {vendor: continuo, property: schedule, value: hourly}
+  - {vendor: continuo, property: criticality, value: SECONDARY}
+  - {vendor: continuo, property: script, value: scripts/assets_node.py}
+  - vendor: continuo
+    property: readQueries
+    value:
+      src: SELECT id FROM fixture.src
+  - vendor: continuo
+    property: assets
+    value: [data/ref.json]
+schema:
+  - name: assets_node
+    physicalType: table
+    properties:
+      - {name: id, physicalType: BIGINT, required: true}

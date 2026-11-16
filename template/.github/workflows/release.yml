@@ -86,14 +86,16 @@ jobs:
             *) fail_with_response "reading $CONTINUO_ORIGIN/api/v1/current-prod" "$status" ;;
           esac
       - uses: actions/checkout@v4
-      # CI must hash with the runtime the image runs: the harness recomputes
-      # content_hash at start with its own runtime and fails the node on any
-      # difference. The version is the first runtime line's tag in the
+      # CI must pack with the runtime the image runs: `pack` computes each
+      # node's source and shared-code hashes, and the harness recomputes the
+      # node's content_hash at start with the image's runtime and fails the node
+      # on any difference. The version is the first runtime line's tag in the
       # Dockerfile's FROM. A repository that builds with Dockerfile.pip replaces
       # this step with one that reads the continuo-python-runtime==X.Y.Z pin of
       # its requirements.lock and writes RUNTIME_VERSION the same way (the
       # README's Shape 2 section has it).
-      # The image needs runtime 0.12.0 or later, the first to carry that check.
+      # The image needs runtime 0.13.0 or later, the first with `pack` and the
+      # `packages` command that `pack` runs in the image.
       - name: Pin the runtime to the image
         run: |
           version="$(sed -nE 's#^FROM[[:space:]]+ghcr\.io/carolsimone/continuo-python-runtime-[a-z0-9]+:v([0-9]+\.[0-9]+\.[0-9]+)(@sha256:[0-9a-f]+)?[[:space:]]*$#\1#p' Dockerfile | head -n 1)"
@@ -117,14 +119,15 @@ jobs:
             exit 1
           fi
       # Fast feedback only: this only looks at scripts/. `continuo-runtime
-      # merge` (below) independently lints the script plus its whole
-      # in-repo import closure, so helpers outside scripts/ (e.g. lib/) are
+      # pack` (below) lints each node's script and its whole in-repo import
+      # closure on its own, so helpers outside scripts/ (e.g. lib/) are
       # covered even though this step never looks at them.
       - name: Lint scripts (no hand-written SQL)
         run: continuo-runtime lint scripts/
-      # To check reads against the SQL dialect Continuo's install will actually
-      # use (not just sqlglot's dialect-neutral parser), add --dialect <name>:
-      # continuo-runtime validate contracts/ --dialect postgres
+      # Checks every ODCS contract in contracts/ and parses each read query.
+      # To parse the queries in the SQL dialect of your continuo install's
+      # warehouse (not only sqlglot's dialect-neutral grammar), add
+      # --dialect <name>: continuo-runtime validate contracts/ --dialect postgres
       - name: Validate contracts
         run: continuo-runtime validate contracts/
       - name: Domain tests
@@ -132,9 +135,6 @@ jobs:
           if [ -d tests ]; then uv run --with pytest pytest -v; fi
       - name: Compute release id
         run: echo "RELEASE_ID=${{ github.run_number }}-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
-      # As above, add --dialect <name> to check reads against your warehouse's dialect.
-      - name: Merge contracts
-        run: continuo-runtime merge contracts/ --service "$SERVICE" --repo-root . --out contract.yaml
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
         with:
@@ -147,8 +147,17 @@ jobs:
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
           echo "IMAGE_TAG=$IMAGE" >> "$GITHUB_ENV"
-      - name: Upload contract artifact
-        run: aws s3 cp contract.yaml "s3://${{ vars.BUCKET }}/${SERVICE}/${RELEASE_ID}/contract.yaml"
+      # Writes odcs-bundle.json: every contract's text, the two hash parts only
+      # CI can compute (from each node's script, import closure and assets),
+      # and the package list of the pushed image, which `pack` reads by running
+      # `continuo-runtime packages` in it, so this step runs after the build and
+      # push. It also checks each contract against $SERVICE and lints each
+      # node's script and import closure. As above, add --dialect <name> to
+      # parse the read queries in your warehouse's dialect.
+      - name: Pack contracts
+        run: continuo-runtime pack contracts/ --service "$SERVICE" --repo-root . --image "$IMAGE_TAG" --out odcs-bundle.json
+      - name: Upload contract bundle
+        run: aws s3 cp odcs-bundle.json "s3://${{ vars.BUCKET }}/${SERVICE}/${RELEASE_ID}/odcs-bundle.json"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -170,7 +179,7 @@ jobs:
             --arg release_id "$RELEASE_ID" \
             --arg service "$SERVICE" \
             --arg image_tag "$IMAGE_TAG" \
-            '{release_id: $release_id, service: $service, image_tag: $image_tag, kind: "python"}')"
+            '{release_id: $release_id, service: $service, image_tag: $image_tag, kind: "python-odcs"}')"
 
           # A submit is idempotent on release_id, so transient failures are retried.
           for attempt in 1 2 3; do

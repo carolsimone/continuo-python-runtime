@@ -19,7 +19,6 @@ from importlib.metadata import entry_points
 
 import pyarrow as pa
 import pytest
-import yaml
 
 import trino
 
@@ -395,33 +394,36 @@ _FX_SCRIPT = (
 )
 
 
-def _fx_run_env(repo, schema, run, rows, **mode):
-    """A python-api fx node returning *rows*, with a script file unique to *run*.
+@pytest.fixture()
+def fx_run_env(write_contract):
+    """Build the env of a python-api fx node returning *rows*, with a script file unique to *run*.
 
     One file per run: rewriting the same file within a second at the same size
     would let Python reuse its cached bytecode and return the previous rows.
     """
-    (repo / "contracts").mkdir(exist_ok=True)
-    (repo / "scripts").mkdir(exist_ok=True)
-    script = f"scripts/fx_{run}.py"
-    (repo / script).write_text(_FX_SCRIPT.format(rows=rows))
-    node = {
-        "schema": schema, "table": "fx_rates", "owner": "m", "schedule": "hourly",
-        "criticality": "SECONDARY", "kind": "python-api", "script": script,
-        "output_columns": _FX_COLUMNS, **mode,
-    }
-    (repo / "contracts" / "fx.yml").write_text(yaml.safe_dump({"nodes": [node]}))
-    return {
-        "NODE_ID": f"python-api.svc.{schema}.fx_rates", "TABLE_NAME": "fx_rates",
-        "TARGET_SCHEMA": schema, "CONTRACT_DIR": str(repo / "contracts"), "APP_ROOT": str(repo),
-    }
+    def build(repo, schema, run, rows, **mode):
+        (repo / "scripts").mkdir(exist_ok=True)
+        script = f"scripts/fx_{run}.py"
+        (repo / script).write_text(_FX_SCRIPT.format(rows=rows))
+        write_contract(
+            repo / "contracts",
+            schema=schema, table="fx_rates", owner="m", schedule="hourly",
+            criticality="SECONDARY", kind="python-api", script=script,
+            output_columns=_FX_COLUMNS, **mode,
+        )
+        return {
+            "NODE_ID": f"python-api.svc.{schema}.fx_rates", "TABLE_NAME": "fx_rates",
+            "TARGET_SCHEMA": schema, "CONTRACT_DIR": str(repo / "contracts"), "APP_ROOT": str(repo),
+        }
+
+    return build
 
 
 @pytest.mark.integration
-def test_run_node_append_keeps_the_rows_of_earlier_runs(clean_schema, tmp_path):
-    env = _fx_run_env(tmp_path, clean_schema, "run1", [("2026-10-08", "EUR", "1.081200")], mode_type="append")
+def test_run_node_append_keeps_the_rows_of_earlier_runs(clean_schema, tmp_path, fx_run_env):
+    env = fx_run_env(tmp_path, clean_schema, "run1", [("2026-10-08", "EUR", "1.081200")], mode_type="append")
     assert run_node(env, adapter=_adapter()) == 0
-    env = _fx_run_env(
+    env = fx_run_env(
         tmp_path, clean_schema, "run2",
         [("2026-10-08", "EUR", "1.081200"), ("2026-10-09", "EUR", "1.090000")],
         mode_type="append",
@@ -431,14 +433,14 @@ def test_run_node_append_keeps_the_rows_of_earlier_runs(clean_schema, tmp_path):
 
 
 @pytest.mark.integration
-def test_run_node_upsert_overwrites_by_key(clean_schema, tmp_path):
+def test_run_node_upsert_overwrites_by_key(clean_schema, tmp_path, fx_run_env):
     key = {"mode_type": "upsert", "primary_key": ["rate_date", "base"]}
-    env = _fx_run_env(
+    env = fx_run_env(
         tmp_path, clean_schema, "run1",
         [("2026-10-08", "EUR", "1.081200"), ("2026-10-08", "GBP", "0.861000")], **key,
     )
     assert run_node(env, adapter=_adapter()) == 0
-    env = _fx_run_env(
+    env = fx_run_env(
         tmp_path, clean_schema, "run2",
         [("2026-10-08", "EUR", "1.090000"), ("2026-10-09", "EUR", "1.100000")], **key,
     )

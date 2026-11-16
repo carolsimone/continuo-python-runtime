@@ -1,11 +1,12 @@
-"""Contract v1 model."""
+"""The runtime's view of a node, read from its ODCS contract."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+from continuo_contracts.python import PythonNode
+
 # Module-level constants
-CRITICALITIES = frozenset({"REGULATORY", "CORE", "SECONDARY"})
-EXTRA_COLUMNS_POLICIES = frozenset({"raise", "warn"})
 KINDS = frozenset({"python-node", "python-csv", "python-api"})
 DEFAULT_KIND = "python-node"
 # How the harness writes a node's table on each run: replace empties it first,
@@ -13,7 +14,6 @@ DEFAULT_KIND = "python-node"
 # primary_key exists and keeps the rest.
 MODE_TYPES = frozenset({"append", "upsert", "replace"})
 DEFAULT_MODE_TYPE = "replace"
-CONTRACT_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,12 @@ class Column:
 
 @dataclass(frozen=True)
 class Node:
-    """A node (task/process) definition."""
+    """A node: the table it fills, how it fills it and the contract it is read from.
+
+    ``python`` is the ``PythonNode`` continuo-contracts reads from the same
+    contract, and ``path`` is the contract file. ``primary_key`` is the key the
+    harness upserts on, empty unless ``mode_type`` is upsert.
+    """
 
     schema: str
     table: str
@@ -37,10 +42,11 @@ class Node:
     script: str
     reads: dict[str, str]
     output_columns: tuple[Column, ...]
+    python: PythonNode
+    path: Path
     description: str = ""
     extra_columns: str = "raise"
     config: dict[str, Any] = field(default_factory=dict)
-    content_hash: str | None = None
     kind: str = DEFAULT_KIND
     secret_ref: str = ""
     mode_type: str = DEFAULT_MODE_TYPE

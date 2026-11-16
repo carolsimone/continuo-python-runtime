@@ -6,30 +6,60 @@ import shutil
 import subprocess
 import threading
 import zipfile
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
 import yaml
+from continuo_contracts.vocabulary import continuo_values
 
 from continuo_python_runtime.cli import main
 
 TEMPLATE = Path(__file__).parent.parent / "template"
 
 
-def test_template_passes_lint_validate_merge(tmp_path):
-    """Template must pass lint, validate, and merge as-is."""
+def test_template_passes_lint_and_validate():
+    """The template's scripts pass lint and its contracts pass validate as they are."""
     assert main(["lint", str(TEMPLATE / "scripts")]) == 0
     assert main(["validate", str(TEMPLATE / "contracts")]) == 0
-    out = tmp_path / "contract.yaml"
-    assert main(["merge", str(TEMPLATE / "contracts"), "--service", "example",
-                 "--repo-root", str(TEMPLATE), "--out", str(out)]) == 0
-    assert out.exists()
+
+
+def test_template_packs_a_bundle_of_its_two_nodes(tmp_path):
+    """`pack --image-packages` on the template writes the bundle of its two ODCS contracts.
+
+    The service is the workflow's own SERVICE, so a team that copies the template
+    packs it unchanged.
+    """
+    workflow, _ = _release_job()
+    service = workflow["env"]["SERVICE"]
+    image_packages = {"continuo-python-runtime": "0.13.0", "pyarrow": "26.0.0"}
+    packages_file = tmp_path / "image-packages.json"
+    packages_file.write_text(json.dumps(image_packages), encoding="utf-8")
+    out = tmp_path / "odcs-bundle.json"
+
+    assert main(["pack", str(TEMPLATE / "contracts"), "--service", service,
+                 "--repo-root", str(TEMPLATE), "--image-packages", str(packages_file),
+                 "--out", str(out)]) == 0
+
+    bundle = json.loads(out.read_text(encoding="utf-8"))
+    assert bundle["bundle_version"] == 1
+    assert bundle["service"] == service
+    assert bundle["image_packages"] == image_packages
+    paths = [node["path"] for node in bundle["nodes"]]
+    assert paths == ["contracts/example.odcs.yaml", "contracts/example_csv.odcs.yaml"]
+    for node in bundle["nodes"]:
+        assert node["text"] == (TEMPLATE / node["path"]).read_bytes().decode("utf-8")
+        assert len(node["source_hash"]) == 64
+    script_node, csv_node = bundle["nodes"]
+    assert script_node["source_hash"] == sha256((TEMPLATE / "scripts" / "example.py").read_bytes()).hexdigest()
+    assert csv_node["source_hash"] == sha256(b"s3://your-bucket/drops/example.csv").hexdigest()
+    assert csv_node["shared_code_hash"] == ""
 
 
 def test_template_passes_hash(capsys):
     """Template must also pass the hash subcommand: one tab-separated sha256
-    line per contract node — the sql-node example and the csv-node example."""
+    line per contract node — the python-node example and the csv-node example."""
     assert main(["hash", str(TEMPLATE / "contracts"), "--repo-root", str(TEMPLATE)]) == 0
     out = capsys.readouterr().out
     lines = [line for line in out.splitlines() if line]
@@ -43,18 +73,28 @@ def test_template_passes_hash(capsys):
 
 
 def test_template_demonstrates_multiple_named_reads():
-    """The example must declare more than one read, and use each by name.
+    """The example must declare more than one read query, and use each by name.
 
-    Node authors copy this file verbatim, so a single-entry `reads:` map reads
-    as a limit of the runtime rather than as the minimal case.
+    Node authors copy this file verbatim, so a single entry under `readQueries`
+    reads as a limit of the runtime rather than as the minimal case.
     """
-    doc = yaml.safe_load((TEMPLATE / "contracts" / "example.yml").read_text())
-    reads = doc["nodes"][0]["reads"]
-    assert len(reads) >= 2, "template must show the named-read map with 2+ entries"
+    doc = yaml.safe_load((TEMPLATE / "contracts" / "example.odcs.yaml").read_text())
+    reads = continuo_values(doc["customProperties"])["readQueries"]
+    assert len(reads) >= 2, "template must show the named read queries with 2+ entries"
 
     script = (TEMPLATE / "scripts" / "example.py").read_text()
     for name in reads:
         assert f'ctx.read("{name}")' in script, f"declared read {name!r} unused by the script"
+
+
+@pytest.mark.parametrize("name", [
+    ".github/workflows/release.yml", "README.md", "Dockerfile", "Dockerfile.pip",
+])
+def test_the_template_names_no_merge_and_no_contract_yaml(name):
+    """The template packs ODCS contracts into odcs-bundle.json; nothing in it names the other path."""
+    text = (TEMPLATE / name).read_text(encoding="utf-8")
+    assert "merge" not in text.lower()
+    assert "contract.yaml" not in text
 
 
 def _release_job():
@@ -96,7 +136,7 @@ def test_release_workflow_uses_the_public_release_api():
     # The endpoint check and the preflight run before anything is built.
     assert names[:2] == ["Check release endpoint", "Preflight continuo API"]
     assert names.index("Preflight continuo API") < names.index("Build and push image")
-    assert names.index("Submit release to continuo") > names.index("Upload contract artifact")
+    assert names.index("Submit release to continuo") > names.index("Upload contract bundle")
     assert "/api/v1/current-prod" in preflight
     assert "ciAuth.bindings" in preflight
     assert "audience=" in preflight
@@ -108,6 +148,76 @@ def test_release_workflow_uses_the_public_release_api():
     for script in (preflight, submit):
         assert 'for attempt in 1 2 3' in script
         assert '[ "$attempt" -eq 3 ] || sleep' in script
+
+
+def test_release_workflow_lints_validates_builds_and_pushes_then_packs_uploads_and_posts():
+    """The workflow runs its release steps in this order, with these exact commands.
+
+    `pack --image` reads the package list of the pushed image, so the image is
+    built and pushed before `pack`, and the bundle is uploaded before the POST.
+    """
+    _, job = _release_job()
+    steps = job["steps"]
+
+    def step_running(command):
+        hits = [
+            index for index, step in enumerate(steps)
+            if command in "\n".join(_logical_lines(step.get("run", "")))
+        ]
+        assert len(hits) == 1, (command, hits)
+        return hits[0]
+
+    order = [
+        step_running("continuo-runtime lint scripts/"),
+        step_running("continuo-runtime validate contracts/"),
+        step_running('docker push "$IMAGE"'),
+        step_running(
+            'continuo-runtime pack contracts/ --service "$SERVICE" --repo-root . '
+            '--image "$IMAGE_TAG" --out odcs-bundle.json'
+        ),
+        step_running(
+            'aws s3 cp odcs-bundle.json "s3://${{ vars.BUCKET }}/${SERVICE}/${RELEASE_ID}/odcs-bundle.json"'
+        ),
+        step_running('call POST /api/v1/releases "$body"'),
+    ]
+    assert order == sorted(order) and len(set(order)) == len(order), order
+
+    # IMAGE_TAG, the image pack reads, is the image the build step pushed.
+    build = _step(job, "Build and push image")["run"]
+    assert (
+        build.index('docker build -t "$IMAGE" .')
+        < build.index('docker push "$IMAGE"')
+        < build.index('echo "IMAGE_TAG=$IMAGE" >> "$GITHUB_ENV"')
+    )
+
+
+@pytest.mark.skipif(not shutil.which("jq"), reason="needs jq")
+def test_release_workflow_posts_kind_python_odcs():
+    """The submit step's body, built by its own jq command, names the release kind python-odcs."""
+    _, job = _release_job()
+    submit = _step(job, "Submit release to continuo")["run"]
+    start = submit.index('body="$(jq -n')
+    closing = "')\""
+    end = submit.index(closing, start) + len(closing)
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+         submit[start:end] + '\nprintf "%s" "$body"'],
+        env={
+            "PATH": os.environ["PATH"],
+            "RELEASE_ID": "7-abc1234",
+            "SERVICE": "marketing-py",
+            "IMAGE_TAG": "ghcr.io/org/marketing-py:7-abc1234",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "release_id": "7-abc1234",
+        "service": "marketing-py",
+        "image_tag": "ghcr.io/org/marketing-py:7-abc1234",
+        "kind": "python-odcs",
+    }
 
 
 def test_release_workflow_never_exposes_the_token():
@@ -293,6 +403,25 @@ def test_the_pin_step_parses_the_templates_own_dockerfile(tmp_path):
     assert code == 0 and written.startswith("RUNTIME_VERSION=")
 
 
+def _version_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+def test_the_template_builds_on_a_runtime_that_can_pack_its_contracts(tmp_path):
+    """The template's own Dockerfile names a runtime that has `pack`, the first being 0.13.0.
+
+    The release workflow installs the runtime the Dockerfile names and runs
+    `validate` and `pack` with it, and its contracts are ODCS files: a runtime
+    before 0.13.0 reads `nodes:` contracts and has no `pack` or `packages`
+    command, so a repository copied from the template would fail before it
+    built anything.
+    """
+    code, written, out = _pin(tmp_path, (TEMPLATE / "Dockerfile").read_text())
+    assert code == 0, out
+    version = written.removeprefix("RUNTIME_VERSION=").strip()
+    assert _version_tuple(version) >= (0, 13, 0), version
+
+
 def test_ci_installs_the_pinned_runtime_before_it_checks_the_installed_version():
     _, job = _release_job()
     steps = job["steps"]
@@ -428,8 +557,10 @@ def test_readme_and_template_name_images_the_publisher_emits():
     part of the image NAME and the tag is the bare version, which is what lets
     Continuo's chart pin ``<name>:vX.Y.Z@sha256:<digest>``. The version is read
     from the root pyproject so neither the README nor the template Dockerfile
-    can drift past a version bump unnoticed.
+    can stay behind a version bump unnoticed: every tag they name is the
+    package's version or a later one, and they all name the same one.
     """
+    import re
     import tomllib
 
     root = TEMPLATE.parent
@@ -437,9 +568,23 @@ def test_readme_and_template_name_images_the_publisher_emits():
     readme = (root / "README.md").read_text()
     dockerfile = (TEMPLATE / "Dockerfile").read_text()
 
+    def tags(text: str, engine: str) -> list[str]:
+        return re.findall(rf"continuo-python-runtime-{engine}:v(\d+\.\d+\.\d+)", text)
+
     for engine in ("postgres", "trino"):
-        assert f"continuo-python-runtime-{engine}:v{version}" in readme
-    assert f"continuo-python-runtime-postgres:v{version}" in dockerfile
+        assert tags(readme, engine), f"the README names no {engine} image"
+    assert tags(dockerfile, "postgres"), "the template Dockerfile names no postgres image"
+
+    named = [
+        (where, tag)
+        for where, text in (("README.md", readme), ("template/Dockerfile", dockerfile))
+        for engine in ("postgres", "trino", "duckdb")
+        for tag in tags(text, engine)
+    ]
+    behind = [f"{where} names v{tag}" for where, tag in named if _version_tuple(tag) < _version_tuple(version)]
+    assert not behind, f"behind the package version {version}: {behind}"
+    one_version = {tag for _, tag in named}
+    assert len(one_version) == 1, f"the README and the template name different versions: {sorted(named)}"
 
 
 def _readme_pip_pin_step():

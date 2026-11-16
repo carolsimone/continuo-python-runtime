@@ -2,10 +2,10 @@
 
 continuo sets ``CONTENT_HASH`` to the ``content_hash`` the release promoted for
 the node. The check recomputes the node's hash from the files in the image with
-the helpers ``merge`` uses (``gather_hash_inputs`` and ``hash_parts``), so the
-two can never disagree, and refuses to run a node whose image reproduces a
-different one: the image holds other code, imports, assets or contract than the
-release.
+the helpers ``continuo-runtime hash`` uses (``gather_hash_inputs`` and
+``hash_parts``), so the two can never disagree, and refuses to run a node whose
+image reproduces a different one: the image holds other code, imports, assets or
+contract than the release.
 """
 
 import logging

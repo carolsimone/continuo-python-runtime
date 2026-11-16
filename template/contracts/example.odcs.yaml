@@ -1,0 +1,60 @@
+# One ODCS v3.2.0 contract per node. Name the file after the table:
+# <table>.odcs.yaml, or <schema>.<table>.odcs.yaml when two nodes of one
+# service share a table name. The contracts folder holds nothing else that
+# ends in .yml or .yaml.
+apiVersion: v3.2.0
+kind: DataContract
+id: analytics.example          # <schema>.<table>, in lower case
+name: example                  # the table
+version: "0"                   # continuo numbers published versions itself; this value is ignored
+description:
+  purpose: Replace with your node
+team:
+  name: your-team              # the team that owns the node
+customProperties:
+  # continuo's own settings, each one item with `vendor: continuo`.
+  - {vendor: continuo, property: kind, value: python-node}
+  - {vendor: continuo, property: schedule, value: daily}
+  - {vendor: continuo, property: criticality, value: SECONDARY}
+  - {vendor: continuo, property: script, value: scripts/example.py}
+  # One query per name. The name is what the script passes to ctx.read();
+  # reading any other name raises ReadError. Query names are part of the
+  # node's content_hash, so renaming one is a content change.
+  #
+  # Each query is one SELECT (or WITH) statement, so a query may itself be a
+  # join if you would rather the warehouse do the join than the script.
+  # `continuo-runtime validate`, `pack` and `hash` parse each query with
+  # sqlglot, so SQL a driver accepts but a parser refuses fails them: for
+  # example a driver's bind placeholder such as psycopg2's `%(name)s`, which
+  # ctx.read() could never fill. Add --dialect <engine> (postgres, trino,
+  # duckdb) to parse in the SQL dialect of your continuo install's warehouse
+  # instead of sqlglot's dialect-neutral grammar.
+  #
+  # Every table a query reads names its schema: analytics.upstream_orders,
+  # never upstream_orders. Only a reference to a CTE that is in scope where the
+  # name is used goes without one.
+  - vendor: continuo
+    property: readQueries
+    value:
+      orders: select order_id, customer_id, amount from analytics.upstream_orders
+      customers: select customer_id, name from analytics.upstream_customers
+  # Optional physical layout, in your engine's own vocabulary. The adapter of
+  # the image's engine refuses any key it does not know.
+  #   postgres: indexes
+  #   trino (iceberg): partitioning, sorted_by, format
+  #   duckdb (ducklake): partitioned_by, sorted_by
+  # - vendor: continuo
+  #   property: config
+  #   value:
+  #     indexes:
+  #       - columns: [order_id]
+  #         unique: true
+schema:
+  - name: example
+    physicalType: table
+    # The table's columns, in order. `required: true` is NOT NULL; a column
+    # without it may hold NULL.
+    properties:
+      - {name: order_id, physicalType: INTEGER, required: true}
+      - {name: customer_name, physicalType: "VARCHAR(64)"}
+      - {name: amount, physicalType: "NUMERIC(10,2)", required: true}

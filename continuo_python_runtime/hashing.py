@@ -1,22 +1,26 @@
 """Content hashing: three independent parts folded into one content_hash.
 
 A Python node's ``content_hash`` folds three parts: ``source_hash`` (the node's
-own script bytes), ``shared_code_hash`` (the import closure, each file with its
-repo-relative path) and ``config_hash`` (the node's code projection). The parts
-are computed from already-gathered bytes and a parsed node, so this module does
-no filesystem access and knows nothing about ``closure.py``.
+own script bytes, or a csv node's uri), ``shared_code_hash`` (the import closure
+and the declared assets, each file with its repo-relative path) and
+``config_hash`` (the code projection of the node's contract). The parts are
+computed from already-gathered bytes and a loaded node, so this module does no
+filesystem access and knows nothing about ``closure.py``.
 
-``shared_code_hash``, ``config_hash`` and the fold are computed by
-continuo-contracts, the library continuo's topology-controller pins and
-recomputes the config part with. Nothing here canonicalises or normalises: the
-library does, so every producer of a hash writes the same bytes. The fold is
-the three-part fold that older topology-controllers check on the wire, so an
-entry this module writes passes their re-computation unchanged.
+``config_hash`` is computed from ``Node.python``, the ``PythonNode`` that
+continuo-contracts reads from the node's ODCS contract: the runtime keeps no
+mapping of its own from a node to the library's view of it. ``shared_code_hash``,
+``config_hash`` and the fold are computed by continuo-contracts, the library
+continuo's topology-controller pins and recomputes the config part with. Nothing
+here canonicalises or normalises: the library does, so every producer of a hash
+writes the same bytes, and a node declared as a contract file and the same node
+declared as a wire entry have one hash.
 
-The library refuses a few ``config`` values the contract loader accepts (an
-integer beyond 2**53 - 1, NaN or an infinity, nesting deeper than 99 levels, a
-lone surrogate). Each refusal reaches the caller as a ``ContractError`` naming
-the node.
+The library refuses a few ``config`` values (an integer beyond 2**53 - 1, NaN
+or an infinity, nesting deeper than 99 levels, a lone surrogate). No contract
+file holds one, since the loader reads each file with the library's strict
+YAML reader, which refuses them too; a refusal for a node built in code
+reaches the caller as a ``ContractError`` naming the node.
 """
 
 from collections.abc import Mapping
@@ -24,7 +28,7 @@ from hashlib import sha256
 
 from continuo_contracts.errors import ContractsError
 from continuo_contracts.hashing import fold3, shared_hash
-from continuo_contracts.python import PythonColumn, PythonNode, projection_hash
+from continuo_contracts.python import projection_hash
 
 from continuo_python_runtime.contract.model import Node
 from continuo_python_runtime.errors import ContractError
@@ -35,31 +39,10 @@ def source_hash(primary: bytes) -> str:
     return sha256(primary).hexdigest()
 
 
-def to_python_node(node: Node) -> PythonNode:
-    """The library's view of *node*: the fields its code projection is made of."""
-    return PythonNode(
-        schema=node.schema,
-        table=node.table,
-        kind=node.kind,
-        script=node.script,
-        reads=dict(node.reads),
-        output_columns=tuple(
-            PythonColumn(column.name, column.type, column.nullable)
-            for column in node.output_columns
-        ),
-        extra_columns=node.extra_columns,
-        config=dict(node.config),
-        secret_ref=node.secret_ref,
-        mode_type=node.mode_type,
-        primary_key=tuple(node.primary_key),
-        assets=node.assets,
-    )
-
-
 def config_hash(node: Node) -> str:
-    """Bare hex SHA-256 of the RFC 8785 bytes of the node's code projection."""
+    """Bare hex SHA-256 of the RFC 8785 bytes of the code projection of ``node.python``."""
     try:
-        return projection_hash(to_python_node(node))
+        return projection_hash(node.python)
     except ContractsError as exc:
         raise ContractError(str(exc)) from exc
 

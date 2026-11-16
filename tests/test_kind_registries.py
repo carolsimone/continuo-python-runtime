@@ -1,6 +1,6 @@
 """Every declared kind has contract rules, hash inputs and a run producer.
 
-A kind added to KINDS without one of these would fail at merge or at run
+A kind added to KINDS without one of these would fail at pack or at run
 time; this pins the three registries to the one list.
 """
 

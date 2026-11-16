@@ -6,18 +6,19 @@
 
 Runtime harness, contract tooling, and CI lint for Continuo python nodes.
 This repo is what domain data teams (marketing, finance, …) template from to
-ship a python node into Continuo: write a contract + a `run(ctx)` script,
-push to `main`, and CI does the rest — lint, validate, merge, build, publish,
-and register the release with Continuo.
+ship a python node into Continuo: write an ODCS contract and a `run(ctx)`
+script, push to `main`, and CI does the rest — lint, validate, build and push
+the image, pack the contracts, upload the bundle and register the release with
+Continuo.
 
 ## What this repo is
 
 Five artifacts come out of this repository:
 
 - **The `continuo-python-runtime` PyPI package** — the `continuo-runtime` CLI
-  (`validate` / `merge` / `hash` / `lint` / `run` / `validation-op`) and the
-  harness library (`conform()`, `RunContext`, the error taxonomy) that domain
-  repos install.
+  (`validate` / `pack` / `hash` / `packages` / `lint` / `run` /
+  `validation-op`) and the harness library (`conform()`, `RunContext`, the
+  error taxonomy) that domain repos install.
 - **The `continuo-engine-contract` PyPI package** — the `WarehouseAdapter`
   port, the contract schema, the shared SQL/type/config guards, and the
   sentinel result-block format. Adapter authors outside this repo pin it.
@@ -49,9 +50,8 @@ amd64 + arm64 digests one multi-arch tag. See `CONTRIBUTING.md` (Releasing).
 ### What this repo owns
 
 This repository owns the entire python-node surface: the engine contract, the three
-engine adapters, the validation runner, and the node harness. The former
-`continuo-validation` repository was merged in — there is no longer a separate
-validation-side port, adapter class, entry-point group, or image. One
+engine adapters, the validation runner, and the node harness. There is no
+separate validation-side port, adapter class, entry-point group or image: one
 `WarehouseAdapter` per engine serves both the data plane (`fetch` /
 `ensure_table` / `load`, plus the opt-in `table_columns` / `append` / `upsert`
 capabilities) and validation (`ensure_schema` / `drop_schema` /
@@ -107,7 +107,7 @@ the Go parser has not been taught is a production outage, not a refactor.
    service name (one service name per domain repo).
 3. Configure repository variables in GitHub (Settings → Secrets and
    variables → Actions): `REGISTRY` (your Docker registry), `BUCKET` (your
-   S3 bucket for contract artifacts), `RELEASE_ENDPOINT` (the base
+   S3 bucket for the contract bundle), `RELEASE_ENDPOINT` (the base
    URL of your continuo install, `scheme://host[:port]` with no path, the origin of continuo's
    `auth.publicUrl`). The
    workflow calls `<RELEASE_ENDPOINT>/api/v1/releases` with its GitHub Actions
@@ -120,128 +120,199 @@ the Go parser has not been taught is a production outage, not a refactor.
    `packages: write`) — no registry secret is needed for that. If you point
    `REGISTRY` at a different or private registry, add your own `docker
    login` step to `release.yml`.
-5. Write a contract file under `contracts/` (see
-   `template/contracts/example.yml`) and a script under `scripts/` that
-   implements `run(ctx)` (see `template/scripts/example.py`). A node that
-   only needs to land a csv file needs no script at all — see
-   `template/contracts/example_csv.yml` and "Node kinds" below.
+5. Write one ODCS contract per node under `contracts/`, named
+   `<table>.odcs.yaml` (see `template/contracts/example.odcs.yaml` and
+   "Contract files" below), and a script under `scripts/` that implements
+   `run(ctx)` (see `template/scripts/example.py`). A node that only needs to
+   land a csv file needs no script at all — see
+   `template/contracts/example_csv.odcs.yaml` and "Node kinds" below.
 6. Push to `main`. The `release.yml` workflow lints the scripts, validates
-   and merges the contracts, builds and pushes the image, uploads the merged
-   contract to S3, and POSTs the release.
+   the contracts, builds and pushes the image, packs the contracts into
+   `odcs-bundle.json`, uploads it to S3, and POSTs the release with
+   `"kind": "python-odcs"`.
 
-### Upgrading an existing domain repo
+## Contract files
 
-`validate` / `merge` / `hash` now hand every declared read to a real SQL
-parser (sqlglot, via `continuo_engine_contract.sql.ensure_single_read`)
-instead of scanning it for a leading `SELECT`/`WITH`. Two things follow for a
-repo written before this, on its next release: SQL a driver would accept but
-a parser will not — most commonly a driver-specific bind placeholder like
-psycopg2's `%(name)s`, which `ctx.read(name)` could never have used anyway —
-now fails validation, and engine-specific syntax (postgres `~`, `@>`, …)
-needs `--dialect <engine>`, which a repo should be passing regardless since
-Continuo bind-checks every read in the install's own warehouse dialect. Run
-the pre-flight check once before your next release; it reports every affected
-read at once:
+Each node has one contract: an ODCS v3.2.0 data contract in `contracts/`,
+named after its table, `<table>.odcs.yaml`, or `<schema>.<table>.odcs.yaml`
+when two nodes of one service share a table name. The `continuo-contracts`
+library reads each file strictly (YAML 1.2 core, with no aliases, no duplicate
+keys and one document per file) and checks it. `validate`, `pack`, `hash` and
+the harness load the folder the same way; the harness skips the read-query
+checks.
+
+```yaml
+apiVersion: v3.2.0
+kind: DataContract
+id: analytics.example          # <schema>.<table>, in lower case
+name: example                  # the table
+version: "0"                   # continuo numbers published versions itself; this value is ignored
+description:
+  purpose: Replace with your node
+team:
+  name: your-team              # the team that owns the node
+customProperties:
+  - {vendor: continuo, property: schedule, value: daily}
+  - {vendor: continuo, property: criticality, value: SECONDARY}
+  - {vendor: continuo, property: script, value: scripts/example.py}
+  - vendor: continuo
+    property: readQueries
+    value:
+      orders: select order_id, customer_id, amount from analytics.upstream_orders
+      customers: select customer_id, name from analytics.upstream_customers
+schema:
+  - name: example
+    physicalType: table
+    properties:
+      - {name: order_id, physicalType: INTEGER, required: true}
+      - {name: customer_name, physicalType: "VARCHAR(64)"}
+      - {name: amount, physicalType: "NUMERIC(10,2)", required: true}
+```
+
+- `id` is `<schema>.<table>` in lower case; `name` and the schema object's
+  `name` are the table.
+- `team.name` is the node's owner and `description.purpose` its description.
+- continuo's own settings are `customProperties` items with
+  `vendor: continuo`. Every node sets `schedule` and `criticality`
+  (`REGULATORY`, `CORE` or `SECONDARY`); the node's kind decides the rest
+  (see "Node kinds" below). An optional `service` names the node's service,
+  and `pack` refuses a contract whose `service` is not its `--service`.
+- The contract has exactly one schema object, `physicalType: table`. Its
+  `properties` are the table's columns, in order: each has a `name`, a
+  `physicalType` (`BIGINT`, `INTEGER` or `INT`, `DOUBLE PRECISION`,
+  `NUMERIC(p,s)` or `DECIMAL(p,s)`, `VARCHAR(n)`, `CHAR(n)`, `TEXT`,
+  `TIMESTAMP`, `DATE` or `BOOLEAN`) and, for a column that never holds NULL,
+  `required: true`.
+
+`validate` refuses any other file in `contracts/` whose name ends in `.yml` or
+`.yaml`, in any case, two files that declare the same table, and a folder with
+no contract. `docs/boundary-contract.md` lists every field a contract may
+carry, and how a contract in another format converts to ODCS.
+
+### Read queries
+
+`validate`, `pack` and `hash` hand every read query to a real SQL parser
+(sqlglot, through `continuo_engine_contract.sql.ensure_single_read`). Each
+query must be one `SELECT` (or `WITH`) statement, and every table it reads
+must name its schema: `analytics.orders`, never `orders`. The one name that
+goes without a schema is a reference to a CTE that is in scope where the name
+is used, so in `WITH orders AS (SELECT * FROM orders) SELECT * FROM orders` the
+`orders` inside the CTE is a table and must name its schema. continuo refuses,
+when it resolves a release, a read query that names a table without its schema,
+so CI refuses at least what the release refuses.
+
+SQL a driver accepts but a parser refuses fails these checks, most often a
+driver's bind placeholder such as psycopg2's `%(name)s`, which `ctx.read(name)`
+could never fill. Engine-specific syntax (postgres `~`, `@>`, …) needs
+`--dialect <engine>`, which a repo should pass anyway, since Continuo parses
+and bind-checks every read in the install's own warehouse dialect:
 
 ```bash
 continuo-runtime validate contracts/ --dialect postgres   # or trino, duckdb
 ```
 
-The runtime image does not re-run this gate, so a read that passes here is
-not re-judged under a different grammar in production. See
-`docs/boundary-contract.md` §13.1.
+The harness does not run these read checks again when a node starts, so a
+read that passes here is not judged again under a different grammar in
+production. See `docs/boundary-contract.md` §13.1.
 
 ## Node kinds
 
-A contract node's `kind:` field selects how the node produces its rows.
-Every rule below (`extra_columns`, `output_columns`, "Conform rules") applies
-to both kinds identically — `kind` only changes how the pre-conform table is
+The `kind` property (a `customProperties` item, not the contract's root
+`kind: DataContract`) selects how the node produces its rows.
+Every rule below (`extraColumns`, the columns, "Conform rules") applies to
+every kind identically — `kind` only changes how the pre-conform table is
 produced, never how it is checked or written.
 
-- **`python-node`** (the default; the field may be omitted) — a script node.
-  It requires `script:` and a `reads:` map of one or more named SQL queries,
-  as described in "The script API" below.
-- **`python-csv`** — a contract-only node: it has no script and its `reads:`
-  map must be exactly `{csv: <uri>}`, where the uri is `s3://bucket/key` or
-  an `https://` url (`http://` is rejected at validate time, not run time).
+- **`python-node`** (the default; the property may be left out) — a script
+  node. It needs `script` and `readQueries`, a mapping of one or more named
+  SQL queries, as described in "The script API" below.
+- **`python-csv`** — a contract-only node: it has no script and reads no
+  table. Its `csvSource` is the file's address, `s3://bucket/key` or an
+  `https://` url (`http://` is refused by `validate`, not at run time).
   The harness fetches the file, parses it with RFC 4180 defaults, and feeds
-  the result straight into `conform()` — declared `output_columns` types
-  decide the warehouse schema, not whatever pyarrow infers from the csv.
-  Because there is no script, `script:` is a forbidden key for this kind;
-  `continuo-runtime validate`/`merge`/`lint` reject one that sets it. The
-  csv's header row must contain every declared output column (checked again,
-  independently, at release time before promotion); columns present in the
-  header but not declared are governed by the same `extra_columns` policy as
-  a script node's output — `raise` (default) fails the run, `warn` drops
-  them and logs a warning. See `template/contracts/example_csv.yml`.
+  the result straight into `conform()` — the declared column types decide
+  the warehouse schema, not whatever pyarrow infers from the csv. Because
+  there is no script, `script`, `readQueries`, `secretRef` and `assets` are
+  refused on this kind. The csv's header row must contain every declared
+  column (checked again, independently, at release time before promotion);
+  columns present in the header but not declared are governed by the same
+  `extraColumns` policy as a script node's output — `raise` (default) fails
+  the run, `warn` drops them and logs a warning. See
+  `template/contracts/example_csv.odcs.yaml`.
 - **`python-api`** — a script node that fetches its own data (typically over
-  HTTP) and declares no `reads:`. `ctx.read` has nothing to return. It may name
-  one Kubernetes Secret with `secret_ref: continuo-api-<name>`; continuo
-  attaches that Secret to the node's pod, so each of its keys is an env var the
-  script reads with `os.environ[...]`. The contract never holds a secret value
-  or env var name; the Secret itself is created in the cluster by the operator.
+  HTTP) and declares no `readQueries`. `ctx.read` has nothing to return. It
+  may name one Kubernetes Secret with `secretRef: continuo-api-<name>`;
+  continuo attaches that Secret to the node's pod, so each of its keys is an
+  env var the script reads with `os.environ[...]`. The contract never holds a
+  secret value or env var name; the Secret itself is created in the cluster
+  by the operator.
 
 ### Files a script reads (`assets`)
 
 A `python-node` or `python-api` script that reads a file from the repository
-(a model, a lookup table, a JSON config) lists it under `assets:`, one path
-relative to the repository root per entry, written with forward slashes and
-without a `..` segment:
+(a model, a lookup table, a JSON config) lists it in the `assets` property,
+one path relative to the repository root per entry, written with forward
+slashes and with no empty, `.` or `..` part:
 
 ```yaml
-- schema: analytics
-  table: scored_orders
-  kind: python-node
-  script: scripts/scored_orders.py
-  assets: [data/rates.json, models/scorer.bin]
+customProperties:
+  - {vendor: continuo, property: script, value: scripts/scored_orders.py}
+  - vendor: continuo
+    property: assets
+    value: [data/rates.json, models/scorer.bin]
 ```
 
-`merge` reads each listed file and folds its bytes into `shared_code_hash`
+`pack` reads each listed file and folds its bytes into `shared_code_hash`
 under its path, so editing one changes the node's `content_hash` and starts a
-validation. A path that is also an import of the script is one unit. `merge`
-fails with a `ContractError` for a path that is missing, is not a file or
-resolves outside the repository, and a path listed twice is refused. The image
-must `COPY` the files, because `assets` only tells the hash about them. A
-`python-csv` node has no script, so `assets` is refused on it.
+validation. A path that is also an import of the script is one unit. `pack`
+and `hash` fail with a `ContractError` for a path that is missing, is not a
+file or resolves outside the repository, and `validate` refuses a path listed
+twice. The image must `COPY` the files, because `assets` only tells the hash
+about them. A `python-csv` node has no script, so `assets` is refused on it.
 
 ### Task timeout
 
-Any node may set `timeout_minutes:` — an integer from 1 to 10,080 (one week) —
+Any node may set `timeoutMinutes` — an integer from 1 to 10,080 (one week) —
 to declare how long its task may run before continuo gives up on it. A value
-outside that range, or one that is not an integer, fails
-`continuo-runtime validate`/`merge`/`lint`. Like `owner`, `schedule`,
-`criticality` and `description`, it is outside the code projection that
-`config_hash` hashes, so changing it never changes the node's `content_hash`.
+outside that range, or one that is not an integer, fails `validate`, `pack`
+and `hash`. Like the owner (`team.name`), `schedule`, `criticality` and the
+description, it is outside the code projection that `config_hash` hashes, so
+changing it never changes the node's `content_hash`.
 
 ## Write modes
 
-`mode_type:` chooses how the harness writes a node's table on each run:
+The `modeType` property chooses how the harness writes a node's table on each
+run:
 
-| `mode_type` | Each run | Rows from earlier runs |
+| `modeType` | Each run | Rows from earlier runs |
 | --- | --- | --- |
 | `replace` (default) | empties the table, inserts this run's rows | gone |
 | `append` | inserts this run's rows | kept |
 | `upsert` | inserts rows with a new key, overwrites rows whose key exists | kept unless overwritten; never deleted |
 
 ```yaml
-- schema: fx
-  table: fx_rates
-  kind: python-api
-  mode_type: upsert
-  primary_key: [rate_date, base, quote]
-  output_columns:
-    - {name: rate_date, type: DATE,       nullable: false}
-    - {name: base,      type: VARCHAR(3), nullable: false}
-    - {name: quote,     type: VARCHAR(3), nullable: false}
-    - {name: rate,      type: DECIMAL(12,6)}
+customProperties:
+  - {vendor: continuo, property: kind, value: python-api}
+  - {vendor: continuo, property: modeType, value: upsert}
+schema:
+  - name: fx_rates
+    physicalType: table
+    properties:
+      - {name: rate_date, physicalType: DATE, required: true, primaryKey: true, primaryKeyPosition: 1}
+      - {name: base, physicalType: "VARCHAR(3)", required: true, primaryKey: true, primaryKeyPosition: 2}
+      - {name: quote, physicalType: "VARCHAR(3)", required: true, primaryKey: true, primaryKeyPosition: 3}
+      - {name: rate, physicalType: "DECIMAL(12,6)"}
 ```
 
 - `python-csv` nodes only `replace`.
-- `primary_key` is required for `upsert` and rejected otherwise: a non-empty
-  list of output columns declared `nullable: false` (a NULL key never
-  matches), each spelled exactly as in `output_columns`, names unique
-  case-insensitively. A Postgres `replace` table that
-  wants uniqueness uses `config.indexes` with `unique: true`.
+- An `upsert` node needs a key: `primaryKey: true` on each key column. Each
+  key column is `required: true` (a NULL key never matches) and is not
+  `DOUBLE PRECISION`; a key of several columns numbers its columns with
+  `primaryKeyPosition`, from 1. The key's names are unique
+  case-insensitively. On a `replace` or `append` node a key only describes
+  the table: the harness writes no key and the hash leaves it out. A
+  Postgres `replace` table that wants uniqueness uses `indexes` with
+  `unique: true` in its `config` property.
 - Every write is atomic: all of the run's rows or none. An `append` or
   `upsert` run with zero rows writes nothing (a `replace` run with zero rows
   still empties the table).
@@ -250,7 +321,7 @@ outside that range, or one that is not an integer, fails
 - An `upsert` run whose own rows repeat a key fails with `ConformError` and
   writes nothing.
 - Before an `append` or `upsert` the harness compares the live table with
-  `output_columns` — names case-insensitively, nullability exactly; order and
+  the contract's columns — names case-insensitively, nullability exactly; order and
   types are not compared — and fails with `LoadError` naming every missing
   column, unexpected column and nullability mismatch. Changing an `append` or
   `upsert` table (columns, types, nullability, key or mode) needs a new table
@@ -279,9 +350,9 @@ def run(ctx):
 ```
 
 - `ctx` is a `RunContext` (`continuo_python_runtime.context.RunContext`).
-  Its only method is `ctx.read(name)`, where `name` is one of the read
-  names declared under the node's `reads:` map in the contract — reading
-  anything else raises `ReadError`. Each declared read is fetched once and
+  Its only method is `ctx.read(name)`, where `name` is one of the query
+  names of the contract's `readQueries` — reading anything else raises
+  `ReadError`. Each declared read is fetched once and
   memoized; `ctx.read(name)` returns a `pyarrow.Table`.
 - `run(ctx)` can return anything Arrow-convertible: a `pyarrow.Table`
   as-is, a pandas `DataFrame` (converted via
@@ -313,7 +384,7 @@ def run(ctx):
     change to `sys.path` (`append`, `insert`, assignment, `del`, and
     `site.addsitedir`), a `sitecustomize` or `usercustomize` module (and a file
     of that name), `compile()` and `types.FunctionType`, and `pickle.load`,
-    `pickle.loads` and `pickle.Unpickler`. `merge` applies the same rules to
+    `pickle.loads` and `pickle.Unpickler`. `pack` applies the same rules to
     every file in a node's import closure, and refuses a `sitecustomize.py` or
     `usercustomize.py` at the repository root, which Python imports before the
     harness starts. A file a script reads, such as a model or a lookup table,
@@ -341,17 +412,17 @@ def run(ctx):
 
 ## Conform rules
 
-`conform()` (`continuo_python_runtime/conform.py`) enforces the node's
-declared `output_columns` on the table `run()` returned, in this order:
+`conform()` (`continuo_python_runtime/conform.py`) enforces the columns the
+node's contract declares on the table `run()` returned, in this order:
 
 | Check | Behavior |
 | --- | --- |
 | Duplicate columns | Any duplicate column name in the returned table always raises `ConformError`. |
-| Extra columns | Governed by the node's `extra_columns` policy: `raise` (default) fails the run; `warn` drops the undeclared column(s) and logs a warning. |
+| Extra columns | Governed by the contract's `extraColumns` policy: `raise` (default) fails the run; `warn` drops the undeclared column(s) and logs a warning. |
 | Missing columns | Any declared column absent from the returned table always raises `ConformError`. |
 | Column order | The table is reselected into the declared column order. |
 | Strict cast | Each column is cast to its declared Arrow type with `safe=True`. Casts pyarrow's `safe=True` would silently accept but that are not value-lossless are rejected before the cast even runs: floating → decimal (rounds to scale), non-boolean → boolean (coerces truthiness), timestamp → date (drops time-of-day). Any other cast failure also raises `ConformError`. |
-| Not-null | A column declared `nullable: false` that contains any null raises `ConformError`. |
+| Not-null | A column declared `required: true` that contains any null raises `ConformError`. |
 | VARCHAR/CHAR length | A column declared `VARCHAR(n)`/`CHAR(n)` whose longest value exceeds `n` raises `ConformError`. |
 
 ## Error taxonomy
@@ -366,12 +437,12 @@ the result block out of the log before storing it.
 
 | Class | Meaning | Typical fix target |
 | --- | --- | --- |
-| `ContractError` | Contract missing or invalid, node not found for `NODE_ID`, or the declared script is missing/unreachable. | The contract yaml or the `script:` path. |
+| `ContractError` | Contract missing or invalid, node not found for `NODE_ID`, or the declared script is missing/unreachable. | The contract file or its `script` path. |
 | `ImageContractMismatch` (a `ContractError`) | The image does not hold the contract, script, imports or assets the release hashed: the `content_hash` in `CONTENT_HASH` differs from the one the image's files give, or a file the release hashed is missing from the image. The block also carries `"reason":"image_contract_mismatch"`. | Rebuild the image from the released commit, with CI and the image on the same runtime. |
-| `ReadError` | `ctx.read()` was called with an undeclared name, or a declared read failed at the warehouse. | The `reads:` map, or the upstream query/warehouse access. |
+| `ReadError` | `ctx.read()` was called with an undeclared name, or a declared read failed at the warehouse. | The contract's `readQueries`, or the upstream query/warehouse access. |
 | `ScriptError` | `run()` raised, has no callable `run`, or returned a value that isn't Arrow-convertible. | The node script. |
-| `ConformError` | Structural mismatch (extra/missing/duplicate columns), a strict-cast failure, a not-null violation, a VARCHAR/CHAR overflow, or an `upsert` run whose rows repeat a primary key. | The script's output shape, or the `output_columns` declaration. |
-| `LoadError` | Adapter construction failed, the installed engine does not support the node's `mode_type`, the live table's shape differs from `output_columns` (append/upsert), or the DDL/INSERT failed at the warehouse during the write. | Warehouse connectivity/permissions, the engine image, or the target table. |
+| `ConformError` | Structural mismatch (extra/missing/duplicate columns), a strict-cast failure, a not-null violation, a VARCHAR/CHAR overflow, or an `upsert` run whose rows repeat a primary key. | The script's output shape, or the contract's columns. |
+| `LoadError` | Adapter construction failed, the installed engine does not support the node's `modeType`, the live table's shape differs from the contract's columns (append/upsert), or the DDL/INSERT failed at the warehouse during the write. | Warehouse connectivity/permissions, the engine image, or the target table. |
 
 ## Engine selection
 
@@ -379,11 +450,11 @@ A domain repo picks its warehouse engine by which base image it builds
 `FROM`:
 
 ```dockerfile
-FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.12.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.13.0
 # or
-FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.12.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.13.0
 # or
-FROM ghcr.io/carolsimone/continuo-python-runtime-duckdb:v0.12.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-duckdb:v0.13.0
 ```
 
 The engine is part of the image **name**; the tag is the bare version, so
@@ -400,9 +471,11 @@ single image serves every node in the service and the release-time
 validation Job for it. The executor injects the warehouse connection as
 environment variables (engine-native, e.g.
 `POSTGRES_HOST`/`POSTGRES_DB`/`POSTGRES_USER`) plus the node-selection
-environment (`NODE_ID`, `TABLE_NAME`, `TARGET_SCHEMA`, and optionally
-`CONTRACT_DIR`/`APP_ROOT`) that `continuo-runtime run` reads to dispatch the
-right node's script.
+environment (`NODE_ID`, `TABLE_NAME`, `TARGET_SCHEMA`) that
+`continuo-runtime run` reads to pick the node. `CONTRACT_DIR`, the folder of
+the image's `*.odcs.yaml` contracts (`/app/contracts` by default), and
+`APP_ROOT`, the repository root a node's `script` path is resolved against,
+are optional.
 
 ### Build your own container
 
@@ -500,8 +573,7 @@ unexpected error is exit 2.
 
 ## Further reading
 
-- `docs/superpowers/specs/2026-07-31-python-runtime-design.md` — this
-  repo's design.
-- `docs/boundary-contract.md` — the parent design's boundary contract (§13):
-  the five surfaces (S3 artifact, `content_hash`, the release call, the
-  runtime image, and the domain repo's CI/CD) that this repo implements.
+- `docs/boundary-contract.md` — the boundary between continuo and a domain
+  repo (§13): the five surfaces (the contract bundle, the hashes `pack`
+  computes, the release call, the runtime image, and the domain repo's CI)
+  that this repo implements, and every field a contract may carry.

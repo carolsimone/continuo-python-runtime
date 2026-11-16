@@ -1,7 +1,8 @@
 """Container entrypoint: dispatches a single node's script and writes its output.
 
-``run_node`` is the sole write sink for a python node. It resolves the
-node from the contract, loads and executes its script inside a
+``run_node`` is the sole write sink for a python node. It reads the ODCS
+contracts in ``CONTRACT_DIR`` (one ``*.odcs.yaml`` file per node), selects
+the node, loads and executes its script inside a
 :class:`~continuo_python_runtime.context.RunContext`, conforms the result to
 the declared schema, and writes it through the runtime adapter with the
 node's ``mode_type``: ``load`` (replace), ``append`` or ``upsert``. Exactly one
@@ -63,7 +64,7 @@ def select_node(nodes: list[Node], node_id: str) -> Node:
     """Select the node matching the trailing ``schema.table`` of ``node_id``.
 
     ``node_id`` is split on ``.``; the trailing two segments are taken as
-    ``(schema, table)`` and matched against the declared nodes.
+    ``(schema, table)`` and matched against the nodes the contracts declare.
 
     Raises:
         ContractError: If ``node_id`` has fewer than 2 dot-separated
@@ -319,10 +320,16 @@ def run_node(
 ) -> int:
     """Run a single node end-to-end and print exactly one sentinel result block.
 
+    ``env`` names the node (``NODE_ID``, ``TABLE_NAME``, ``TARGET_SCHEMA``) and
+    where it lives: ``CONTRACT_DIR`` holds the node contracts (``*.odcs.yaml``,
+    ``/app/contracts`` when unset) and ``APP_ROOT`` the repository its script
+    path is resolved against (``CONTRACT_DIR``'s parent when unset).
+
     ``reader`` is threaded into the python-csv producer instead of letting
     it pick a reader via ``reader_for``; the script producer ignores it.
 
-    Returns 0 on success, 1 on any :class:`HarnessError`.
+    Returns 0 on success, 1 on any :class:`HarnessError`, which includes a
+    contracts folder that holds a YAML file that is not a ``*.odcs.yaml`` contract.
     """
     node_id = env.get("NODE_ID") or ""
     active_adapter: Any = None
@@ -331,13 +338,15 @@ def run_node(
         table_name = _require_env(env, "TABLE_NAME")
         target_schema = _require_env(env, "TARGET_SCHEMA")
 
+        # CONTRACT_DIR holds the node contracts, one `*.odcs.yaml` file per node.
         contract_dir = Path(env.get("CONTRACT_DIR") or "/app/contracts")
         app_root = Path(env["APP_ROOT"]) if env.get("APP_ROOT") else contract_dir.parent
 
         logger.info("running node %s -> %s.%s", node_id, target_schema, table_name)
 
         # check_reads=False: the harness has no --dialect of its own, so
-        # re-running the read-shape gate here would judge the reads against
+        # re-running the read checks here (each read is one read query, and
+        # each table it names has its schema) would judge the reads against
         # sqlglot's dialect-neutral grammar -- a different, in places stricter
         # grammar than the one CI used -- and could only disagree with the
         # gates already passed (CI's `continuo-runtime validate`, then

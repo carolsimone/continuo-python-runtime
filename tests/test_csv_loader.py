@@ -6,10 +6,10 @@ from decimal import Decimal
 import pyarrow as pa
 import pytest
 
-from continuo_python_runtime.contract.model import Column, Node
 from continuo_python_runtime.csv_loader import produce_csv
 from continuo_python_runtime.csv_source import CsvSourceReader
 from continuo_python_runtime.errors import LoadError
+from tests.odcs_builder import contract_node
 
 
 class LocalFileReader(CsvSourceReader):
@@ -27,16 +27,16 @@ class LocalFileReader(CsvSourceReader):
 def _csv_node(**over):
     kw = dict(
         schema="analytics", table="orders_csv", owner="t", schedule="daily",
-        criticality="SECONDARY", script="", kind="python-csv",
+        criticality="SECONDARY", kind="python-csv",
         reads={"csv": "s3://drops/orders.csv"},
-        output_columns=(
-            Column(name="order_id", type="INTEGER", nullable=False),
-            Column(name="amount", type="DOUBLE PRECISION"),
-        ),
+        output_columns=[
+            {"name": "order_id", "type": "INTEGER", "nullable": False},
+            {"name": "amount", "type": "DOUBLE PRECISION"},
+        ],
         extra_columns="warn",
     )
     kw.update(over)
-    return Node(**kw)
+    return contract_node(**kw)
 
 
 def test_produce_csv_returns_arrow_table():
@@ -90,10 +90,10 @@ def test_produce_csv_preserves_lexical_value_for_declared_varchar_column():
     declared output_columns as read_csv's convert schema (spec: 'output_columns
     names/types as the convert schema') prevents that: the column is parsed as
     a string in the first place, so no lossy int64 round-trip ever happens."""
-    node = _csv_node(output_columns=(
-        Column(name="order_id", type="VARCHAR(20)", nullable=False),
-        Column(name="amount", type="DOUBLE PRECISION"),
-    ))
+    node = _csv_node(output_columns=[
+        {"name": "order_id", "type": "VARCHAR(20)", "nullable": False},
+        {"name": "amount", "type": "DOUBLE PRECISION"},
+    ])
     table = produce_csv(node, reader=LocalFileReader(
         b"order_id,amount\n00123,10.5\n00456,20.0\n"))
 
@@ -105,10 +105,10 @@ def test_produce_csv_declared_decimal_column_not_corrupted_by_float_inference():
     conform()'s own lossy-cast guard rejects float->decimal casts outright,
     so without an explicit convert schema this would fail conform() even for
     a value that is a perfectly valid decimal."""
-    node = _csv_node(output_columns=(
-        Column(name="order_id", type="INTEGER", nullable=False),
-        Column(name="amount", type="NUMERIC(10,2)"),
-    ))
+    node = _csv_node(output_columns=[
+        {"name": "order_id", "type": "INTEGER", "nullable": False},
+        {"name": "amount", "type": "NUMERIC(10,2)"},
+    ])
     table = produce_csv(node, reader=LocalFileReader(
         b"order_id,amount\n1,10.50\n2,20.00\n"))
 

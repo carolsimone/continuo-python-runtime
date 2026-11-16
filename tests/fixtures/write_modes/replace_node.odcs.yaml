@@ -1,0 +1,23 @@
+# A python-node that replaces its table on every run: the write mode every node has when it
+# names none. It reads one table through a read query.
+apiVersion: v3.2.0
+kind: DataContract
+id: fixture.replace_node
+name: replace_node
+version: "0"
+team:
+  name: data-team
+customProperties:
+  - {vendor: continuo, property: kind, value: python-node}
+  - {vendor: continuo, property: schedule, value: hourly}
+  - {vendor: continuo, property: criticality, value: SECONDARY}
+  - {vendor: continuo, property: script, value: scripts/replace_node.py}
+  - vendor: continuo
+    property: readQueries
+    value:
+      src: SELECT id FROM fixture.src
+schema:
+  - name: replace_node
+    physicalType: table
+    properties:
+      - {name: id, physicalType: BIGINT, required: true}

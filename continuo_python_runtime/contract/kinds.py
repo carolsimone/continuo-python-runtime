@@ -1,9 +1,12 @@
-"""Per-kind contract rules: which fields a node of each kind must carry.
+"""Per-kind reads rules: how the runtime checks the reads of a node of each kind.
 
-Each kind is one ``KindRules`` entry composed of a script policy, a reads rule,
-whether it may name a Secret, and which write modes it may declare. Adding a
-kind means adding one entry to ``RULES``; nothing that parses a contract
-branches on the kind's name.
+continuo-contracts decides which fields a node of each kind must, may and may
+not carry. The runtime keeps one rule per kind for itself, the check of its
+reads: a python-node's reads each parse as one read query under the
+repository's dialect and name the schema of every table they read, a
+python-csv node's uri is one its readers fetch, and a python-api node reads
+nothing. Adding a kind means adding one entry to ``RULES``; nothing that loads
+a contract branches on the kind's name.
 """
 
 from __future__ import annotations
@@ -13,9 +16,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from continuo_engine_contract.sql import ensure_single_read  # type: ignore[import-untyped]
-from sqlglot.errors import TokenError
+from sqlglot.errors import ParseError, TokenError
 
-from continuo_python_runtime.contract.model import DEFAULT_MODE_TYPE, KINDS, MODE_TYPES
+from continuo_python_runtime.contract.model import KINDS
+from continuo_python_runtime.contract.read_tables import unqualified_tables
 from continuo_python_runtime.csv_source import parse_csv_uri
 from continuo_python_runtime.errors import ContractError
 
@@ -30,7 +34,11 @@ class ReadsRule(ABC):
 
 
 class SqlReads(ReadsRule):
-    """A non-empty mapping of read name -> single SELECT."""
+    """A non-empty mapping of read name -> single SELECT.
+
+    When the reads are checked, every table a query names must name its schema
+    (a reference to a CTE in scope excepted).
+    """
 
     def validate(
         self, reads: Any, label: str, *, dialect: str | None, check_reads: bool
@@ -69,6 +77,22 @@ class SqlReads(ReadsRule):
                 raise ContractError(
                     f"{label}: 'reads.{name}' must be a single read query ({exc})"
                 ) from exc
+            try:
+                unqualified = unqualified_tables(sql, dialect=dialect)
+            except ParseError as exc:
+                # ensure_single_read keeps the statements sqlglot parsed and
+                # accepts a query that starts with an empty statement (`; select
+                # ...`); sqlglot's parse_one, which finds the tables here and in
+                # topology-controller, refuses it. The read is refused as the
+                # release would refuse it.
+                raise ContractError(
+                    f"{label}: 'reads.{name}' must be a single read query ({exc})"
+                ) from exc
+            if unqualified:
+                raise ContractError(
+                    f"{label}: read {name!r} names table {unqualified[0]!r} without its schema; "
+                    f"write <schema>.{unqualified[0]}"
+                )
         return dict(reads)
 
 
@@ -104,31 +128,15 @@ class NoReads(ReadsRule):
 
 @dataclass(frozen=True)
 class KindRules:
-    """What a node of one kind must declare."""
+    """The rules the runtime keeps for a node of one kind."""
 
-    script_required: bool
     reads: ReadsRule
-    secret_allowed: bool = False
-    # The write modes a node of this kind may declare. A new kind gets replace
-    # only unless its entry opts into more.
-    mode_types: frozenset[str] = frozenset({DEFAULT_MODE_TYPE})
-    # Whether a node of this kind may list the repository files its script reads.
-    assets_allowed: bool = False
 
 
 RULES: dict[str, KindRules] = {
-    "python-node": KindRules(
-        script_required=True, reads=SqlReads(), mode_types=MODE_TYPES, assets_allowed=True
-    ),
-    # A csv drop is a snapshot of its source: replace only (spec D2).
-    "python-csv": KindRules(script_required=False, reads=CsvRead()),
-    "python-api": KindRules(
-        script_required=True,
-        reads=NoReads(),
-        secret_allowed=True,
-        mode_types=MODE_TYPES,
-        assets_allowed=True,
-    ),
+    "python-node": KindRules(reads=SqlReads()),
+    "python-csv": KindRules(reads=CsvRead()),
+    "python-api": KindRules(reads=NoReads()),
 }
 
 

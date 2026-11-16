@@ -1,0 +1,29 @@
+# A python-csv node: a contract with no script. It loads one CSV file into
+# its table on each run.
+apiVersion: v3.2.0
+kind: DataContract
+id: analytics.example_csv      # <schema>.<table>, in lower case
+name: example_csv              # the table
+version: "0"                   # continuo numbers published versions itself; this value is ignored
+description:
+  purpose: "Contract-only node: loads a csv from the declared uri"
+team:
+  name: your-team              # the team that owns the node
+customProperties:
+  - {vendor: continuo, property: kind, value: python-csv}
+  - {vendor: continuo, property: schedule, value: daily}
+  - {vendor: continuo, property: criticality, value: SECONDARY}
+  # The file's address: s3://<bucket>/<key> or an https:// url. The file's
+  # header row must name every column below. A header column the contract
+  # does not declare fails the run, unless extraColumns is warn, which drops
+  # it and logs a warning:
+  # - {vendor: continuo, property: extraColumns, value: warn}
+  - {vendor: continuo, property: csvSource, value: "s3://your-bucket/drops/example.csv"}
+schema:
+  - name: example_csv
+    physicalType: table
+    # The declared types, not what the file looks like, decide the table's
+    # columns. `required: true` is NOT NULL.
+    properties:
+      - {name: order_id, physicalType: INTEGER, required: true}
+      - {name: amount, physicalType: DOUBLE PRECISION}

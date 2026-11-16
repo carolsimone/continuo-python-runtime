@@ -31,7 +31,8 @@ LEGACY = [
 # rename replaced, because that is what actually shipped in that release.
 EXEMPT_PREFIXES = ("docs/superpowers/", "CHANGELOG.md")
 
-# Tests that assert the retired python-model kind is rejected must name it.
+# Tests that pin how the python-model spelling is read (the loader runs it as a
+# python-node; the runtime's own kind registry does not hold it) must name it.
 EXEMPT_FILES = {
     "tests/test_no_legacy_names.py",
     "tests/test_contract_loader.py",

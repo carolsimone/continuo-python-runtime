@@ -1,25 +1,21 @@
 import pytest
 
 from continuo_python_runtime.contract.kinds import RULES, CsvRead, NoReads, SqlReads, rules_for
-from continuo_python_runtime.contract.model import KINDS, MODE_TYPES
-from continuo_python_runtime.contract.secret_ref import validate_secret_ref
+from continuo_python_runtime.contract.model import KINDS
 from continuo_python_runtime.errors import ContractError
+from tests.odcs_builder import contract_node
 
 
 def test_every_kind_has_rules():
     assert set(RULES) == KINDS
 
 
-def test_python_node_requires_a_script_and_sql_reads():
-    rules = RULES["python-node"]
-    assert rules.script_required is True
-    assert isinstance(rules.reads, SqlReads)
+def test_python_node_reads_sql():
+    assert isinstance(RULES["python-node"].reads, SqlReads)
 
 
-def test_python_csv_forbids_a_script_and_reads_one_csv_uri():
-    rules = RULES["python-csv"]
-    assert rules.script_required is False
-    assert isinstance(rules.reads, CsvRead)
+def test_python_csv_reads_one_csv_uri():
+    assert isinstance(RULES["python-csv"].reads, CsvRead)
 
 
 @pytest.mark.parametrize("kind", ["PYTHON-NODE", " python-node", "python-model", "", None, 3])
@@ -38,6 +34,97 @@ def test_sql_reads_skips_the_shape_gate_when_asked():
     assert SqlReads().validate(reads, "L", dialect=None, check_reads=False) == reads
 
 
+def test_sql_reads_accepts_reads_that_name_their_schemas():
+    reads = {"a": "select * from raw.a", "b": "with c as (select 1) select * from c join raw.b on 1=1"}
+    assert SqlReads().validate(reads, "L", dialect="postgres", check_reads=True) == reads
+
+
+@pytest.mark.parametrize("dialect", ["duckdb", None])
+def test_duckdb_pivot_statements_pass_validate_when_they_name_their_schemas(dialect):
+    reads = {
+        "wide": "with p as (pivot analytics.t on a using sum(b)) select * from p",
+        "long": "with p as (unpivot s.t on a, b into name k value v) select * from p",
+        "both": "select 1 union all (pivot s.t on a using sum(b))",
+    }
+    assert SqlReads().validate(reads, "L", dialect=dialect, check_reads=True) == reads
+
+
+def test_an_unqualified_table_fails_validate():
+    with pytest.raises(ContractError) as exc:
+        SqlReads().validate({"x": "select * from orders"}, "L", dialect=None, check_reads=True)
+    assert str(exc.value) == "L: read 'x' names table 'orders' without its schema; write <schema>.orders"
+
+
+def test_validate_names_the_first_read_and_the_first_table_that_lacks_a_schema():
+    reads = {"a": "select * from raw.a", "b": "select * from raw.b join y on 1=1 join z on 1=1", "c": "select * from w"}
+    with pytest.raises(ContractError) as exc:
+        SqlReads().validate(reads, "L", dialect="postgres", check_reads=True)
+    assert str(exc.value) == "L: read 'b' names table 'y' without its schema; write <schema>.y"
+
+
+def test_a_cte_in_one_read_does_not_hide_the_same_name_in_another():
+    reads = {"a": "with users as (select 1) select * from users", "b": "select * from users"}
+    with pytest.raises(ContractError, match="read 'b' names table 'users' without its schema"):
+        SqlReads().validate(reads, "L", dialect="postgres", check_reads=True)
+
+
+def test_a_read_that_names_a_table_inside_the_cte_of_the_same_name_fails_validate():
+    reads = {"x": "with orders as (select * from orders) select * from orders"}
+    with pytest.raises(ContractError) as exc:
+        SqlReads().validate(reads, "L", dialect="postgres", check_reads=True)
+    assert str(exc.value) == "L: read 'x' names table 'orders' without its schema; write <schema>.orders"
+
+
+def test_a_nameless_table_with_no_schema_is_named_by_its_sql_text():
+    with pytest.raises(ContractError) as exc:
+        SqlReads().validate(
+            {"x": "select * from generate_series(1, 3)"}, "L", dialect="postgres", check_reads=True
+        )
+    assert str(exc.value) == (
+        "L: read 'x' names table 'generate_series(1, 3)' without its schema; "
+        "write <schema>.generate_series(1, 3)"
+    )
+
+
+def test_a_schema_qualified_function_call_passes_validate():
+    reads = {"x": "select * from pg_catalog.generate_series(1, 3)"}
+    assert SqlReads().validate(reads, "L", dialect="postgres", check_reads=True) == reads
+
+
+def test_the_single_read_check_comes_before_the_schema_rule():
+    with pytest.raises(ContractError, match="'reads.x' must be a single read query"):
+        SqlReads().validate({"x": "select 1 from t; select 2 from u"}, "L", dialect=None, check_reads=True)
+
+
+@pytest.mark.parametrize("dialect", ["postgres", None])
+@pytest.mark.parametrize("sql", ["SELECT FROM WHERE (", "; select * from raw.a", ";"])
+def test_a_read_sqlglot_refuses_is_a_contract_error_not_a_sqlglot_error(sql, dialect):
+    """A leading `;` passes ensure_single_read (one statement is left) but not the
+    parse the schema rule needs, which topology-controller refuses as well."""
+    with pytest.raises(ContractError, match=r"^L: 'reads\.x' must be a single read query \("):
+        SqlReads().validate({"x": sql}, "L", dialect=dialect, check_reads=True)
+
+
+def test_the_harness_does_not_apply_the_rule():
+    reads = {"x": "select * from orders"}
+    assert SqlReads().validate(reads, "L", dialect=None, check_reads=False) == reads
+
+
+def test_a_contract_with_an_unqualified_read_loads_as_the_harness_reads_it():
+    """The harness loads with check_reads=False, so the rule is validate's alone."""
+    node = contract_node(
+        schema="analytics",
+        table="t",
+        owner="marketing",
+        schedule="daily",
+        criticality="SECONDARY",
+        script="scripts/t.py",
+        reads={"x": "select * from orders"},
+        output_columns=[{"name": "id", "type": "INTEGER"}],
+    )
+    assert node.reads == {"x": "select * from orders"}
+
+
 def test_csv_read_requires_exactly_a_csv_key():
     with pytest.raises(ContractError, match=r"a python-csv node's 'reads' must be exactly \{csv: <uri>\}"):
         CsvRead().validate({"csv": "s3://b/k", "x": "y"}, "L", dialect=None, check_reads=True)
@@ -48,15 +135,8 @@ def test_csv_read_validates_the_uri():
         CsvRead().validate({"csv": "http://insecure/x.csv"}, "L", dialect=None, check_reads=True)
 
 
-def test_python_api_requires_a_script_declares_no_reads_and_may_name_a_secret():
-    rules = RULES["python-api"]
-    assert rules.script_required is True
-    assert isinstance(rules.reads, NoReads)
-    assert rules.secret_allowed is True
-
-
-def test_only_python_api_may_name_a_secret():
-    assert {k for k, r in RULES.items() if r.secret_allowed} == {"python-api"}
+def test_python_api_declares_no_reads():
+    assert isinstance(RULES["python-api"].reads, NoReads)
 
 
 @pytest.mark.parametrize("reads", [None, {}])
@@ -68,44 +148,3 @@ def test_no_reads_accepts_absent_or_empty(reads):
 def test_no_reads_rejects_any_declared_read(reads):
     with pytest.raises(ContractError, match="a python-api node declares no 'reads'"):
         NoReads().validate(reads, "L", dialect=None, check_reads=True)
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "continuo-api-fx",
-        "continuo-api-a",
-        "continuo-api-stripe-2",
-        "continuo-api-" + "a" * 240,
-    ],
-)
-def test_secret_ref_accepts_valid_names(name):
-    assert validate_secret_ref(name, "L") == name
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "", "continuo-api-", "continuo-api-FX", "continuo-api--x-", "api-fx",
-        "continuo-app-credentials", "continuo-api-x_y", " continuo-api-fx",
-        "continuo-api-" + "a" * 241, "continuo-api-fx\n", 7, None,
-    ],
-)
-def test_secret_ref_rejects_invalid_names(name):
-    with pytest.raises(ContractError, match="'secret_ref'"):
-        validate_secret_ref(name, "L")
-
-
-def test_python_csv_only_replaces():
-    assert RULES["python-csv"].mode_types == frozenset({"replace"})
-
-
-@pytest.mark.parametrize("kind", ["python-node", "python-api"])
-def test_script_kinds_allow_every_mode(kind):
-    assert RULES[kind].mode_types == MODE_TYPES
-
-
-def test_every_kind_allows_replace_and_nothing_outside_the_vocabulary():
-    for rules in RULES.values():
-        assert "replace" in rules.mode_types
-        assert rules.mode_types <= MODE_TYPES

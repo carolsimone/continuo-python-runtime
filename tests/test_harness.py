@@ -3,10 +3,10 @@
 import json
 import logging
 import sys
+from pathlib import Path
 
 import pyarrow as pa
 import pytest
-import yaml
 
 from continuo_python_runtime.contract.loader import load_contract_dir
 from continuo_python_runtime.errors import ContractError, ScriptError
@@ -16,7 +16,8 @@ from continuo_python_runtime.harness import (
     run_node,
     select_node,
 )
-from tests.conftest import FakeWarehouseAdapter
+from tests.conftest import NODE_T, FakeWarehouseAdapter
+from tests.odcs_builder import write_contract
 
 
 def _env(repo):
@@ -38,6 +39,30 @@ def test_success_emits_single_sentinel_block(harness_repo, capsys):
     assert body["status"] == "success"
     assert ad.loaded[0:2] == ("analytics", "t")
     assert ad.ensured is not None
+
+
+SMOKE_NODE = Path(__file__).resolve().parent / "smoke" / "node_smoke"
+
+
+def test_run_node_runs_the_smoke_node_from_its_odcs_file(capsys):
+    """The image smoke node's folder, run as the image runs it: one ODCS file, one script."""
+    env = {
+        "NODE_ID": "python-node.svc.analytics.smoke",
+        "TABLE_NAME": "smoke",
+        "TARGET_SCHEMA": "analytics",
+        "CONTRACT_DIR": str(SMOKE_NODE / "contracts"),
+        "APP_ROOT": str(SMOKE_NODE),
+    }
+    adapter = FakeWarehouseAdapter({"select id from analytics.src": pa.table({"id": [1, 2, 3]})})
+    assert run_node(env, adapter=adapter) == 0
+    out = capsys.readouterr().out
+    assert out.count("===CONTINUO_VALIDATION_RESULT_BEGIN===") == 1
+    body = json.loads(out.split("BEGIN===\n")[1].split("\n===CONTINUO")[0])
+    assert body["status"] == "success"
+    assert body["message"] == "rows=3"
+    assert adapter.ensured[:2] == ("analytics", "smoke")
+    assert adapter.loaded[:2] == ("analytics", "smoke")
+    assert adapter.loaded[2].num_rows == 3
 
 
 def test_script_print_cannot_corrupt_stdout(harness_repo, capsys):
@@ -254,16 +279,9 @@ def test_adapter_close_called_on_failure(harness_repo, capsys):
 
 def test_harness_passes_node_config_through_to_ensure_table(tmp_path, capsys):
     """The harness threads node.config to ensure_table unconditionally, as a keyword."""
-    (tmp_path / "contracts").mkdir()
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "t.py").write_text("def run(ctx):\n    return ctx.read('ids')\n")
-    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
-        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
-        "criticality": "SECONDARY", "script": "scripts/t.py",
-        "reads": {"ids": "select id from analytics.a"},
-        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
-        "config": {"indexes": [{"columns": ["id"]}]},
-    }]}))
+    write_contract(tmp_path / "contracts", **NODE_T, config={"indexes": [{"columns": ["id"]}]})
     ad = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1]})})
     assert run_node(_env(tmp_path), adapter=ad) == 0
     assert ad.ensured_config == {"indexes": [{"columns": ["id"]}]}
@@ -292,7 +310,6 @@ def test_ensure_table_value_error_surfaces_as_load_error(harness_repo, capsys):
 
 
 def _repo_with_config(tmp_path, config, marker):
-    (tmp_path / "contracts").mkdir()
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "t.py").write_text(
         "import pathlib\n\n\n"
@@ -300,13 +317,7 @@ def _repo_with_config(tmp_path, config, marker):
         f"    pathlib.Path({str(marker)!r}).write_text('ran')\n"
         "    return ctx.read('ids')\n"
     )
-    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
-        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
-        "criticality": "SECONDARY", "script": "scripts/t.py",
-        "reads": {"ids": "select id from analytics.a"},
-        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
-        "config": config,
-    }]}))
+    write_contract(tmp_path / "contracts", **NODE_T, config=config)
     return tmp_path
 
 
@@ -360,18 +371,12 @@ def test_adapter_without_validate_config_still_runs(tmp_path, capsys):
 # --- the runtime does not re-run the read-shape gate ---
 
 
-def _repo_with_read(tmp_path, sql):
-    (tmp_path / "contracts").mkdir()
+def _repo_with_read(tmp_path, sql, **fields):
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "t.py").write_text(
         "def run(ctx):\n    return ctx.read('ids')\n"
     )
-    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
-        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
-        "criticality": "SECONDARY", "script": "scripts/t.py",
-        "reads": {"ids": sql},
-        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
-    }]}))
+    write_contract(tmp_path / "contracts", **{**NODE_T, "reads": {"ids": sql}, **fields})
     return tmp_path
 
 
@@ -382,7 +387,7 @@ def _repo_with_read(tmp_path, sql):
 def test_dialect_specific_read_does_not_fail_at_container_start(tmp_path, sql, capsys):
     """A read CI accepted under --dialect postgres must not be re-judged neutrally.
 
-    --dialect reaches validate/merge/hash but not run_node, which would
+    --dialect reaches validate/pack/hash but not run_node, which would
     otherwise re-parse every read with sqlglot's stricter dialect-neutral
     grammar at container start -- turning ordinary postgres into a node that
     fails on every run after a green release.
@@ -393,25 +398,21 @@ def test_dialect_specific_read_does_not_fail_at_container_start(tmp_path, sql, c
 
 
 def test_runtime_still_rejects_a_structurally_invalid_contract(tmp_path, capsys):
-    """Only ensure_single_read is skipped; every other loader rule still runs."""
-    repo = _repo_with_read(tmp_path, "select id from analytics.a")
-    doc = yaml.safe_load((repo / "contracts" / "t.yml").read_text())
-    doc["nodes"][0]["criticality"] = "WHENEVER"
-    (repo / "contracts" / "t.yml").write_text(yaml.safe_dump(doc))
-    assert run_node(_env(repo), adapter=FakeWarehouseAdapter()) == 1
-    assert '"message":"ContractError:' in capsys.readouterr().out
-
-
-def test_runtime_still_rejects_an_empty_reads_map(tmp_path, capsys):
-    """The reads map's own shape rules are not part of the skipped gate."""
-    repo = _repo_with_read(tmp_path, "select id from analytics.a")
-    doc = yaml.safe_load((repo / "contracts" / "t.yml").read_text())
-    doc["nodes"][0]["reads"] = {}
-    (repo / "contracts" / "t.yml").write_text(yaml.safe_dump(doc))
+    """Only the reads checks are skipped; every other loader rule still runs."""
+    repo = _repo_with_read(tmp_path, "select id from analytics.a", criticality="WHENEVER")
     assert run_node(_env(repo), adapter=FakeWarehouseAdapter()) == 1
     out = capsys.readouterr().out
     assert '"message":"ContractError:' in out
-    assert "reads" in out
+    assert "criticality" in out
+
+
+def test_runtime_still_rejects_an_empty_reads_map(tmp_path, capsys):
+    """An empty `readQueries` is refused: the skipped checks do not include the shape of the reads."""
+    repo = _repo_with_read(tmp_path, "select id from analytics.a", reads={})
+    assert run_node(_env(repo), adapter=FakeWarehouseAdapter()) == 1
+    out = capsys.readouterr().out
+    assert '"message":"ContractError:' in out
+    assert "readQueries" in out
 
 
 # --- in-repo import closure must be importable at run time ---
@@ -622,16 +623,15 @@ def test_run_node_on_csv_node_never_calls_load_script(monkeypatch, tmp_path, cap
 
     monkeypatch.setattr(harness_mod, "load_script", _boom_if_called)
 
-    (tmp_path / "contracts").mkdir()
-    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
-        "schema": "analytics", "table": "orders_csv", "owner": "m", "schedule": "daily",
-        "criticality": "SECONDARY", "kind": "python-csv",
-        "reads": {"csv": "s3://drops/orders.csv"},
-        "output_columns": [
+    write_contract(
+        tmp_path / "contracts",
+        schema="analytics", table="orders_csv", owner="m", schedule="daily",
+        criticality="SECONDARY", kind="python-csv", reads={"csv": "s3://drops/orders.csv"},
+        output_columns=[
             {"name": "order_id", "type": "INTEGER", "nullable": False},
             {"name": "amount", "type": "DOUBLE PRECISION"},
         ],
-    }]}))
+    )
 
     env = {
         "NODE_ID": "python-csv.svc.analytics.orders_csv",
@@ -767,16 +767,35 @@ def test_every_harness_error_is_logged_with_the_result_block_message(
     assert len(errors) == 1 and message in errors[0].getMessage()
 
 
+def test_the_harness_refuses_a_folder_with_an_old_file(harness_repo, capsys, caplog):
+    """A file that is not `<table>.odcs.yaml` stops the run, even beside a valid contract."""
+    old_file = harness_repo / "contracts" / "t.yml"
+    old_file.write_text("nodes: []\n")
+    adapter = FakeWarehouseAdapter({"select id from analytics.a": pa.table({"id": [1]})})
+    caplog.set_level(logging.INFO)
+
+    assert run_node(_env(harness_repo), adapter=adapter) == 1
+
+    refusal = (
+        f"{old_file}: runtime 0.13.0 reads only ODCS contracts named <table>.odcs.yaml; "
+        "convert this file (https://github.com/carolsimone/continuo-python-runtime/blob/main/"
+        "docs/boundary-contract.md#converting-a-contract-file)"
+    )
+    assert _sentinel_body(capsys.readouterr().out)["message"] == f"ContractError: {refusal}"
+    errors = _harness_errors(caplog)
+    assert len(errors) == 1 and refusal in errors[0].getMessage()
+    assert adapter.ensured is None and adapter.loaded is None
+
+
 def _api_repo(tmp_path, script_body):
-    (tmp_path / "contracts").mkdir()
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "fx.py").write_text(script_body)
-    (tmp_path / "contracts" / "fx.yml").write_text(yaml.safe_dump({"nodes": [{
-        "schema": "analytics", "table": "fx", "owner": "m", "schedule": "daily",
-        "criticality": "SECONDARY", "kind": "python-api", "script": "scripts/fx.py",
-        "secret_ref": "continuo-api-fx",
-        "output_columns": [{"name": "rate", "type": "DOUBLE PRECISION"}],
-    }]}))
+    write_contract(
+        tmp_path / "contracts",
+        schema="analytics", table="fx", owner="m", schedule="daily", criticality="SECONDARY",
+        kind="python-api", script="scripts/fx.py", secret_ref="continuo-api-fx",
+        output_columns=[{"name": "rate", "type": "DOUBLE PRECISION"}],
+    )
     return tmp_path
 
 

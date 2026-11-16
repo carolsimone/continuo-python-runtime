@@ -5,6 +5,60 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Breaking
+
+- The runtime reads only ODCS contracts, through continuo-contracts 0.2.0:
+  one file per node, named `<table>.odcs.yaml`, or `<schema>.<table>.odcs.yaml`
+  for two nodes of one service that share a table name. The `nodes:` format is
+  no longer read, and any other `.yml` or `.yaml` file in the contracts folder
+  is refused, with a message that points to the conversion table in
+  `docs/boundary-contract.md`.
+- `continuo-runtime merge` is gone. `continuo-runtime pack` replaces it and
+  writes `odcs-bundle.json` where `merge` wrote `contract.yaml`.
+- The release kind for these services is `python-odcs` (it was `python`), and
+  the artifact a release carries is `odcs-bundle.json`.
+
+### Added
+
+- `continuo-runtime pack <contracts> --service <name> --repo-root <dir> --out <file>`
+  writes `odcs-bundle.json`: each contract's text as written, the two hash
+  parts the repository's files give (`source_hash` and `shared_code_hash`),
+  the service, and the versions of the runtime and the library. It records the
+  package list of the image the service runs, read with `--image <ref>` or
+  taken from a file with `--image-packages` (give exactly one). It checks each
+  contract against `--service`, lints every node's script and its in-repo
+  import closure, and writes nothing unless every check passed.
+- `continuo-runtime packages` prints every installed package of the
+  environment as one JSON object of normalised name to version. Run in the
+  service's image, it gives the list `pack` records.
+- `validate` and the loader refuse a read query that names a table without its
+  schema. The one exception is a reference to a CTE that is in scope where the
+  name is used, so the body of `WITH orders AS (SELECT * FROM orders)` still has
+  to name the schema of the table it reads. The CTEs of a `WITH RECURSIVE` list
+  all see each other.
+- A node of kind `python-model` is read as `python-node`, as the library reads
+  it.
+
+### Changed
+
+- The runtime pins `continuo-contracts==0.2.0`, which adds `jsonschema` and
+  needs Python 3.14, as the runtime already does.
+- A node's hashes come from the library's node, read from its ODCS contract. A
+  node converted to ODCS with the same values keeps its `content_hash`.
+- The template ships `contracts/example.odcs.yaml` and
+  `contracts/example_csv.odcs.yaml`, and its release workflow runs `pack` and
+  submits the release with kind `python-odcs`.
+- The template's `Dockerfile` and the engine examples in the README build on the
+  `v0.13.0` engine images, the first with `pack` and `packages`, so a repository
+  copied from the template runs the runtime its contracts and workflow need.
+- The release check no longer asks for a version bump when only a package's
+  `tests/` folder changed, because the wheel does not ship it.
+- `hash` only hashes: the lint of a node's import closure and the refusal of a
+  `sitecustomize.py` or `usercustomize.py` at the repository root run in
+  `pack`, and the lint also runs in `lint`.
+- Two contract files whose tables differ only in the case of their names are
+  refused as one table.
+
 ## [0.12.0] - 2026-11-11
 
 **TL;DR**

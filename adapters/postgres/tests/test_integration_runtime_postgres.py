@@ -12,7 +12,6 @@ import boto3
 import psycopg2
 import pyarrow as pa
 import pytest
-import yaml
 
 from continuo_python_runtime.harness import run_node
 from continuo_postgres_adapter.adapter import PostgresAdapter
@@ -360,23 +359,23 @@ def csv_minio(minio_container):
     return endpoint
 
 
-def _csv_contract_dir(tmp_path, schema):
+def _csv_contract_dir(write_contract, tmp_path, schema):
     """A contract dir with a single python-csv node reading s3://pg-drops/orders.csv."""
-    (tmp_path / "contracts").mkdir()
-    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
-        "schema": schema, "table": "orders_csv", "owner": "m", "schedule": "daily",
-        "criticality": "SECONDARY", "kind": "python-csv",
-        "reads": {"csv": "s3://pg-drops/orders.csv"},
-        "output_columns": [
+    write_contract(
+        tmp_path / "contracts",
+        schema=schema, table="orders_csv", owner="m", schedule="daily",
+        criticality="SECONDARY", kind="python-csv",
+        reads={"csv": "s3://pg-drops/orders.csv"},
+        output_columns=[
             {"name": "order_id", "type": "INTEGER", "nullable": False},
             {"name": "amount", "type": "DOUBLE PRECISION"},
         ],
-    }]}))
+    )
     return tmp_path
 
 
 @pytest.mark.integration
-def test_run_node_csv_kind_loads_minio_csv_into_postgres(clean_schema, csv_minio, monkeypatch, tmp_path):
+def test_run_node_csv_kind_loads_minio_csv_into_postgres(clean_schema, csv_minio, monkeypatch, tmp_path, write_contract):
     """run_node on a python-csv node fetches from real minio and writes to real postgres.
 
     Exercises the full production path added in this task: harness.run_node
@@ -387,7 +386,7 @@ def test_run_node_csv_kind_loads_minio_csv_into_postgres(clean_schema, csv_minio
     for a python-node node.
     """
     monkeypatch.setenv("S3_ENDPOINT_URL", csv_minio)
-    repo = _csv_contract_dir(tmp_path, clean_schema)
+    repo = _csv_contract_dir(write_contract, tmp_path, clean_schema)
     env = {
         "NODE_ID": f"python-csv.svc.{clean_schema}.orders_csv",
         "TABLE_NAME": "orders_csv",
@@ -436,33 +435,36 @@ _FX_SCRIPT = (
 )
 
 
-def _fx_run_env(repo, schema, run, rows, **mode):
-    """A python-api fx node returning *rows*, with a script file unique to *run*.
+@pytest.fixture()
+def fx_run_env(write_contract):
+    """Build the env of a python-api fx node returning *rows*, with a script file unique to *run*.
 
     One file per run: rewriting the same file within a second at the same size
     would let Python reuse its cached bytecode and return the previous rows.
     """
-    (repo / "contracts").mkdir(exist_ok=True)
-    (repo / "scripts").mkdir(exist_ok=True)
-    script = f"scripts/fx_{run}.py"
-    (repo / script).write_text(_FX_SCRIPT.format(rows=rows))
-    node = {
-        "schema": schema, "table": "fx_rates", "owner": "m", "schedule": "hourly",
-        "criticality": "SECONDARY", "kind": "python-api", "script": script,
-        "output_columns": _FX_COLUMNS, **mode,
-    }
-    (repo / "contracts" / "fx.yml").write_text(yaml.safe_dump({"nodes": [node]}))
-    return {
-        "NODE_ID": f"python-api.svc.{schema}.fx_rates", "TABLE_NAME": "fx_rates",
-        "TARGET_SCHEMA": schema, "CONTRACT_DIR": str(repo / "contracts"), "APP_ROOT": str(repo),
-    }
+    def build(repo, schema, run, rows, **mode):
+        (repo / "scripts").mkdir(exist_ok=True)
+        script = f"scripts/fx_{run}.py"
+        (repo / script).write_text(_FX_SCRIPT.format(rows=rows))
+        write_contract(
+            repo / "contracts",
+            schema=schema, table="fx_rates", owner="m", schedule="hourly",
+            criticality="SECONDARY", kind="python-api", script=script,
+            output_columns=_FX_COLUMNS, **mode,
+        )
+        return {
+            "NODE_ID": f"python-api.svc.{schema}.fx_rates", "TABLE_NAME": "fx_rates",
+            "TARGET_SCHEMA": schema, "CONTRACT_DIR": str(repo / "contracts"), "APP_ROOT": str(repo),
+        }
+
+    return build
 
 
 @pytest.mark.integration
-def test_run_node_append_keeps_the_rows_of_earlier_runs(clean_schema, tmp_path):
-    env = _fx_run_env(tmp_path, clean_schema, "run1", [("2026-10-08", "EUR", "1.081200")], mode_type="append")
+def test_run_node_append_keeps_the_rows_of_earlier_runs(clean_schema, tmp_path, fx_run_env):
+    env = fx_run_env(tmp_path, clean_schema, "run1", [("2026-10-08", "EUR", "1.081200")], mode_type="append")
     assert run_node(env, adapter=_adapter()) == 0
-    env = _fx_run_env(
+    env = fx_run_env(
         tmp_path, clean_schema, "run2",
         [("2026-10-08", "EUR", "1.081200"), ("2026-10-09", "EUR", "1.090000")],
         mode_type="append",
@@ -472,15 +474,15 @@ def test_run_node_append_keeps_the_rows_of_earlier_runs(clean_schema, tmp_path):
 
 
 @pytest.mark.integration
-def test_run_node_upsert_overwrites_by_key_and_keeps_the_constraint(clean_schema, tmp_path):
+def test_run_node_upsert_overwrites_by_key_and_keeps_the_constraint(clean_schema, tmp_path, fx_run_env):
     """Review Focus 4 and 5 through the whole harness."""
     key = {"mode_type": "upsert", "primary_key": ["rate_date", "base"]}
-    env = _fx_run_env(
+    env = fx_run_env(
         tmp_path, clean_schema, "run1",
         [("2026-10-08", "EUR", "1.081200"), ("2026-10-08", "GBP", "0.861000")], **key,
     )
     assert run_node(env, adapter=_adapter()) == 0
-    env = _fx_run_env(
+    env = fx_run_env(
         tmp_path, clean_schema, "run2",
         [("2026-10-08", "EUR", "1.090000"), ("2026-10-09", "EUR", "1.100000")], **key,
     )
@@ -511,9 +513,9 @@ def test_run_node_upsert_overwrites_by_key_and_keeps_the_constraint(clean_schema
 
 
 @pytest.mark.integration
-def test_run_node_append_into_a_drifted_table_fails_naming_the_column(clean_schema, tmp_path, capsys):
+def test_run_node_append_into_a_drifted_table_fails_naming_the_column(clean_schema, tmp_path, capsys, fx_run_env):
     _seed(clean_schema, "fx_rates", "rate_date date NOT NULL, base varchar(3) NOT NULL", "")
-    env = _fx_run_env(tmp_path, clean_schema, "run1", [("2026-10-08", "EUR", "1.081200")], mode_type="append")
+    env = fx_run_env(tmp_path, clean_schema, "run1", [("2026-10-08", "EUR", "1.081200")], mode_type="append")
     assert run_node(env, adapter=_adapter()) == 1
     out = capsys.readouterr().out
     assert '"message":"LoadError: table runtime_it.fx_rates does not match' in out

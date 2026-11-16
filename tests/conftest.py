@@ -1,19 +1,46 @@
 """Shared test fixtures."""
 
+import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
 from continuo_engine_contract.port import AppendCapable, LiveColumn, UpsertCapable
 
-from continuo_python_runtime.contract.model import Column, Node
+from continuo_python_runtime.contract.loader import load_contract_dir
+from continuo_python_runtime.contract.model import Node
+from tests.odcs_builder import contract_node, write_contract
+
+DEMO = Path(__file__).resolve().parent / "fixtures" / "demo" / "service-py"
+DEMO_CONTRACTS = DEMO / "contracts"
+DEMO_OLD = DEMO / "old"
+
+# The scripts the demo contracts name, with fixed bytes so that every hash made from them is a
+# constant. py_daily_kpis imports kpi_math, so its import closure is not empty.
+DEMO_SCRIPTS = {
+    "scripts/py_daily_kpis.py": b"import kpi_math\n\n\ndef run(ctx):\n    return kpi_math.total(ctx.read('daily'))\n",
+    "scripts/kpi_math.py": b"def total(rows):\n    return rows\n",
+    "scripts/fx_eur_usd_rates.py": b"def run(ctx):\n    return None\n",
+}
+
+# The one node of `contract_repo` and `harness_repo`, and of `node_fixture`.
+NODE_T = {
+    "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
+    "criticality": "SECONDARY", "script": "scripts/t.py",
+    "reads": {"ids": "select id from analytics.a"},
+    "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
+}
 
 
 def _module_roots(module):
@@ -68,34 +95,109 @@ def isolated_import_state():
                 del sys.modules[name]
 
 
+def _node_repo(root: Path) -> Path:
+    """Write a repository of one node, ``analytics.t``: its script and ``contracts/t.odcs.yaml``."""
+    (root / "scripts").mkdir()
+    (root / "scripts" / "t.py").write_text("def run(ctx):\n    return ctx.read('ids')\n")
+    write_contract(root / "contracts", **NODE_T)
+    return root
+
+
 @pytest.fixture
 def contract_repo(tmp_path):
-    """Create a minimal contract repository with scripts and YAML files."""
-    (tmp_path / "contracts").mkdir()
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts" / "t.py").write_text("def run(ctx):\n    return ctx.read('ids')\n")
-    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
-        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
-        "criticality": "SECONDARY", "script": "scripts/t.py",
-        "reads": {"ids": "select id from analytics.a"},
-        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
-    }]}))
-    return tmp_path
+    """A minimal contract repository: one node's script and its ODCS contract."""
+    return _node_repo(tmp_path)
+
+
+@pytest.fixture
+def demo_contracts(tmp_path):
+    """A copy of the demo's three ODCS contracts, in ``<tmp>/contracts``."""
+    return Path(shutil.copytree(DEMO_CONTRACTS, tmp_path / "contracts"))
+
+
+@dataclass(frozen=True)
+class DemoRepo:
+    """The demo's repository: ``contracts`` holds its three ODCS contracts, ``old`` the
+    ``nodes:`` files of the format they replaced, ``root`` the scripts they name and
+    ``packages_file`` the package list of the image it runs, as ``pack`` reads it."""
+
+    root: Path
+    contracts: Path
+    old: Path
+    packages_file: Path
+
+    def old_entry(self, table: str) -> dict[str, Any]:
+        """The one ``nodes:`` entry of ``old/<table>.yml``."""
+        (entry,) = yaml.safe_load((self.old / f"{table}.yml").read_text(encoding="utf-8"))["nodes"]
+        return entry
+
+    def node(self, table: str) -> Node:
+        """The node ``contracts/<table>.odcs.yaml`` declares, as the loader reads it."""
+        (node,) = (n for n in load_contract_dir(self.contracts) if n.table == table)
+        return node
+
+
+@pytest.fixture
+def demo_repo(tmp_path, demo_contracts):
+    """The demo's contracts in ``<tmp>/contracts``, the old files in ``<tmp>/old`` and its scripts."""
+    for relative, data in DEMO_SCRIPTS.items():
+        script = tmp_path / relative
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_bytes(data)
+    old = Path(shutil.copytree(DEMO_OLD, tmp_path / "old"))
+    packages_file = tmp_path / "image-packages.json"
+    packages_file.write_text(json.dumps({"pyarrow": "26.0.0"}), encoding="utf-8")
+    return DemoRepo(root=tmp_path, contracts=demo_contracts, old=old, packages_file=packages_file)
+
+
+@dataclass(frozen=True)
+class FakeDocker:
+    """The ``docker`` executable `fake_docker` put first on ``PATH``: ``calls`` reads the
+    arguments of its last call, one per line."""
+
+    executable: Path
+
+    @property
+    def calls(self) -> list[str]:
+        return (self.executable.parent / "calls").read_text(encoding="utf-8").splitlines()
+
+
+@pytest.fixture
+def fake_docker(tmp_path, monkeypatch):
+    """Return a function that installs a ``docker`` which records its arguments, prints
+    ``stdout`` and ``stderr`` and exits with ``exit_code``, first on ``PATH``."""
+
+    def install(*, stdout: str = "", stderr: str = "", exit_code: int = 0) -> FakeDocker:
+        folder = tmp_path / "fake-docker"
+        folder.mkdir(exist_ok=True)
+        executable = folder / "docker"
+        executable.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' \"$@\" > {shlex.quote(str(folder / 'calls'))}\n"
+            f"printf '%s' {shlex.quote(stdout)}\n"
+            f"printf '%s' {shlex.quote(stderr)} >&2\n"
+            f"exit {exit_code}\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ['PATH']}")
+        return FakeDocker(executable)
+
+    return install
+
+
+@pytest.fixture
+def no_docker(tmp_path, monkeypatch):
+    """Leave no ``docker`` on ``PATH``: it holds one empty folder."""
+    empty = tmp_path / "empty-path"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
 
 
 @pytest.fixture
 def node_fixture():
     """A Node with a single declared read."""
-    return Node(
-        schema="analytics",
-        table="t",
-        owner="m",
-        schedule="daily",
-        criticality="SECONDARY",
-        script="scripts/t.py",
-        reads={"ids": "select id from analytics.a"},
-        output_columns=(Column("id", "INTEGER", nullable=False),),
-    )
+    return contract_node(**NODE_T)
 
 
 class FakeWarehouseAdapter:
@@ -183,17 +285,8 @@ class FakeUpsertAdapter(FakeWarehouseAdapter, UpsertCapable):
 
 @pytest.fixture
 def harness_repo(tmp_path):
-    """Create a minimal contract repository with scripts and YAML files."""
-    (tmp_path / "contracts").mkdir()
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts" / "t.py").write_text("def run(ctx):\n    return ctx.read('ids')\n")
-    (tmp_path / "contracts" / "t.yml").write_text(yaml.safe_dump({"nodes": [{
-        "schema": "analytics", "table": "t", "owner": "m", "schedule": "daily",
-        "criticality": "SECONDARY", "script": "scripts/t.py",
-        "reads": {"ids": "select id from analytics.a"},
-        "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
-    }]}))
-    return tmp_path
+    """A minimal repository for the harness: one node's script and its ODCS contract."""
+    return _node_repo(tmp_path)
 
 
 @pytest.fixture(scope="session")

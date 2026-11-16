@@ -10,6 +10,8 @@ that does not exist. This test names the rule at the source instead.
 """
 
 import re
+import tomllib
+from importlib import metadata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,3 +50,13 @@ def test_every_contract_pin_matches_the_contract_package_version():
     assert not drifted, (
         f"contract pin drift: {SOURCE_OF_TRUTH} declares {expected}, but {drifted}"
     )
+
+
+def test_the_runtime_pins_continuo_contracts_0_2_0():
+    """The hashing and contract-reading library is pinned exactly, and the
+    environment the tests run in installs that same version."""
+    with (ROOT / "pyproject.toml").open("rb") as fh:
+        dependencies = tomllib.load(fh)["project"]["dependencies"]
+    pins = [d for d in dependencies if d.startswith("continuo-contracts")]
+    assert pins == ["continuo-contracts==0.2.0"]
+    assert metadata.version("continuo-contracts") == "0.2.0"

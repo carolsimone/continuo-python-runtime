@@ -34,7 +34,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `validate` and the loader refuse a read query that names a table without its
   schema. The one exception is a reference to a CTE that is in scope where the
   name is used, so the body of `WITH orders AS (SELECT * FROM orders)` still has
-  to name the schema of the table it reads.
+  to name the schema of the table it reads. The CTEs of a `WITH RECURSIVE` list
+  all see each other.
 - A node of kind `python-model` is read as `python-node`, as the library reads
   it.
 

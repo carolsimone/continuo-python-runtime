@@ -135,6 +135,45 @@ def test_a_name_is_a_cte_only_where_a_cte_of_that_name_is_in_scope(sql, tables, 
     assert unqualified_tables(sql, dialect=dialect) == tables
 
 
+# Under WITH RECURSIVE every CTE of the list is in scope in every body of the list
+# and in the query the WITH heads, whatever the order they are defined in.
+RECURSIVE_WITH_CASES = [
+    pytest.param(
+        "WITH RECURSIVE a AS (SELECT * FROM b), b AS (SELECT 1 AS x) SELECT * FROM a",
+        [],
+        id="a-recursive-with-lets-a-cte-read-one-defined-after-it",
+    ),
+    pytest.param(
+        "WITH a AS (SELECT * FROM b), b AS (SELECT 1 AS x) SELECT * FROM a",
+        ["b"],
+        id="a-non-recursive-with-does-not",
+    ),
+    pytest.param(
+        "WITH RECURSIVE t AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM t JOIN orders ON 1 = 1) SELECT * FROM t",
+        ["orders"],
+        id="a-recursive-with-still-reads-the-tables-that-are-not-its-ctes",
+    ),
+    pytest.param(
+        "WITH RECURSIVE a AS (SELECT 1 AS x) SELECT * FROM a WHERE x IN (SELECT y FROM b) "
+        "AND x IN (WITH RECURSIVE c AS (SELECT 1 AS y), b AS (SELECT 1 AS y) SELECT y FROM c)",
+        ["b"],
+        id="the-ctes-of-a-recursive-with-in-a-subquery-are-not-visible-outside-it",
+    ),
+    pytest.param(
+        "SELECT * FROM (WITH RECURSIVE a AS (SELECT * FROM b), b AS (SELECT 1 AS x) SELECT * FROM a) s "
+        "JOIN b ON 1 = 1",
+        ["b"],
+        id="the-ctes-of-a-recursive-with-in-a-derived-table-are-not-visible-outside-it",
+    ),
+]
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "duckdb", None])
+@pytest.mark.parametrize(("sql", "tables"), RECURSIVE_WITH_CASES)
+def test_a_recursive_with_sees_all_its_ctes(sql, tables, dialect):
+    assert unqualified_tables(sql, dialect=dialect) == tables
+
+
 @pytest.mark.parametrize("dialect", ["duckdb", None])
 def test_a_pivoted_reference_to_a_cte_is_still_a_reference_to_it(dialect):
     sql = "WITH t AS (SELECT 1 AS a) SELECT * FROM t PIVOT(SUM(a) FOR a IN (1, 2))"

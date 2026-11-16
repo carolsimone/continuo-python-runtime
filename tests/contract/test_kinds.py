@@ -39,6 +39,16 @@ def test_sql_reads_accepts_reads_that_name_their_schemas():
     assert SqlReads().validate(reads, "L", dialect="postgres", check_reads=True) == reads
 
 
+@pytest.mark.parametrize("dialect", ["duckdb", None])
+def test_duckdb_pivot_statements_pass_validate_when_they_name_their_schemas(dialect):
+    reads = {
+        "wide": "with p as (pivot analytics.t on a using sum(b)) select * from p",
+        "long": "with p as (unpivot s.t on a, b into name k value v) select * from p",
+        "both": "select 1 union all (pivot s.t on a using sum(b))",
+    }
+    assert SqlReads().validate(reads, "L", dialect=dialect, check_reads=True) == reads
+
+
 def test_an_unqualified_table_fails_validate():
     with pytest.raises(ContractError) as exc:
         SqlReads().validate({"x": "select * from orders"}, "L", dialect=None, check_reads=True)

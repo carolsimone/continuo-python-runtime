@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import sqlglot
 from sqlglot import exp
-from sqlglot.optimizer.scope import traverse_scope
 
 
 def unqualified_tables(sql: str, *, dialect: str | None) -> list[str]:
@@ -40,50 +39,43 @@ def unqualified_tables(sql: str, *, dialect: str | None) -> list[str]:
     own error: callers check that the query is one read first.
     """
     parsed = sqlglot.parse_one(sql, dialect=dialect)
-    cte_references = _scoped_cte_references(parsed)
 
     named: list[str] = []
     for table in parsed.find_all(exp.Table):
-        if table.db or id(table) in cte_references:
+        if table.db:
             continue
         name = table.name.lower() or _sql_text(table, dialect)
-        if name in _recursive_cte_names(table) or name in named:
+        if (table.name and _names_a_visible_cte(table, name)) or name in named:
             continue
         named.append(name)
     return named
 
 
-def _scoped_cte_references(parsed: exp.Expr) -> set[int]:
-    """The ``id`` of every table of ``parsed`` that names a CTE in its sqlglot scope.
+def _names_a_visible_cte(table: exp.Table, name: str) -> bool:
+    """Whether the unqualified ``table`` refers to a CTE called ``name`` (lower case).
 
-    A scope sees the CTEs defined before it, and a CTE sees itself only under
-    ``WITH RECURSIVE``. Names compare in lower case. A table that no scope
-    reaches is not in the result, so it counts as a table.
+    Climbs from the table through its parents, so every kind of statement
+    resolves the same way, one sqlglot cannot build a scope for (DuckDB's
+    ``PIVOT`` statement) included. A query that carries a ``WITH`` clause shows
+    every CTE of the clause to everything under it except the clause itself. A
+    CTE body sees, in the clause it stands in, the CTEs defined before it, or
+    all of them under ``WITH RECURSIVE``. Names compare in lower case.
     """
-    references: set[int] = set()
-    for scope in traverse_scope(parsed):
-        visible = {name.lower() for name in scope.cte_sources}
-        references.update(
-            id(table) for table in scope.tables if not table.db and table.name.lower() in visible
-        )
-    return references
-
-
-def _recursive_cte_names(table: exp.Table) -> set[str]:
-    """The lower-case names of the CTEs of every ``WITH RECURSIVE`` list that holds ``table``.
-
-    ``table`` is held by a list when it stands in one of its CTE bodies, in the
-    query that carries the list or in a subquery of either. A list that is not
-    recursive adds nothing: sqlglot's scopes already resolve its names.
-    """
-    names: set[str] = set()
-    node: exp.Expr | None = table.parent
+    child: exp.Expr = table
+    node = table.parent
     while node is not None:
-        with_ = node.args.get("with_")
-        if isinstance(with_, exp.With) and with_.recursive:
-            names.update(cte.alias.lower() for cte in with_.expressions)
-        node = node.parent
-    return names
+        visible: list[exp.Expr]
+        if isinstance(node, exp.With):
+            ctes = list(node.expressions)
+            position = next((i for i, cte in enumerate(ctes) if cte is child), 0)
+            visible = ctes if node.recursive else ctes[:position]
+        else:
+            clause = node.args.get("with_")
+            visible = list(clause.expressions) if isinstance(clause, exp.With) and clause is not child else []
+        if any(cte.alias.lower() == name for cte in visible):
+            return True
+        child, node = node, node.parent
+    return False
 
 
 def _sql_text(table: exp.Table, dialect: str | None) -> str:

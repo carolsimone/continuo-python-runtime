@@ -5,6 +5,8 @@ for the same queries. CTE_SCOPE_CASES pin which names refer to a CTE: only one t
 scope where the name is written.
 """
 
+import logging
+
 import pytest
 from sqlglot.errors import ParseError
 
@@ -178,6 +180,45 @@ def test_a_recursive_with_sees_all_its_ctes(sql, tables, dialect):
 def test_a_pivoted_reference_to_a_cte_is_still_a_reference_to_it(dialect):
     sql = "WITH t AS (SELECT 1 AS a) SELECT * FROM t PIVOT(SUM(a) FOR a IN (1, 2))"
     assert unqualified_tables(sql, dialect=dialect) == []
+
+
+# DuckDB's PIVOT and UNPIVOT statements are queries of their own, and sqlglot cannot build
+# a scope for them: the rule resolves their tables like any other.
+PIVOT_STATEMENT_CASES = [
+    pytest.param(
+        "WITH p AS (PIVOT analytics.t ON a USING sum(b)) SELECT * FROM p",
+        [],
+        id="a-cte-that-is-a-pivot-statement",
+    ),
+    pytest.param(
+        "WITH a AS (SELECT 1 AS x, 2 AS y) SELECT * FROM (PIVOT a ON x USING sum(y)) p",
+        [],
+        id="a-pivot-statement-that-reads-a-cte",
+    ),
+    pytest.param(
+        "WITH p AS (UNPIVOT s.t ON a, b INTO NAME k VALUE v) SELECT * FROM p",
+        [],
+        id="a-cte-that-is-an-unpivot-statement",
+    ),
+    pytest.param(
+        "SELECT 1 UNION ALL (PIVOT s.t ON a USING sum(b))",
+        [],
+        id="a-pivot-statement-as-an-operand-of-a-set-operation",
+    ),
+    pytest.param(
+        "WITH p AS (PIVOT orders ON a USING sum(b)) SELECT * FROM p",
+        ["orders"],
+        id="a-pivot-statement-still-reads-the-table-it-names",
+    ),
+]
+
+
+@pytest.mark.parametrize("dialect", ["duckdb", None])
+@pytest.mark.parametrize(("sql", "tables"), PIVOT_STATEMENT_CASES)
+def test_a_pivot_statement_resolves_like_any_other_query(sql, tables, dialect, caplog):
+    caplog.set_level(logging.DEBUG)
+    assert unqualified_tables(sql, dialect=dialect) == tables
+    assert caplog.records == [], "sqlglot logged while the schema rule ran"
 
 
 @pytest.mark.parametrize("dialect", DIALECTS)

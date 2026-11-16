@@ -558,7 +558,7 @@ def test_readme_and_template_name_images_the_publisher_emits():
     Continuo's chart pin ``<name>:vX.Y.Z@sha256:<digest>``. The version is read
     from the root pyproject so neither the README nor the template Dockerfile
     can stay behind a version bump unnoticed: every tag they name is the
-    package's version or a later one.
+    package's version or a later one, and they all name the same one.
     """
     import re
     import tomllib
@@ -583,6 +583,8 @@ def test_readme_and_template_name_images_the_publisher_emits():
     ]
     behind = [f"{where} names v{tag}" for where, tag in named if _version_tuple(tag) < _version_tuple(version)]
     assert not behind, f"behind the package version {version}: {behind}"
+    one_version = {tag for _, tag in named}
+    assert len(one_version) == 1, f"the README and the template name different versions: {sorted(named)}"
 
 
 def _readme_pip_pin_step():

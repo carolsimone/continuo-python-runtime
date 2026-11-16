@@ -247,9 +247,10 @@ The runtime keeps four rules of its own on top of the library's:
   names its schema (`pg_catalog.generate_series(1, 3)`) reads no relation and
   is not checked. `validate`, `pack` and `hash` refuse a
   read query that breaks either rule, naming the file, the query and the
-  first table without a schema. Continuo applies the same schema rule when it
-  resolves a release (it raises `UnqualifiedTableReference` and rejects the
-  whole release otherwise), so CI refuses what the release would refuse.
+  first table without a schema. Continuo refuses, when it resolves a release,
+  a read query that names a table without its schema (it raises
+  `UnqualifiedTableReference` and rejects the whole release), so CI refuses at
+  least what the release refuses.
   Tables outside Continuo's registry are allowed (external sources) and
   produce no edge.
 - **Read queries are dialect-bound, not dialect-neutral**: Continuo parses,

@@ -197,9 +197,9 @@ query must be one `SELECT` (or `WITH`) statement, and every table it reads
 must name its schema: `analytics.orders`, never `orders`. The one name that
 goes without a schema is a reference to a CTE that is in scope where the name
 is used, so in `WITH orders AS (SELECT * FROM orders) SELECT * FROM orders` the
-`orders` inside the CTE is a table and must name its schema. continuo applies
-the same schema rule to the read queries of a release, so CI refuses what the
-release would refuse.
+`orders` inside the CTE is a table and must name its schema. continuo refuses,
+when it resolves a release, a read query that names a table without its schema,
+so CI refuses at least what the release refuses.
 
 SQL a driver accepts but a parser refuses fails these checks, most often a
 driver's bind placeholder such as psycopg2's `%(name)s`, which `ctx.read(name)`

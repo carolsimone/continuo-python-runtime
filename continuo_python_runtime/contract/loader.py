@@ -143,7 +143,7 @@ def node_from_contract(
     the kind's reads rule (:mod:`~continuo_python_runtime.contract.kinds`),
     which, unless ``check_reads`` is false, parses each read of a python-node
     as one read query under ``dialect`` and refuses a read that names a table
-    without its schema (a CTE of the read excepted); the shape of ``config``;
+    without its schema (a reference to a CTE in scope excepted); the shape of ``config``;
     and the case-insensitive uniqueness of an upsert key's names.
 
     The node takes ``owner`` from ``team.name``, ``description`` from

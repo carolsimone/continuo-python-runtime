@@ -37,7 +37,7 @@ class SqlReads(ReadsRule):
     """A non-empty mapping of read name -> single SELECT.
 
     When the reads are checked, every table a query names must name its schema
-    (a CTE of the query excepted), as topology-controller requires of a release.
+    (a reference to a CTE in scope excepted).
     """
 
     def validate(

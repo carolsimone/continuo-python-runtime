@@ -5,6 +5,35 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-16
+
+**TL;DR**
+
+- The runtime reads ODCS contracts, through continuo-contracts 0.2.0: one
+  `<table>.odcs.yaml` file per node. The `nodes:` format is no longer read.
+- `continuo-runtime pack` replaces `merge`. It writes `odcs-bundle.json`, and
+  the release kind is now `python-odcs`.
+- `continuo-runtime packages` prints the packages of an image, and `pack`
+  records them in the bundle.
+- `validate` refuses a read query that names a table without its schema.
+- A node converted to ODCS with the same values keeps its `content_hash`.
+
+**Upgrade**
+
+1. Rename each contract to `<table>.odcs.yaml` and write it in ODCS. The
+   conversion guide is "Converting a contract file" in
+   `docs/boundary-contract.md`.
+2. Build your image `FROM` the `v0.13.0` engine image. CI installs
+   `continuo-python-runtime==0.13.0` from the `FROM` line.
+3. In CI, build and push the image, then run
+   `continuo-runtime pack contracts/ --service <name> --repo-root . --image <pushed image> --out odcs-bundle.json`.
+4. Upload `odcs-bundle.json` to
+   `s3://<bucket>/<service>/<release_id>/odcs-bundle.json` and post the release
+   with kind `python-odcs`, which continuo accepts from the chart release that
+   carries continuo's PR-1a.
+
+Versions: runtime 0.13.0 (pins continuo-contracts 0.2.0), engine contract 0.10.0, postgres adapter 0.4.0, trino adapter 0.5.0, duckdb adapter 0.3.0.
+
 ### Breaking
 
 - The runtime reads only ODCS contracts, through continuo-contracts 0.2.0:

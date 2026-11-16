@@ -29,8 +29,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
    `continuo-runtime pack contracts/ --service <name> --repo-root . --image <pushed image> --out odcs-bundle.json`.
 4. Upload `odcs-bundle.json` to
    `s3://<bucket>/<service>/<release_id>/odcs-bundle.json` and post the release
-   with kind `python-odcs`, which continuo accepts from the chart release that
-   carries continuo's PR-1a.
+   with kind `python-odcs`. continuo accepts that kind from the first chart
+   release whose CHANGELOG names it.
 
 Versions: runtime 0.13.0 (pins continuo-contracts 0.2.0), engine contract 0.10.0, postgres adapter 0.4.0, trino adapter 0.5.0, duckdb adapter 0.3.0.
 

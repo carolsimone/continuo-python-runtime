@@ -58,6 +58,13 @@ def test_a_cte_in_one_read_does_not_hide_the_same_name_in_another():
         SqlReads().validate(reads, "L", dialect="postgres", check_reads=True)
 
 
+def test_a_read_that_names_a_table_inside_the_cte_of_the_same_name_fails_validate():
+    reads = {"x": "with orders as (select * from orders) select * from orders"}
+    with pytest.raises(ContractError) as exc:
+        SqlReads().validate(reads, "L", dialect="postgres", check_reads=True)
+    assert str(exc.value) == "L: read 'x' names table 'orders' without its schema; write <schema>.orders"
+
+
 def test_a_nameless_table_with_no_schema_is_named_by_its_sql_text():
     with pytest.raises(ContractError) as exc:
         SqlReads().validate(

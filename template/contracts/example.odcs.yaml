@@ -31,7 +31,8 @@ customProperties:
   # instead of sqlglot's dialect-neutral grammar.
   #
   # Every table a query reads names its schema: analytics.upstream_orders,
-  # never upstream_orders. Only a CTE of the query is named without one.
+  # never upstream_orders. Only a reference to a CTE that is in scope where the
+  # name is used goes without one.
   - vendor: continuo
     property: readQueries
     value:

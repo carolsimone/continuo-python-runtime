@@ -194,10 +194,12 @@ carry, and how a contract in another format converts to ODCS.
 `validate`, `pack` and `hash` hand every read query to a real SQL parser
 (sqlglot, through `continuo_engine_contract.sql.ensure_single_read`). Each
 query must be one `SELECT` (or `WITH`) statement, and every table it reads
-must name its schema: `analytics.orders`, never `orders`. A CTE of the query
-is the one name that goes without a schema. continuo applies the same schema
-rule to the read queries of a release, so CI refuses what the release would
-refuse.
+must name its schema: `analytics.orders`, never `orders`. The one name that
+goes without a schema is a reference to a CTE that is in scope where the name
+is used, so in `WITH orders AS (SELECT * FROM orders) SELECT * FROM orders` the
+`orders` inside the CTE is a table and must name its schema. continuo applies
+the same schema rule to the read queries of a release, so CI refuses what the
+release would refuse.
 
 SQL a driver accepts but a parser refuses fails these checks, most often a
 driver's bind placeholder such as psycopg2's `%(name)s`, which `ctx.read(name)`

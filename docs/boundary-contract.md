@@ -236,9 +236,13 @@ The runtime keeps four rules of its own on top of the library's:
 
 - **Each read query is one statement starting with `SELECT` or `WITH`, and
   every table it reads names its schema** (`analytics.table_a`, never
-  `table_a`). A CTE of the query is the one name that goes without a schema;
-  a table function that names its schema (`pg_catalog.generate_series(1, 3)`)
-  reads no relation and is not checked. `validate`, `pack` and `hash` refuse a
+  `table_a`). The one name that goes without a schema is a reference to a CTE
+  that is in scope where the name is used: a CTE is in scope in the CTEs
+  defined after it, in the query that carries its `WITH` clause and in the
+  subqueries of those, and in its own body only under `WITH RECURSIVE`. In
+  `WITH a AS (SELECT * FROM a) SELECT * FROM a` the `a` inside the CTE is a
+  table and must name its schema. A table function that names its schema
+  (`pg_catalog.generate_series(1, 3)`) reads no relation and is not checked. `validate`, `pack` and `hash` refuse a
   read query that breaks either rule, naming the file, the query and the
   first table without a schema. Continuo applies the same schema rule when it
   resolves a release (it raises `UnqualifiedTableReference` and rejects the

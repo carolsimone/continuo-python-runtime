@@ -40,7 +40,8 @@ This is a copy-ready template for implementing a [continuo Python domain repo](h
    that reads two tables, and `contracts/example_csv.odcs.yaml` loads a csv file
    with no script. `validate` refuses any other file in `contracts/` whose name
    ends in `.yml` or `.yaml`. Each read query names the schema of every table it
-   reads (`analytics.orders`, never `orders`); only a CTE goes without one.
+   reads (`analytics.orders`, never `orders`); only a reference to a CTE that
+   is in scope where the name is used goes without one.
 8. **Push to main** to trigger the release pipeline
 
 ## Choosing a base

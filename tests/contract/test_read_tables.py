@@ -1,7 +1,8 @@
 """The schema rule for read queries: every table a read names must name its schema.
 
-The cases mirror topology-controller's `referenced_tables`, which refuses the same
-queries when a release is loaded, so producer CI and the release agree.
+TOPOLOGY_CONTROLLER_CASES are the answers topology-controller's `referenced_tables` gives
+for the same queries. CTE_SCOPE_CASES pin which names refer to a CTE: only one that is in
+scope where the name is written.
 """
 
 import pytest
@@ -10,6 +11,8 @@ from sqlglot.errors import ParseError
 from continuo_python_runtime.contract.read_tables import unqualified_tables
 
 DIALECTS = ["postgres", None]
+# The dialects of the engines a service can run on, and sqlglot's neutral grammar.
+ENGINE_DIALECTS = ["postgres", "trino", "duckdb", None]
 
 # (case id, the read queries, the answer for each query). The answer is what
 # topology-controller does with the same query: a query it refuses lists the
@@ -77,6 +80,65 @@ TOPOLOGY_CONTROLLER_CASES = [
 @pytest.mark.parametrize(("queries", "answers"), TOPOLOGY_CONTROLLER_CASES)
 def test_the_schema_rule_matches_topology_controller(queries, answers, dialect):
     assert [unqualified_tables(sql, dialect=dialect) for sql in queries] == list(answers)
+
+
+# A name with no schema is a CTE only where a CTE of that name is in scope: the
+# body of a non-recursive CTE does not see the CTE it defines, an earlier CTE is
+# visible to a later one, and a CTE of a subquery is not visible outside it.
+CTE_SCOPE_CASES = [
+    pytest.param(
+        "WITH orders AS (SELECT * FROM orders) SELECT * FROM orders",
+        ["orders"],
+        id="the-body-of-a-cte-reads-the-table-not-the-cte-it-defines",
+    ),
+    pytest.param(
+        "WITH RECURSIVE t AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM t WHERE n < 3) SELECT * FROM t",
+        [],
+        id="a-recursive-cte-reads-itself",
+    ),
+    pytest.param(
+        "WITH a AS (SELECT 1 AS x), b AS (SELECT * FROM a) SELECT * FROM b",
+        [],
+        id="a-cte-reads-an-earlier-cte",
+    ),
+    pytest.param(
+        "WITH a AS (SELECT * FROM b), b AS (SELECT 1 AS x) SELECT * FROM a",
+        ["b"],
+        id="a-cte-is-not-visible-before-it-is-defined",
+    ),
+    pytest.param(
+        "SELECT * FROM (WITH users AS (SELECT 1 AS id) SELECT * FROM users) s JOIN users ON 1 = 1",
+        ["users"],
+        id="a-cte-of-a-subquery-is-not-visible-outside-it",
+    ),
+    pytest.param(
+        "WITH users AS (SELECT 1 AS id) SELECT * FROM users WHERE id IN (SELECT id FROM users)",
+        [],
+        id="a-cte-is-visible-in-a-subquery-of-the-query-that-defines-it",
+    ),
+    pytest.param(
+        "WITH Orders AS (SELECT 1 AS id) SELECT * FROM ORDERS",
+        [],
+        id="a-cte-reference-matches-the-cte-in-lower-case",
+    ),
+    pytest.param(
+        "SELECT * FROM s.x, LATERAL (SELECT * FROM x) l",
+        ["x"],
+        id="a-qualified-table-does-not-make-the-same-unqualified-name-a-reference",
+    ),
+]
+
+
+@pytest.mark.parametrize("dialect", ENGINE_DIALECTS)
+@pytest.mark.parametrize(("sql", "tables"), CTE_SCOPE_CASES)
+def test_a_name_is_a_cte_only_where_a_cte_of_that_name_is_in_scope(sql, tables, dialect):
+    assert unqualified_tables(sql, dialect=dialect) == tables
+
+
+@pytest.mark.parametrize("dialect", ["duckdb", None])
+def test_a_pivoted_reference_to_a_cte_is_still_a_reference_to_it(dialect):
+    sql = "WITH t AS (SELECT 1 AS a) SELECT * FROM t PIVOT(SUM(a) FOR a IN (1, 2))"
+    assert unqualified_tables(sql, dialect=dialect) == []
 
 
 @pytest.mark.parametrize("dialect", DIALECTS)

@@ -32,7 +32,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   environment as one JSON object of normalised name to version. Run in the
   service's image, it gives the list `pack` records.
 - `validate` and the loader refuse a read query that names a table without its
-  schema. A CTE of the same query is the one exception.
+  schema. The one exception is a reference to a CTE that is in scope where the
+  name is used, so the body of `WITH orders AS (SELECT * FROM orders)` still has
+  to name the schema of the table it reads.
 - A node of kind `python-model` is read as `python-node`, as the library reads
   it.
 

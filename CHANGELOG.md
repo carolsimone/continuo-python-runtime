@@ -45,6 +45,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The template ships `contracts/example.odcs.yaml` and
   `contracts/example_csv.odcs.yaml`, and its release workflow runs `pack` and
   submits the release with kind `python-odcs`.
+- The template's `Dockerfile` and the engine examples in the README build on the
+  `v0.13.0` engine images, the first with `pack` and `packages`, so a repository
+  copied from the template runs the runtime its contracts and workflow need.
 - The release check no longer asks for a version bump when only a package's
   `tests/` folder changed, because the wheel does not ship it.
 - `hash` only hashes: the lint of a node's import closure and the refusal of a

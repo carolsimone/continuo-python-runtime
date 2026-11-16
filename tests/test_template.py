@@ -403,6 +403,25 @@ def test_the_pin_step_parses_the_templates_own_dockerfile(tmp_path):
     assert code == 0 and written.startswith("RUNTIME_VERSION=")
 
 
+def _version_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+def test_the_template_builds_on_a_runtime_that_can_pack_its_contracts(tmp_path):
+    """The template's own Dockerfile names a runtime that has `pack`, the first being 0.13.0.
+
+    The release workflow installs the runtime the Dockerfile names and runs
+    `validate` and `pack` with it, and its contracts are ODCS files: a runtime
+    before 0.13.0 reads `nodes:` contracts and has no `pack` or `packages`
+    command, so a repository copied from the template would fail before it
+    built anything.
+    """
+    code, written, out = _pin(tmp_path, (TEMPLATE / "Dockerfile").read_text())
+    assert code == 0, out
+    version = written.removeprefix("RUNTIME_VERSION=").strip()
+    assert _version_tuple(version) >= (0, 13, 0), version
+
+
 def test_ci_installs_the_pinned_runtime_before_it_checks_the_installed_version():
     _, job = _release_job()
     steps = job["steps"]
@@ -538,8 +557,10 @@ def test_readme_and_template_name_images_the_publisher_emits():
     part of the image NAME and the tag is the bare version, which is what lets
     Continuo's chart pin ``<name>:vX.Y.Z@sha256:<digest>``. The version is read
     from the root pyproject so neither the README nor the template Dockerfile
-    can drift past a version bump unnoticed.
+    can stay behind a version bump unnoticed: every tag they name is the
+    package's version or a later one.
     """
+    import re
     import tomllib
 
     root = TEMPLATE.parent
@@ -547,9 +568,21 @@ def test_readme_and_template_name_images_the_publisher_emits():
     readme = (root / "README.md").read_text()
     dockerfile = (TEMPLATE / "Dockerfile").read_text()
 
+    def tags(text: str, engine: str) -> list[str]:
+        return re.findall(rf"continuo-python-runtime-{engine}:v(\d+\.\d+\.\d+)", text)
+
     for engine in ("postgres", "trino"):
-        assert f"continuo-python-runtime-{engine}:v{version}" in readme
-    assert f"continuo-python-runtime-postgres:v{version}" in dockerfile
+        assert tags(readme, engine), f"the README names no {engine} image"
+    assert tags(dockerfile, "postgres"), "the template Dockerfile names no postgres image"
+
+    named = [
+        (where, tag)
+        for where, text in (("README.md", readme), ("template/Dockerfile", dockerfile))
+        for engine in ("postgres", "trino", "duckdb")
+        for tag in tags(text, engine)
+    ]
+    behind = [f"{where} names v{tag}" for where, tag in named if _version_tuple(tag) < _version_tuple(version)]
+    assert not behind, f"behind the package version {version}: {behind}"
 
 
 def _readme_pip_pin_step():

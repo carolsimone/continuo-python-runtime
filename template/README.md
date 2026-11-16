@@ -79,10 +79,12 @@ continuo-<engine>-adapter==X.Y.Z
 EOF
 ```
 
-The committed `requirements.lock` in this template is a **placeholder**: the
-adapters were not yet published to PyPI when it was written, so it has no
-`--hash` entries and `pip install --require-hashes` will refuse to install it
-as-is. Regenerate it once your chosen adapter version is actually on PyPI.
+The committed `requirements.lock` in this template is a **placeholder**: it
+locks `continuo-python-runtime==0.4.1` and `continuo-postgres-adapter==0.2.0`,
+which are older than runtime 0.13.0, the first the release workflow can use (it
+reads ODCS contracts and has `pack`). Regenerate it with the command above for
+runtime 0.13.0 or later, and the matching adapter, before you build with
+`Dockerfile.pip`.
 
 The release workflow's `Pin the runtime to the image` step reads the runtime
 version from the `FROM` line of `Dockerfile`, which a `Dockerfile.pip`

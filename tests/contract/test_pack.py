@@ -16,7 +16,7 @@ from continuo_python_runtime.contract.pack import (
 )
 from continuo_python_runtime.errors import ContractError
 from continuo_python_runtime.hashing import shared_code_hash
-from tests.conftest import DEMO_SCRIPTS, NODE_T
+from tests.conftest import DEMO_SCRIPTS, NODE_T, NODE_T_BOUND
 from tests.odcs_builder import contract_text, write_contract
 from tests.test_hashing import RELEASED_0_12_0
 
@@ -68,6 +68,25 @@ def test_the_bundle_has_the_documented_shape(contract_repo):
             }
         ],
     }
+
+
+def test_pack_keeps_the_bindings_in_the_bundle(tmp_path):
+    bound, plain = tmp_path / "bound", tmp_path / "plain"
+    for repo in (bound, plain):
+        write_script(repo, "scripts/t.py")
+    written = write_contract(bound / "contracts", **NODE_T_BOUND)
+    write_contract(plain / "contracts", **NODE_T)
+    bundle = bundle_of(bound)
+    (node,) = bundle["nodes"]
+    assert set(node) == NODE_KEYS
+    assert node["text"] == written.read_text(encoding="utf-8")
+    assert "property: entity" in node["text"] and "value: Order.id" in node["text"]
+    assert bundle["producer"] == {
+        "continuo_python_runtime": metadata.version("continuo-python-runtime"),
+        "continuo_contracts": "0.4.1",
+    }
+    (unbound,) = bundle_of(plain)["nodes"]
+    assert (node["source_hash"], node["shared_code_hash"]) == (unbound["source_hash"], unbound["shared_code_hash"])
 
 
 def test_a_node_carries_exactly_four_keys(contract_repo):

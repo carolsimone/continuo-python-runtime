@@ -171,15 +171,15 @@ wheels = [
 
 [[package]]
 name = "continuo-contracts"
-version = "0.2.0"
+version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/69/3f/31880c31d671534757c97fb74fe1bcbfb6c360991ba290367653ea45c582/continuo_contracts-0.2.0.tar.gz", hash = "sha256:1a74b0b1b5a60405ba0ea53b7a2e3dd38478eb7a9e8883239fa0ba9092e73698", size = 287541, upload-time = "2026-11-15T17:35:01.733Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/e4/986e4dfbe41753f5722f6f78969cc0de7d8d9ae3130fa76c643a29f99c96/continuo_contracts-0.4.1.tar.gz", hash = "sha256:f713048ab18d0097d498f11ae40fe1e7d3a39c6fc2fe4c5436f827b768c22e25", size = 1631364, upload-time = "2026-11-20T23:34:15.222Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/17/95f08f0a06643d027f4f2374c53b98f7e5f44067b17125ddda90a1e760e1/continuo_contracts-0.2.0-py3-none-any.whl", hash = "sha256:f67ee1713902d01010d5254417c6e047cb7cc7c0ca04a9861ad6c42072d44bba", size = 122490, upload-time = "2026-11-15T17:35:00.283Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/ca/ee92fa61fa84370468a92a54c6f2290bee38f334b320059a9505e6480ef4/continuo_contracts-0.4.1-py3-none-any.whl", hash = "sha256:edb1054beb88db63b1baefba0f20ff9e257d00edb57d4642fd218c6c6a75bc75", size = 173149, upload-time = "2026-11-20T23:34:13.961Z" },
 ]
 
 [[package]]
@@ -309,7 +309,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = "==1.43.114" },
-    { name = "continuo-contracts", specifier = "==0.2.0" },
+    { name = "continuo-contracts", specifier = "==0.4.1" },
     { name = "continuo-engine-contract", editable = "contract" },
     { name = "pyarrow", specifier = "==26.0.0" },
     { name = "pyyaml", specifier = "==6.0.3" },

@@ -5,6 +5,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The runtime pins `continuo-contracts==0.4.1`. A Python contract may now carry
+  the ontology's binding properties: `entity`, `grain`, `fixed` and `filter` on
+  the table, `property`, `local` and `aggregate` on a column. The loader,
+  `validate`, `pack` and the harness accept them, `pack` writes them into the
+  bundle as the file has them, and a node's hashes are the same with or without
+  them.
+
 ## [0.13.0] - 2026-11-16
 
 **TL;DR**

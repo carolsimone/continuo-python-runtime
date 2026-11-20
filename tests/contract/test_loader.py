@@ -11,8 +11,10 @@ from continuo_contracts.python import node_from_odcs
 from continuo_python_runtime.contract.loader import load_contract_dir, node_from_contract
 from continuo_python_runtime.contract.model import Column
 from continuo_python_runtime.errors import ContractError
+from continuo_python_runtime.hashing import config_hash
 from continuo_python_runtime.types import parse_sql_type
-from tests.odcs_builder import contract_text, write_contract
+from tests.conftest import NODE_T_BOUND
+from tests.odcs_builder import contract_node, contract_text, write_contract
 
 DEMO = Path(__file__).resolve().parent.parent / "fixtures" / "demo" / "service-py"
 OLD_KPIS = (DEMO / "old" / "py_daily_kpis.yml").read_text(encoding="utf-8")
@@ -456,3 +458,28 @@ def test_check_reads_false_still_applies_every_contract_rule(tmp_path):
     file = write_contract(tmp_path, **{**FIELDS, "criticality": "WHENEVER"})
     with pytest.raises(ContractError, match=rf"{re.escape(str(file))}: .*`criticality` is 'WHENEVER'"):
         load_contract_dir(tmp_path, check_reads=False)
+
+
+# --- ontology bindings -----------------------------------------------------------
+
+
+def test_a_contract_with_bindings_loads(tmp_path):
+    file = write_contract(tmp_path, **NODE_T_BOUND)
+    text = file.read_text(encoding="utf-8")
+    assert "property: entity" in text and "property: property" in text and "property: local" in text
+    (node,) = load_contract_dir(tmp_path)
+    assert node.relation == "analytics.t"
+    assert [(c.name, c.type, c.nullable) for c in node.output_columns] == [
+        ("id", "INTEGER", False),
+        ("note", "VARCHAR(64)", True),
+    ]
+
+
+def test_a_contract_with_bindings_has_the_projection_hash_of_one_without():
+    bound = contract_node(**NODE_T_BOUND)
+    plain = contract_node(**{**NODE_T_BOUND, "entity": None, "output_columns": [
+        {"name": "id", "type": "INTEGER", "nullable": False},
+        {"name": "note", "type": "VARCHAR(64)"},
+    ]})
+    assert bound.python == plain.python
+    assert config_hash(bound) == config_hash(plain)

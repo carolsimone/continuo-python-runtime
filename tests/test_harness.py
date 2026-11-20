@@ -16,7 +16,7 @@ from continuo_python_runtime.harness import (
     run_node,
     select_node,
 )
-from tests.conftest import NODE_T, FakeWarehouseAdapter
+from tests.conftest import NODE_T, NODE_T_BOUND, FakeWarehouseAdapter
 from tests.odcs_builder import write_contract
 
 
@@ -63,6 +63,18 @@ def test_run_node_runs_the_smoke_node_from_its_odcs_file(capsys):
     assert adapter.ensured[:2] == ("analytics", "smoke")
     assert adapter.loaded[:2] == ("analytics", "smoke")
     assert adapter.loaded[2].num_rows == 3
+
+
+def test_the_harness_runs_a_node_whose_baked_contract_has_bindings(harness_repo, capsys):
+    write_contract(harness_repo / "contracts", **NODE_T_BOUND)
+    table = pa.table({"id": [1, 2], "note": ["a", "b"]})
+    ad = FakeWarehouseAdapter({"select id from analytics.a": table})
+    assert run_node(_env(harness_repo), adapter=ad) == 0
+    out = capsys.readouterr().out
+    body = json.loads(out.split("BEGIN===\n")[1].split("\n===CONTINUO")[0])
+    assert body["status"] == "success"
+    assert ad.loaded[0:2] == ("analytics", "t")
+    assert ad.loaded[2].num_rows == 2
 
 
 def test_script_print_cannot_corrupt_stdout(harness_repo, capsys):

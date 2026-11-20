@@ -114,7 +114,7 @@ def test_pack_writes_the_bundle(demo_repo, tmp_path):
                  "--image-packages", str(demo_repo.packages_file), "--out", str(out)]) == 0
     doc = json.loads(out.read_text())
     assert doc["bundle_version"] == 1 and doc["service"] == "service-py"
-    assert doc["producer"] == {"continuo_python_runtime": __version__, "continuo_contracts": "0.2.0"}
+    assert doc["producer"] == {"continuo_python_runtime": __version__, "continuo_contracts": "0.4.1"}
     assert doc["image_packages"] == {"pyarrow": "26.0.0"}
     assert [n["path"] for n in doc["nodes"]] == [
         "contracts/demo_orders_csv.odcs.yaml", "contracts/fx_eur_usd_rates.odcs.yaml", "contracts/py_daily_kpis.odcs.yaml"

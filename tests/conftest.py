@@ -42,6 +42,17 @@ NODE_T = {
     "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
 }
 
+# NODE_T bound to the ontology: the table stands for the thing Order, `id` is the Order's key
+# and `note` is a column that no thing owns.
+NODE_T_BOUND = {
+    **NODE_T,
+    "entity": "Order",
+    "output_columns": [
+        {"name": "id", "type": "INTEGER", "nullable": False, "property": "Order.id"},
+        {"name": "note", "type": "VARCHAR(64)", "local": True},
+    ],
+}
+
 
 def _module_roots(module):
     """Every filesystem location *module* was loaded from (`__path__` for packages)."""

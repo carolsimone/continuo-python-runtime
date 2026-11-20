@@ -15,7 +15,11 @@ Each field maps to one place of the contract:
 - `output_columns` are the properties of the schema object. Each is a mapping
   of `name`, `type` and, optionally, `nullable` (true when left out): `type` is
   the column's `physicalType` and a column with `nullable: False` is
-  `required: true`.
+  `required: true`. A column may also bind itself to the ontology with
+  `property` (`<Thing>.<field>`) or `local` (`True`), the `continuo` custom
+  properties of the same names on that column.
+- `entity` is the `continuo` custom property `entity` of the schema object,
+  the thing of the ontology that the table stands for.
 - `primary_key` sets `primaryKey: true` on the columns it names, with a
   `primaryKeyPosition` from 1 in the order given when it names more than one.
 - `reads` is the `readQueries` property, or, on a `python-csv` node, the
@@ -41,7 +45,9 @@ from continuo_contracts import yaml_strict
 from continuo_python_runtime.contract.loader import node_from_contract
 from continuo_python_runtime.contract.model import Node
 
-_COLUMN_KEYS = {"name", "type", "nullable"}
+# The ontology bindings a column may write, each the `continuo` custom property of that name.
+_COLUMN_BINDINGS = ("property", "local")
+_COLUMN_KEYS = {"name", "type", "nullable", *_COLUMN_BINDINGS}
 
 
 def contract_text(
@@ -64,6 +70,7 @@ def contract_text(
     primary_key: Sequence[str] | None = None,
     timeout_minutes: int | None = None,
     assets: Sequence[str] | None = None,
+    entity: str | None = None,
 ) -> str:
     """Return the YAML text of the ODCS contract that declares the node these fields describe.
 
@@ -108,13 +115,11 @@ def contract_text(
         for name, value in custom
         if value is not None
     ]
-    doc["schema"] = [
-        {
-            "name": table,
-            "physicalType": "table",
-            "properties": _columns(output_columns, primary_key or ()),
-        }
-    ]
+    table_object: dict[str, Any] = {"name": table, "physicalType": "table"}
+    if entity is not None:
+        table_object["customProperties"] = [{"vendor": "continuo", "property": "entity", "value": entity}]
+    table_object["properties"] = _columns(output_columns, primary_key or ())
+    doc["schema"] = [table_object]
     return yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
 
 
@@ -160,6 +165,13 @@ def _columns(
         prop: dict[str, Any] = {"name": column["name"], "physicalType": column["type"]}
         if column.get("nullable", True) is False:
             prop["required"] = True
+        bindings = [
+            {"vendor": "continuo", "property": name, "value": column[name]}
+            for name in _COLUMN_BINDINGS
+            if name in column
+        ]
+        if bindings:
+            prop["customProperties"] = bindings
         if column["name"] in primary_key:
             prop["primaryKey"] = True
             if len(primary_key) > 1:

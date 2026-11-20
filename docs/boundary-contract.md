@@ -98,11 +98,11 @@ over `--out` once it is complete. A refusal writes nothing.
   message names both. A folder with no contract file is refused.
 
 Each file holds one ODCS v3.2.0 data contract. The `continuo-contracts`
-library reads it with its strict YAML reader (YAML 1.2 core scalars; no
-aliases, no `<<` keys, no duplicate keys, no keys that are not strings, no tag
-beyond the core ones and one document per file), checks it against the ODCS
-v3.2.0 JSON schema, then checks continuo's own rules. Every issue it finds is
-reported, one line each, with the file and the place in it.
+library (this runtime pins 0.4.1) reads it with its strict YAML reader (YAML
+1.2 core scalars; no aliases, no `<<` keys, no duplicate keys, no keys that are
+not strings, no tag beyond the core ones and one document per file), checks it
+against the ODCS v3.2.0 JSON schema, then checks continuo's own rules. Every
+issue it finds is reported, one line each, with the file and the place in it.
 
 The template's script node:
 
@@ -158,7 +158,7 @@ is written at most once:
 
 | Property | Kinds | Value |
 | --- | --- | --- |
-| `service` | every kind, optional | The name of the node's service. `pack` refuses one that is not its `--service`. |
+| `service` | every kind, optional | The name of the node's service. `pack` and `validate --service` refuse one that is not their `--service`. |
 | `kind` | — | `python-node` (the default), `python-csv` or `python-api`. |
 | `schedule` | every kind, required | The name of the schedule that runs the node: no whitespace, at most 50 characters. |
 | `criticality` | every kind, required | `REGULATORY`, `CORE` or `SECONDARY`. |
@@ -204,6 +204,55 @@ The runtime keeps four rules of its own on top of the library's:
 - `config` is JSON-shaped: string keys, and values that are JSON scalars,
   lists or mappings;
 - the names of an upsert key are unique case-insensitively.
+
+### Ontology bindings
+
+A Python contract may bind its table and its columns to the company's
+ontology. The bindings are `continuo` properties, each written at most once in
+the list where it sits, and no kind needs them:
+
+| Property | Sits on | Value |
+| --- | --- | --- |
+| `entity` | the schema object | The name of the thing the table holds: a string with no whitespace, dot or slash. |
+| `grain` | the schema object | A list of one or more strings, for a table that aggregates instead of holding a thing. |
+| `fixed` | the schema object | A mapping of key part names to a string, a number or a boolean. |
+| `filter` | the schema object | A mapping of field names to a string, a number or a boolean. |
+| `property` | a column | `<Thing>.<field>`: the thing and the field the column holds. |
+| `local` | a column | `true`, for a column that no thing owns. A column that is not local leaves it out. |
+| `aggregate` | a column | A mapping with the keys `from` (`<Thing>` or `<Thing>.<field>`), `agg`, `where` and `period`, holding at least `from` or `period`. |
+
+The schema object's bindings sit in its own `customProperties`, and a column's
+in the column's:
+
+```yaml
+schema:
+  - name: example
+    physicalType: table
+    customProperties:
+      - {vendor: continuo, property: entity, value: Order}
+    properties:
+      - name: order_id
+        physicalType: INTEGER
+        required: true
+        customProperties:
+          - {vendor: continuo, property: property, value: Order.order_id}
+```
+
+A binding at the other place, or with a value of another shape, is refused like
+any property the library reads. The bindings change nothing the runtime does:
+the loader, `validate`, `pack` and the harness accept them, `pack` writes the
+file into the bundle as written, and neither the two hash parts of the bundle
+nor the code projection behind `config_hash` reads them, so a node's
+`content_hash` is the same with or without them.
+
+`continuo-runtime validate <folder> --service <name> --ontology <file>` checks
+every contract against the company's ontology file with the rules of
+`continuo-contracts` that need no other service (`contract`, `coverage`,
+`quality` and `privacy`): each contract is put in the library's stored form, `service` set to
+`--service`, and filled from the ontology before the rules run. The README
+("Checking against the ontology") gives the lines it logs and its exit codes.
+`--ontology` needs `--service`, and `--service` alone refuses a contract whose
+`service` names another service.
 
 ### Kinds
 

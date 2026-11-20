@@ -2,7 +2,10 @@
 
 import hashlib
 import json
+import subprocess
+import sys
 from importlib import metadata
+from pathlib import Path
 
 import pyarrow as pa
 import pytest
@@ -11,7 +14,7 @@ import continuo_python_runtime.cli as cli_module
 from continuo_python_runtime.cli import main
 from continuo_python_runtime.hash_inputs import gather_hash_inputs
 from continuo_python_runtime.hashing import hash_parts, shared_code_hash
-from tests.conftest import DEMO_SCRIPTS, NODE_T, FakeWarehouseAdapter
+from tests.conftest import DEMO_SCRIPTS, NODE_T, NODE_T_BOUND, ONTOLOGY_SERVICE, FakeWarehouseAdapter
 from tests.odcs_builder import write_contract
 
 __version__ = metadata.version("continuo-python-runtime")
@@ -461,3 +464,168 @@ def test_validation_op_subcommand_dispatches_runner(monkeypatch):
     from continuo_python_runtime.cli import main
     assert main(["validation-op"]) == 0
     assert calls == ["ran"]
+
+
+# --- validate --service and validate --ontology -------------------------------------
+#
+# These run `continuo-runtime` as a process: the exit code, the empty stdout and the lines of
+# stderr are what a service's CI sees.
+
+CONTINUO_RUNTIME = Path(sys.executable).with_name("continuo-runtime")
+LOG = "ERROR continuo_python_runtime.cli: "
+UNBOUND_COLUMN = {"name": "extra", "type": "INTEGER"}
+
+
+def _run(argv):
+    return subprocess.run([str(CONTINUO_RUNTIME), *argv], capture_output=True, text=True, check=False)
+
+
+def _validate(repo, *flags):
+    return _run(["validate", str(repo / "contracts"), *flags])
+
+
+def _bound(repo, **over):
+    """Write the contract of NODE_T_BOUND, changed by ``over``, as the one node of ``repo``."""
+    return write_contract(repo / "contracts", **{**NODE_T_BOUND, **over})
+
+
+def _stderr_lines(result):
+    return result.stderr.splitlines()
+
+
+def test_validate_without_the_new_flags_is_unchanged(contract_repo, tmp_path):
+    ok = _validate(contract_repo)
+    assert (ok.returncode, ok.stdout, ok.stderr) == (0, "", "")
+    # No service is checked, so a contract may name any service, and a bound one validates as before.
+    write_contract(contract_repo / "contracts", **{**NODE_T, "service": "anyone"})
+    assert _validate(contract_repo).returncode == 0
+    _bound(contract_repo)
+    bound = _validate(contract_repo)
+    assert (bound.returncode, bound.stdout, bound.stderr) == (0, "", "")
+    missing = _run(["validate", str(tmp_path / "empty")])
+    assert (missing.returncode, missing.stdout) == (1, "")
+    assert _stderr_lines(missing) == [f"{LOG}no contract files found in {tmp_path / 'empty'}"]
+
+
+def test_validate_with_service_refuses_a_contract_of_another_service(contract_repo):
+    file = write_contract(contract_repo / "contracts", **{**NODE_T, "service": "other"})
+    refused = _validate(contract_repo, "--service", ONTOLOGY_SERVICE)
+    assert (refused.returncode, refused.stdout) == (1, "")
+    (line,) = _stderr_lines(refused)
+    assert line.startswith(f"{LOG}{file}: ") and "'other'" in line and repr(ONTOLOGY_SERVICE) in line
+    write_contract(contract_repo / "contracts", **{**NODE_T, "service": ONTOLOGY_SERVICE})
+    accepted = _validate(contract_repo, "--service", ONTOLOGY_SERVICE)
+    assert (accepted.returncode, accepted.stdout, accepted.stderr) == (0, "", "")
+
+
+def test_ontology_without_service_is_a_usage_error(contract_repo, ontology_file):
+    result = _validate(contract_repo, "--ontology", str(ontology_file))
+    assert (result.returncode, result.stdout) == (2, "")
+    assert "continuo-runtime validate: error: --ontology needs --service" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_a_contract_with_bindings_validates_with_and_without_the_ontology(contract_repo, ontology_file):
+    _bound(contract_repo)
+    assert _validate(contract_repo).returncode == 0
+    assert _validate(contract_repo, "--service", ONTOLOGY_SERVICE).returncode == 0
+    checked = _validate(contract_repo, "--service", ONTOLOGY_SERVICE, "--ontology", str(ontology_file))
+    assert (checked.returncode, checked.stdout) == (0, "")
+    assert _stderr_lines(checked) == [
+        f"INFO continuo_python_runtime.cli: 0 error(s), 0 warning(s), 0 info: {ONTOLOGY_SERVICE}"
+    ]
+
+
+def test_a_per_service_error_exits_1(contract_repo, ontology_file):
+    """A declared service whose contract binds its entity to a name that is not a thing."""
+    _bound(contract_repo, entity="Ghost")
+    result = _validate(contract_repo, "--service", ONTOLOGY_SERVICE, "--ontology", str(ontology_file))
+    assert result.returncode == 1
+    error, summary = _stderr_lines(result)
+    assert error.startswith(f"{LOG}error [contract] analytics.t: ") and "Ghost" in error
+    assert summary == f"INFO continuo_python_runtime.cli: 1 error(s), 0 warning(s), 0 info: {ONTOLOGY_SERVICE}"
+
+
+def test_warnings_exit_0(contract_repo, ontology_file):
+    """A bound contract with a column that carries no binding."""
+    _bound(contract_repo, output_columns=[*NODE_T_BOUND["output_columns"], UNBOUND_COLUMN])
+    result = _validate(contract_repo, "--service", ONTOLOGY_SERVICE, "--ontology", str(ontology_file))
+    assert result.returncode == 0
+    warning, summary = _stderr_lines(result)
+    assert warning.startswith("WARNING continuo_python_runtime.cli: warning [coverage] analytics.t: ")
+    assert "'extra'" in warning
+    assert summary == f"INFO continuo_python_runtime.cli: 0 error(s), 1 warning(s), 0 info: {ONTOLOGY_SERVICE}"
+
+
+def test_an_undeclared_service_passes_with_one_information_line(contract_repo, ontology_file):
+    write_contract(contract_repo / "contracts", **NODE_T)
+    result = _validate(contract_repo, "--service", "billing-py", "--ontology", str(ontology_file))
+    assert (result.returncode, result.stdout) == (0, "")
+    assert _stderr_lines(result) == [
+        "INFO continuo_python_runtime.cli: info [contract] billing-py: not declared in the ontology: "
+        "none of this service's contracts is checked",
+        "INFO continuo_python_runtime.cli: 0 error(s), 0 warning(s), 1 info: billing-py",
+    ]
+
+
+def test_an_undeclared_service_warns_once_for_each_contract_with_bindings(contract_repo, ontology_file):
+    _bound(contract_repo)
+    write_contract(contract_repo / "contracts", **{**NODE_T, "table": "plain"})
+    result = _validate(contract_repo, "--service", "billing-py", "--ontology", str(ontology_file))
+    assert result.returncode == 0
+    warning, information, summary = _stderr_lines(result)
+    assert warning.startswith("WARNING continuo_python_runtime.cli: warning [contract] analytics.t: writes bindings")
+    assert information.startswith("INFO continuo_python_runtime.cli: info [contract] billing-py: not declared")
+    assert summary == "INFO continuo_python_runtime.cli: 0 error(s), 1 warning(s), 1 info: billing-py"
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory", "not utf-8", "not an ontology", "duplicate key"])
+def test_an_unreadable_ontology_exits_1_with_one_line(contract_repo, tmp_path, kind):
+    file = tmp_path / "ontology.yaml"
+    if kind == "directory":
+        file.mkdir()
+    elif kind == "not utf-8":
+        file.write_bytes(b"\xff\xfe\x00")
+    elif kind == "not an ontology":
+        file.write_text("principals:\n  servces: {}\n", encoding="utf-8")
+    elif kind == "duplicate key":
+        file.write_text("principals: {}\nprincipals: {}\n", encoding="utf-8")
+    result = _validate(contract_repo, "--service", ONTOLOGY_SERVICE, "--ontology", str(file))
+    assert (result.returncode, result.stdout) == (1, "")
+    (line,) = _stderr_lines(result)
+    assert line.startswith(f"{LOG}{file}: ")
+    assert "Traceback" not in result.stderr
+
+
+def test_an_ontology_that_does_not_load_is_reported_with_the_library_message(contract_repo, tmp_path):
+    file = tmp_path / "ontology.yaml"
+    file.write_text("principals:\n  servces: {}\n", encoding="utf-8")
+    result = _validate(contract_repo, "--service", ONTOLOGY_SERVICE, "--ontology", str(file))
+    (line,) = _stderr_lines(result)
+    assert line.startswith(f"{LOG}{file}: principals.servces: unknown key, the keys of the principals are ")
+
+
+def test_a_contract_the_loader_refuses_is_refused_before_the_ontology_is_read(contract_repo, tmp_path):
+    write_contract(contract_repo / "contracts", **{**NODE_T, "criticality": "WHENEVER"})
+    result = _validate(contract_repo, "--service", ONTOLOGY_SERVICE, "--ontology", str(tmp_path / "nope.yaml"))
+    assert result.returncode == 1
+    (line,) = _stderr_lines(result)
+    assert "`criticality` is 'WHENEVER'" in line and "nope.yaml" not in line
+
+
+@pytest.mark.parametrize(
+    ("service", "over", "exit_code"),
+    [
+        (ONTOLOGY_SERVICE, {}, 0),
+        (ONTOLOGY_SERVICE, {"output_columns": [*NODE_T_BOUND["output_columns"], UNBOUND_COLUMN]}, 0),
+        (ONTOLOGY_SERVICE, {"entity": "Ghost"}, 1),
+        ("billing-py", {}, 0),
+    ],
+    ids=["clean", "warning", "error", "undeclared"],
+)
+def test_validate_prints_nothing_to_stdout(contract_repo, ontology_file, service, over, exit_code):
+    _bound(contract_repo, **over)
+    result = _validate(contract_repo, "--service", service, "--ontology", str(ontology_file))
+    assert result.returncode == exit_code
+    assert result.stdout == ""
+    assert result.stderr != ""

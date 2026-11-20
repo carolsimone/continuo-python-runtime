@@ -8,7 +8,8 @@ import sys
 from importlib import metadata
 from pathlib import Path
 
-from continuo_python_runtime.contract.loader import load_contract_dir
+from continuo_python_runtime.contract.loader import load_contract_dir, load_contract_docs
+from continuo_python_runtime.contract.ontology_check import check_service
 from continuo_python_runtime.contract.pack import (
     PACKAGE_SOURCE_USAGE,
     build_bundle,
@@ -57,6 +58,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     validate_parser.add_argument("contract_dir", help="Path to contract directory")
     validate_parser.add_argument("--dialect", default=None, help=dialect_help)
+    validate_parser.add_argument(
+        "--service",
+        default=None,
+        help="The service the contracts belong to: a contract whose `service` property "
+             "names another service is refused",
+    )
+    validate_parser.add_argument(
+        "--ontology",
+        default=None,
+        help="The company's ontology file (needs --service): check every contract "
+             "against it, as the release will",
+    )
 
     # pack subcommand
     pack_parser = subparsers.add_parser(
@@ -120,12 +133,19 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+    if args.command == "validate" and args.ontology is not None and args.service is None:
+        validate_parser.error("--ontology needs --service")
     if args.command == "pack" and (args.image is None) == (args.image_packages is None):
         pack_parser.error(PACKAGE_SOURCE_USAGE)
 
     try:
         if args.command == "validate":
-            return cmd_validate(args.contract_dir, args.dialect)
+            return cmd_validate(
+                args.contract_dir,
+                args.dialect,
+                service=args.service,
+                ontology=args.ontology,
+            )
         elif args.command == "pack":
             return cmd_pack(
                 args.contract_dir,
@@ -158,10 +178,60 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def cmd_validate(contract_dir: str, dialect: str | None = None) -> int:
-    """Validate contracts in a directory."""
-    load_contract_dir(Path(contract_dir), dialect=dialect)
-    return 0
+_FINDING_LEVELS = {"error": logging.ERROR, "warning": logging.WARNING, "info": logging.INFO}
+
+
+def cmd_validate(
+    contract_dir: str,
+    dialect: str | None = None,
+    *,
+    service: str | None = None,
+    ontology: str | None = None,
+) -> int:
+    """Validate contracts in a directory.
+
+    With no ``service``, every contract is checked as a contract of any service
+    and nothing is logged. With a ``service``, a contract whose ``service``
+    property names another one is refused too, as ``pack`` refuses it.
+
+    With an ``ontology`` file (which needs the ``service``), each contract is
+    then checked against it by the per-service rules of continuo-contracts.
+    Each finding is logged at its level, ERROR for an error, WARNING for a
+    warning and INFO for information, as ``<severity> [<rule>] <subject>:
+    <message>``, in the order the library returns them, followed by one INFO
+    line counting the three. Any error makes the exit code 1. Nothing goes to
+    stdout.
+    """
+    if service is None:
+        load_contract_dir(Path(contract_dir), dialect=dialect)
+        return 0
+    loaded = load_contract_docs(Path(contract_dir), dialect=dialect, service=service)
+    if ontology is None:
+        return 0
+
+    findings = check_service(
+        [doc for _, doc in loaded], service=service, ontology_path=Path(ontology)
+    )
+    for finding in findings:
+        logger.log(
+            _FINDING_LEVELS[finding.severity],
+            "%s [%s] %s: %s",
+            finding.severity,
+            finding.rule,
+            finding.subject,
+            finding.message,
+        )
+    counts = {severity: 0 for severity in _FINDING_LEVELS}
+    for finding in findings:
+        counts[finding.severity] += 1
+    logger.info(
+        "%d error(s), %d warning(s), %d info: %s",
+        counts["error"],
+        counts["warning"],
+        counts["info"],
+        service,
+    )
+    return 1 if counts["error"] else 0
 
 
 def cmd_pack(

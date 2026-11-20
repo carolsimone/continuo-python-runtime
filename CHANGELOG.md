@@ -5,6 +5,21 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `continuo-runtime validate` takes `--service <name>` and `--ontology <file>`.
+  With `--service`, a contract whose `service` property names another service is
+  refused, as `pack` refuses it. `--ontology` needs `--service`: it checks every
+  contract of the folder against the company's ontology file with the rules a
+  release runs over one service. Each finding is logged as
+  `<severity> [<rule>] <subject>: <message>`, at the level of its severity,
+  followed by one INFO line that counts them, and the command exits 1 when any
+  finding is an error. A service the ontology does not declare gets one
+  information line and one warning for each contract that writes bindings, and
+  exits 0. An ontology file that cannot be read or is not an ontology gives one
+  error line and exit 1. Without the two flags `validate` is unchanged, and it
+  prints nothing to stdout.
+
 ### Changed
 
 - The runtime pins `continuo-contracts==0.4.1`. A Python contract may now carry

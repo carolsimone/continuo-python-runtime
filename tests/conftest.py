@@ -53,6 +53,40 @@ NODE_T_BOUND = {
     ],
 }
 
+# The service of `ONTOLOGY_TEXT`, a small ontology for the checks of `validate --ontology`: the
+# service is of the domain `sales`, and the one thing, Order, has the key `id` and the property
+# `note`.
+ONTOLOGY_SERVICE = "orders-py"
+ONTOLOGY_TEXT = """\
+principals:
+  domains:
+    sales:
+      owner_team: sales-team
+  services:
+    orders-py:
+      domain: sales
+      kind: python
+  teams:
+    sales-team:
+      idp_group: sales
+entities:
+  Order:
+    owner: sales-team
+    key:
+      id: int
+    properties:
+      note:
+        type: string
+"""
+
+
+@pytest.fixture
+def ontology_file(tmp_path):
+    """``<tmp>/ontology.yaml``, holding ``ONTOLOGY_TEXT``, beside a repository's ``contracts`` folder."""
+    path = tmp_path / "ontology.yaml"
+    path.write_text(ONTOLOGY_TEXT, encoding="utf-8")
+    return path
+
 
 def _module_roots(module):
     """Every filesystem location *module* was loaded from (`__path__` for packages)."""

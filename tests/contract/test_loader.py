@@ -8,7 +8,8 @@ import pytest
 from continuo_contracts import yaml_strict
 from continuo_contracts.python import node_from_odcs
 
-from continuo_python_runtime.contract.loader import load_contract_dir, node_from_contract
+from continuo_python_runtime.contract import loader as loader_module
+from continuo_python_runtime.contract.loader import load_contract_dir, load_contract_docs, node_from_contract
 from continuo_python_runtime.contract.model import Column
 from continuo_python_runtime.errors import ContractError
 from continuo_python_runtime.hashing import config_hash
@@ -483,3 +484,43 @@ def test_a_contract_with_bindings_has_the_projection_hash_of_one_without():
     ]})
     assert bound.python == plain.python
     assert config_hash(bound) == config_hash(plain)
+
+
+# --- the documents and the service --------------------------------------------------
+
+
+def test_load_contract_docs_returns_each_node_with_the_document_it_was_built_from(demo_contracts):
+    pairs = load_contract_docs(demo_contracts)
+    assert [node for node, _ in pairs] == load_contract_dir(demo_contracts)
+    for node, doc in pairs:
+        assert doc == yaml_strict.load(node.path.read_text(encoding="utf-8"))
+
+
+def test_load_contract_docs_reads_each_file_once(demo_contracts, monkeypatch):
+    reads = []
+    real = loader_module.read_contract_text
+    monkeypatch.setattr(loader_module, "read_contract_text", lambda file: reads.append(file) or real(file))
+    load_contract_docs(demo_contracts)
+    assert sorted(reads) == sorted(demo_contracts.glob("*.odcs.yaml"))
+
+
+def test_a_service_refuses_a_contract_that_names_another(tmp_path):
+    file = write_contract(tmp_path, **{**FIELDS, "service": "other"})
+    load_contract_dir(tmp_path)
+    load_contract_docs(tmp_path)
+    with pytest.raises(ContractError, match=rf"{re.escape(str(file))}: .*'other'.*'billing-py'"):
+        load_contract_docs(tmp_path, service="billing-py")
+
+
+def test_a_service_accepts_a_contract_that_names_it_and_one_that_names_none(tmp_path):
+    write_contract(tmp_path, **{**FIELDS, "service": "billing-py"})
+    write_contract(tmp_path, **{**FIELDS, "table": "u"})
+    assert len(load_contract_docs(tmp_path, service="billing-py")) == 2
+
+
+def test_node_from_contract_takes_the_service_to_check():
+    doc = yaml_strict.load(contract_text(**{**FIELDS, "service": "other"}))
+    file = Path("t.odcs.yaml")
+    assert node_from_contract(doc, file, dialect=None, check_reads=True).table == "t"
+    with pytest.raises(ContractError, match="'other'"):
+        node_from_contract(doc, file, dialect=None, check_reads=True, service="billing-py")

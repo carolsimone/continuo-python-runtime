@@ -16,9 +16,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   followed by one INFO line that counts them, and the command exits 1 when any
   finding is an error. A service the ontology does not declare gets one
   information line and one warning for each contract that writes bindings, and
-  exits 0. An ontology file that cannot be read or is not an ontology gives one
-  error line and exit 1. Without the two flags `validate` is unchanged, and it
-  prints nothing to stdout.
+  exits 0. An ontology file that cannot be read, is not an ontology, or is one
+  the library's `ontology` rule refuses (a thing owned by a domain the file does
+  not declare, for example) gives one error line and exit 1, whatever the
+  service; the line of a refused file points to
+  `continuo-contracts ontology check`. Without the two flags `validate` is
+  unchanged, and it prints nothing to stdout.
 
 ### Changed
 

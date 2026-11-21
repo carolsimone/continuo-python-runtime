@@ -4,16 +4,22 @@ import ast
 from pathlib import Path
 
 import pytest
-from continuo_contracts import yaml_strict
-from continuo_contracts.ontology_check import Finding
+from continuo_contracts import ontology, yaml_strict
+from continuo_contracts.ontology_check import Finding, ontology_findings
 
 import continuo_python_runtime
+from continuo_python_runtime.contract import ontology_check as ontology_check_module
 from continuo_python_runtime.contract.ontology_check import check_service
 from continuo_python_runtime.errors import ContractError
-from tests.conftest import NODE_T, NODE_T_BOUND, ONTOLOGY_SERVICE
+from tests.conftest import NODE_T, NODE_T_BOUND, ONTOLOGY_SERVICE, ONTOLOGY_TEXT
 from tests.odcs_builder import contract_text
 
 UNBOUND_COLUMN = {"name": "extra", "type": "INTEGER"}
+# Files the library loads and its `ontology` rule refuses: a thing owned by a domain the file does
+# not declare, and a service of a domain it does not declare.
+GHOST_OWNER = ONTOLOGY_TEXT.replace("    owner: sales\n", "    owner: ghost-team\n")
+UNDECLARED_DOMAIN = ONTOLOGY_TEXT.replace("      domain: sales\n", "      domain: nowhere\n")
+BOTH_BROKEN = GHOST_OWNER.replace("      domain: sales\n", "      domain: nowhere\n")
 
 
 def _doc(**over):
@@ -118,6 +124,51 @@ def test_a_file_that_is_not_an_ontology_is_a_contract_error_with_the_library_mes
         _check(file, _doc())
     assert str(exc.value).startswith(f"{file}: {reason}")
     assert "\n" not in str(exc.value)
+
+
+def test_the_test_ontology_passes_the_ontology_rule():
+    assert ontology_findings(ontology.load(ONTOLOGY_TEXT)) == []
+    assert GHOST_OWNER != ONTOLOGY_TEXT and UNDECLARED_DOMAIN != ONTOLOGY_TEXT
+
+
+@pytest.mark.parametrize(
+    ("text", "count"),
+    [(GHOST_OWNER, 1), (UNDECLARED_DOMAIN, 1), (BOTH_BROKEN, 2)],
+    ids=["owner not a domain", "service domain not declared", "both"],
+)
+def test_an_ontology_file_the_ontology_rule_refuses_is_a_contract_error(tmp_path, text, count):
+    file = tmp_path / "ontology.yaml"
+    file.write_text(text, encoding="utf-8")
+    with pytest.raises(ContractError) as exc:
+        _check(file, _doc())
+    assert str(exc.value) == (
+        f"{file}: the ontology file has {count} error(s): run continuo-contracts ontology check {file}"
+    )
+
+
+def test_no_contract_is_read_against_an_ontology_file_the_rule_refuses(tmp_path, monkeypatch):
+    def normalised(*args, **kwargs):
+        raise AssertionError("a contract was read against a broken ontology file")
+
+    monkeypatch.setattr(ontology_check_module, "normalise_python", normalised)
+    file = tmp_path / "ontology.yaml"
+    file.write_text(GHOST_OWNER, encoding="utf-8")
+    with pytest.raises(ContractError, match="the ontology file has 1 error"):
+        _check(file, _doc())
+
+
+def test_the_file_is_refused_whatever_the_service(tmp_path):
+    file = tmp_path / "ontology.yaml"
+    file.write_text(GHOST_OWNER, encoding="utf-8")
+    with pytest.raises(ContractError, match="the ontology file has 1 error"):
+        _check(file, _doc(), service="billing-py")
+
+
+def test_findings_of_the_ontology_rule_that_are_not_errors_do_not_stop_the_check(ontology_file, monkeypatch):
+    """The library's `ontology` rule gives only errors today, so the findings come from a stand-in."""
+    stand_in = [Finding("warning", "ontology", "Order", "a warning", None), Finding("info", "ontology", "Order", "a note", None)]
+    monkeypatch.setattr(ontology_check_module, "ontology_findings", lambda loaded: stand_in)
+    assert _check(ontology_file, _doc()) == []
 
 
 def test_a_blank_service_is_a_contract_error(ontology_file):

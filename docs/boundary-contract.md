@@ -252,11 +252,14 @@ nor the code projection behind `config_hash` reads them, so a node's
 `continuo-runtime validate <folder> --service <name> --ontology <file>` checks
 every contract against the company's ontology file with the rules of
 `continuo-contracts` that need no other service (`contract`, `coverage`,
-`quality` and `privacy`): each contract is put in the library's stored form, `service` set to
-`--service`, and filled from the ontology before the rules run. The README
-("Checking against the ontology") gives the lines it logs and its exit codes.
-`--ontology` needs `--service`, and `--service` alone refuses a contract whose
-`service` names another service.
+`quality` and `privacy`): each contract is put in the library's stored form,
+`service` set to `--service`, and filled from the ontology before the rules
+run. An ontology file that the library's `ontology` rule refuses stops the
+check first, whatever the service, with one error line that points to
+`continuo-contracts ontology check`. The README ("Checking against the
+ontology") gives the lines `validate` logs and its exit codes. `--ontology`
+needs `--service`, and `--service` alone refuses a contract whose `service`
+names another service.
 
 ### Kinds
 

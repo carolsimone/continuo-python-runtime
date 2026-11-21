@@ -199,8 +199,10 @@ def cmd_validate(
     Each finding is logged at its level, ERROR for an error, WARNING for a
     warning and INFO for information, as ``<severity> [<rule>] <subject>:
     <message>``, in the order the library returns them, followed by one INFO
-    line counting the three. Any error makes the exit code 1. Nothing goes to
-    stdout.
+    line counting the three. Any error makes the exit code 1. An ontology file
+    that cannot be read, is not an ontology or is refused by the library's
+    ``ontology`` rule is one ERROR line and exit 1, before any finding. Nothing
+    goes to stdout.
     """
     if service is None:
         load_contract_dir(Path(contract_dir), dialect=dialect)

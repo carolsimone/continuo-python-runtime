@@ -14,7 +14,7 @@ import continuo_python_runtime.cli as cli_module
 from continuo_python_runtime.cli import main
 from continuo_python_runtime.hash_inputs import gather_hash_inputs
 from continuo_python_runtime.hashing import hash_parts, shared_code_hash
-from tests.conftest import DEMO_SCRIPTS, NODE_T, NODE_T_BOUND, ONTOLOGY_SERVICE, FakeWarehouseAdapter
+from tests.conftest import DEMO_SCRIPTS, NODE_T, NODE_T_BOUND, ONTOLOGY_SERVICE, ONTOLOGY_TEXT, FakeWarehouseAdapter
 from tests.odcs_builder import write_contract
 
 __version__ = metadata.version("continuo-python-runtime")
@@ -595,6 +595,36 @@ def test_an_unreadable_ontology_exits_1_with_one_line(contract_repo, tmp_path, k
     (line,) = _stderr_lines(result)
     assert line.startswith(f"{LOG}{file}: ")
     assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize("service", [ONTOLOGY_SERVICE, "billing-py"], ids=["declared service", "undeclared service"])
+@pytest.mark.parametrize(
+    "replace",
+    [("    owner: sales\n", "    owner: ghost-team\n"), ("      domain: sales\n", "      domain: nowhere\n")],
+    ids=["owner not a domain", "service domain not declared"],
+)
+def test_an_ontology_the_library_refuses_is_refused_whatever_the_service(contract_repo, tmp_path, service, replace):
+    """A file that loads but fails the library's `ontology` rule is wrong for every service."""
+    _bound(contract_repo)
+    file = tmp_path / "ontology.yaml"
+    file.write_text(ONTOLOGY_TEXT.replace(*replace), encoding="utf-8")
+    assert file.read_text(encoding="utf-8") != ONTOLOGY_TEXT
+    result = _validate(contract_repo, "--service", service, "--ontology", str(file))
+    assert (result.returncode, result.stdout) == (1, "")
+    assert _stderr_lines(result) == [
+        f"{LOG}{file}: the ontology file has 1 error(s): run continuo-contracts ontology check {file}"
+    ]
+    assert "Traceback" not in result.stderr
+
+
+def test_a_contract_the_loader_refuses_comes_before_an_ontology_the_library_refuses(contract_repo, tmp_path):
+    write_contract(contract_repo / "contracts", **{**NODE_T, "criticality": "WHENEVER"})
+    file = tmp_path / "ontology.yaml"
+    file.write_text(ONTOLOGY_TEXT.replace("    owner: sales\n", "    owner: ghost-team\n"), encoding="utf-8")
+    result = _validate(contract_repo, "--service", ONTOLOGY_SERVICE, "--ontology", str(file))
+    assert result.returncode == 1
+    (line,) = _stderr_lines(result)
+    assert "`criticality` is 'WHENEVER'" in line and "ontology check" not in line
 
 
 def test_an_ontology_that_does_not_load_is_reported_with_the_library_message(contract_repo, tmp_path):

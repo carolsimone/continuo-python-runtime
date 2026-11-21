@@ -54,8 +54,9 @@ NODE_T_BOUND = {
 }
 
 # The service of `ONTOLOGY_TEXT`, a small ontology for the checks of `validate --ontology`: the
-# service is of the domain `sales`, and the one thing, Order, has the key `id` and the property
-# `note`.
+# service is of the domain `sales`, and the one thing, Order, is owned by that domain and has the
+# key `id` and the property `note`. The file passes the library's `ontology` rule, which asks a
+# thing's owner to be a declared domain.
 ONTOLOGY_SERVICE = "orders-py"
 ONTOLOGY_TEXT = """\
 principals:
@@ -71,7 +72,7 @@ principals:
       idp_group: sales
 entities:
   Order:
-    owner: sales-team
+    owner: sales
     key:
       id: int
     properties:

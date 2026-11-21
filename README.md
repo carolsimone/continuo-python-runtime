@@ -296,6 +296,13 @@ an error and 0 otherwise, and it prints nothing to stdout.
 - A file that cannot be read, is not UTF-8 text or is not an ontology is one
   ERROR line, `<file>: <reason>`, and exit 1. The reason of an invalid
   ontology is the library's, with the path to the first fault.
+- A file that is an ontology but that the library's `ontology` rule refuses (a
+  thing owned by a domain the file does not declare, a service of a domain it
+  does not declare, a personal property no access rule names) is refused the
+  same way, whatever the service, and no contract is checked against it: one
+  ERROR line, `<file>: the ontology file has <n> error(s): run
+  continuo-contracts ontology check <file>`, and exit 1. That command lists the
+  errors. Findings of that rule that are not errors do not stop the check.
 
 A company without an ontology adds nothing: without the two flags `validate`
 runs the checks above and no others.

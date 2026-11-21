@@ -5,6 +5,42 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `continuo-runtime validate` takes `--service <name>` and `--ontology <file>`.
+  With `--service`, a contract whose `service` property names another service is
+  refused, as `pack` refuses it. `--ontology` needs `--service`: it checks every
+  contract of the folder against the company's ontology file with the rules a
+  release runs over one service. Each finding is logged as
+  `<severity> [<rule>] <subject>: <message>`, at the level of its severity,
+  followed by one INFO line that counts them, and the command exits 1 when any
+  finding is an error. A service the ontology does not declare gets one
+  information line and one warning for each contract that writes bindings, and
+  exits 0. An ontology file that cannot be read, is not an ontology, or is one
+  the library's `ontology` rule refuses (a thing owned by a domain the file does
+  not declare, for example) gives one error line and exit 1, whatever the
+  service; the line of a refused file points to
+  `continuo-contracts ontology check`. Without the two flags `validate` is
+  unchanged, and it prints nothing to stdout.
+
+### Changed
+
+- The runtime pins `continuo-contracts==0.4.1`. A Python contract may now carry
+  the ontology's binding properties: `entity`, `grain`, `fixed` and `filter` on
+  the table, `property`, `local` and `aggregate` on a column. The loader,
+  `validate`, `pack` and the harness accept them, `pack` writes them into the
+  bundle as the file has them, and a node's hashes are the same with or without
+  them. A binding whose value has the wrong shape is refused with a `value`
+  issue that names the file, by `validate`, `pack` and the harness at start,
+  whatever the flags say.
+- The README's engine examples and the template's `Dockerfile` build on the
+  `v0.14.0` engine images, the first with `validate --service` and
+  `validate --ontology`. The README says how a team adds the ontology check to
+  its CI, with a copy of the company's ontology file kept in the team's own
+  repository; the boundary-contract guide lists the bindings a contract may
+  carry and points to the README for the check. The template's workflow is
+  unchanged: a company without an ontology adds nothing.
+
 ## [0.13.0] - 2026-11-16
 
 **TL;DR**

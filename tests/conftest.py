@@ -42,6 +42,52 @@ NODE_T = {
     "output_columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
 }
 
+# NODE_T bound to the ontology: the table stands for the thing Order, `id` is the Order's key
+# and `note` is a column that no thing owns.
+NODE_T_BOUND = {
+    **NODE_T,
+    "entity": "Order",
+    "output_columns": [
+        {"name": "id", "type": "INTEGER", "nullable": False, "property": "Order.id"},
+        {"name": "note", "type": "VARCHAR(64)", "local": True},
+    ],
+}
+
+# The service of `ONTOLOGY_TEXT`, a small ontology for the checks of `validate --ontology`: the
+# service is of the domain `sales`, and the one thing, Order, is owned by that domain and has the
+# key `id` and the property `note`. The file passes the library's `ontology` rule, which asks a
+# thing's owner to be a declared domain.
+ONTOLOGY_SERVICE = "orders-py"
+ONTOLOGY_TEXT = """\
+principals:
+  domains:
+    sales:
+      owner_team: sales-team
+  services:
+    orders-py:
+      domain: sales
+      kind: python
+  teams:
+    sales-team:
+      idp_group: sales
+entities:
+  Order:
+    owner: sales
+    key:
+      id: int
+    properties:
+      note:
+        type: string
+"""
+
+
+@pytest.fixture
+def ontology_file(tmp_path):
+    """``<tmp>/ontology.yaml``, holding ``ONTOLOGY_TEXT``, beside a repository's ``contracts`` folder."""
+    path = tmp_path / "ontology.yaml"
+    path.write_text(ONTOLOGY_TEXT, encoding="utf-8")
+    return path
+
 
 def _module_roots(module):
     """Every filesystem location *module* was loaded from (`__path__` for packages)."""

@@ -392,7 +392,7 @@ def test_the_pin_step_takes_the_first_runtime_line_of_a_multi_stage_build(tmp_pa
     dockerfile = (
         "FROM python:3.14.8-slim\n"
         f"FROM {_POSTGRES}:v0.12.0\n"
-        "FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.13.0\n"
+        "FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.14.0\n"
     )
     code, written, _ = _pin(tmp_path, dockerfile)
     assert code == 0 and written == "RUNTIME_VERSION=0.12.0\n"

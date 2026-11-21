@@ -176,7 +176,10 @@ schema:
   `vendor: continuo`. Every node sets `schedule` and `criticality`
   (`REGULATORY`, `CORE` or `SECONDARY`); the node's kind decides the rest
   (see "Node kinds" below). An optional `service` names the node's service,
-  and `pack` refuses a contract whose `service` is not its `--service`.
+  and `pack` and `validate --service` refuse a contract whose `service` is not
+  their `--service`.
+- A contract may also bind its table and its columns to the company's ontology
+  (see "Checking against the ontology" below).
 - The contract has exactly one schema object, `physicalType: table`. Its
   `properties` are the table's columns, in order: each has a `name`, a
   `physicalType` (`BIGINT`, `INTEGER` or `INT`, `DOUBLE PRECISION`,
@@ -214,6 +217,86 @@ continuo-runtime validate contracts/ --dialect postgres   # or trino, duckdb
 The harness does not run these read checks again when a node starts, so a
 read that passes here is not judged again under a different grammar in
 production. See `docs/boundary-contract.md` §13.1.
+
+### Checking against the ontology
+
+A company that keeps an ontology file, the things its data is about and the
+services that own them, can have each contract bind its table and its columns
+to it. The bindings are optional `continuo` properties: `entity`, `grain`,
+`fixed` and `filter` on the schema object, and `property`, `local` and
+`aggregate` on a column (`docs/boundary-contract.md` gives their values):
+
+```yaml
+schema:
+  - name: example
+    physicalType: table
+    customProperties:
+      - {vendor: continuo, property: entity, value: Order}
+    properties:
+      - name: order_id
+        physicalType: INTEGER
+        required: true
+        customProperties:
+          - {vendor: continuo, property: property, value: Order.order_id}
+      - name: note
+        physicalType: "VARCHAR(64)"
+        customProperties:
+          - {vendor: continuo, property: local, value: true}
+```
+
+If `Order` has a key part or a property named `order_id`, the check would bind
+that column itself; the binding is written out for clarity.
+
+A contract with bindings loads, validates, packs and runs like any other, and
+its `content_hash` is the one it has without them. To check the bindings in your
+CI, keep a copy of the company's ontology file in your own repository, for
+example at `ontology/ontology.yaml`, and give `validate` the name of your
+service and the path of that copy:
+
+```bash
+continuo-runtime validate contracts --service <name> --ontology ontology/ontology.yaml
+```
+
+Copy the file from the company's ontology repository, never from continuo, and
+keep it outside `contracts/`, where `validate` refuses any other YAML file. The
+copy is yours to keep current: when the ontology changes, you update it. A copy
+that is behind the ontology can pass here and still be refused by the release,
+which checks against the ontology the install runs. The library's dbt check,
+`continuo-contracts dbt check`, takes the same file with `--ontology`.
+
+`--service` alone refuses a contract whose `service` property names another
+service. `--ontology` needs `--service`; without it `validate` exits 2. With
+both, every contract is checked as a contract of that service by the rules of
+`continuo-contracts` that need no other service: `contract`, `coverage`,
+`quality` and `privacy`. The rules that read the whole estate (`access`,
+`order` and `drift`) cannot run on one service's contracts and are not run
+here. `validate` logs, on stderr and at the level of its severity (ERROR,
+WARNING or INFO), one line for each finding,
+`<severity> [<rule>] <subject>: <message>`, then one INFO line that counts them,
+`<e> error(s), <w> warning(s), <i> info: <name>`. It exits 1 when any finding is
+an error and 0 otherwise, and it prints nothing to stdout.
+
+- When the ontology declares the service, each contract names exactly one of
+  `entity` or `grain`, so a contract that names neither, or both, is an error.
+  A column that carries no binding is a warning, unless its name is a key part
+  or a property of the table's entity, in which case the check binds it itself.
+- When the ontology does not declare the service, none of its contracts is
+  checked: `validate` logs one INFO line, `not declared in the ontology: none
+  of this service's contracts is checked`, and one WARNING for each contract
+  that writes bindings, and exits 0.
+- A file that cannot be read, is not UTF-8 text or is not an ontology is one
+  ERROR line, `<file>: <reason>`, and exit 1. The reason of an invalid
+  ontology is the library's, with the path to the first fault.
+- A file that is an ontology but that the library's `ontology` rule refuses (a
+  thing owned by a domain the file does not declare, a service of a domain it
+  does not declare, a personal property no access rule names) is refused the
+  same way, whatever the service, and no contract is checked against it: one
+  ERROR line, `<file>: the ontology file has <n> error(s): run
+  continuo-contracts ontology check <file>`, and exit 1. That command lists the
+  errors. Findings of that rule that are not errors do not stop the check.
+
+A company without an ontology adds nothing: without the two flags `validate`
+runs the checks above and no others.
 
 ## Node kinds
 
@@ -450,11 +533,11 @@ A domain repo picks its warehouse engine by which base image it builds
 `FROM`:
 
 ```dockerfile
-FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.13.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.14.0
 # or
-FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.13.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.14.0
 # or
-FROM ghcr.io/carolsimone/continuo-python-runtime-duckdb:v0.13.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-duckdb:v0.14.0
 ```
 
 The engine is part of the image **name**; the tag is the bare version, so

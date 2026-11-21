@@ -5,14 +5,18 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 from continuo_contracts import yaml_strict
 from continuo_contracts.python import node_from_odcs
 
-from continuo_python_runtime.contract.loader import load_contract_dir, node_from_contract
+from continuo_python_runtime.contract import loader as loader_module
+from continuo_python_runtime.contract.loader import load_contract_dir, load_contract_docs, node_from_contract
 from continuo_python_runtime.contract.model import Column
 from continuo_python_runtime.errors import ContractError
+from continuo_python_runtime.hashing import config_hash
 from continuo_python_runtime.types import parse_sql_type
-from tests.odcs_builder import contract_text, write_contract
+from tests.conftest import NODE_T_BOUND
+from tests.odcs_builder import contract_node, contract_text, write_contract
 
 DEMO = Path(__file__).resolve().parent.parent / "fixtures" / "demo" / "service-py"
 OLD_KPIS = (DEMO / "old" / "py_daily_kpis.yml").read_text(encoding="utf-8")
@@ -456,3 +460,130 @@ def test_check_reads_false_still_applies_every_contract_rule(tmp_path):
     file = write_contract(tmp_path, **{**FIELDS, "criticality": "WHENEVER"})
     with pytest.raises(ContractError, match=rf"{re.escape(str(file))}: .*`criticality` is 'WHENEVER'"):
         load_contract_dir(tmp_path, check_reads=False)
+
+
+# --- ontology bindings -----------------------------------------------------------
+
+
+def test_a_contract_with_bindings_loads(tmp_path):
+    file = write_contract(tmp_path, **NODE_T_BOUND)
+    text = file.read_text(encoding="utf-8")
+    assert "property: entity" in text and "property: property" in text and "property: local" in text
+    (node,) = load_contract_dir(tmp_path)
+    assert node.relation == "analytics.t"
+    assert [(c.name, c.type, c.nullable) for c in node.output_columns] == [
+        ("id", "INTEGER", False),
+        ("note", "VARCHAR(64)", True),
+    ]
+
+
+def test_a_contract_with_bindings_has_the_projection_hash_of_one_without():
+    bound = contract_node(**NODE_T_BOUND)
+    plain = contract_node(**{**NODE_T_BOUND, "entity": None, "output_columns": [
+        {"name": "id", "type": "INTEGER", "nullable": False},
+        {"name": "note", "type": "VARCHAR(64)"},
+    ]})
+    assert bound.python == plain.python
+    assert config_hash(bound) == config_hash(plain)
+
+
+# Each of the seven bindings with a value the library accepts, and the object it sits on: the
+# schema object (`table`) or the first column.
+BINDINGS = [
+    ("table", "entity", "Order"),
+    ("table", "grain", ["id"]),
+    ("table", "fixed", {"region": "eu"}),
+    ("table", "filter", {"status": "open"}),
+    ("column", "property", "Order.id"),
+    ("column", "local", True),
+    ("column", "aggregate", {"from": "Order.id", "agg": "count"}),
+]
+
+
+def _document_with(level, name, value):
+    """The document of the contract of FIELDS with the binding ``name`` written on ``level``."""
+    doc = yaml.safe_load(contract_text(**FIELDS))
+    target = doc["schema"][0] if level == "table" else doc["schema"][0]["properties"][0]
+    target.setdefault("customProperties", []).append({"vendor": "continuo", "property": name, "value": value})
+    return doc
+
+
+def _read(doc):
+    return node_from_contract(
+        yaml_strict.load(yaml.safe_dump(doc)), Path("t.odcs.yaml"), dialect=None, check_reads=False
+    )
+
+
+@pytest.mark.parametrize(("level", "name", "value"), BINDINGS, ids=[name for _, name, _ in BINDINGS])
+def test_each_binding_loads_and_leaves_the_node_and_its_hash_as_they_are(level, name, value):
+    plain = contract_node(**FIELDS)
+    bound = _read(_document_with(level, name, value))
+    assert bound == plain
+    assert bound.python == plain.python
+    assert config_hash(bound) == config_hash(plain)
+
+
+@pytest.mark.parametrize(
+    ("level", "name", "value", "refusal"),
+    [
+        ("table", "entity", 1, "`entity` is 1"),
+        ("table", "entity", "two words", "`entity` is 'two words'"),
+        ("table", "grain", [], "`grain` is []"),
+        ("table", "fixed", ["a"], "`fixed` is ['a']"),
+        ("table", "filter", {"a": [1]}, "`filter` has [1] for 'a'"),
+        ("column", "property", "Order", "`property` is 'Order'"),
+        ("column", "local", False, "`local` is False"),
+        ("column", "local", "yes", "`local` is 'yes'"),
+        ("column", "aggregate", {}, "`aggregate` has neither `from` nor `period`"),
+        ("column", "entity", "Order", "`entity` sits on the schema object, not on a column"),
+    ],
+)
+def test_a_malformed_binding_is_refused_naming_the_file(tmp_path, level, name, value, refusal):
+    file = tmp_path / "t.odcs.yaml"
+    file.write_text(yaml.safe_dump(_document_with(level, name, value)), encoding="utf-8")
+    with pytest.raises(ContractError) as exc:
+        load_contract_dir(tmp_path)
+    message = str(exc.value)
+    assert message.startswith(f"{file}: schema[0]."), message
+    assert refusal in message
+    assert "\n" not in message
+
+
+# --- the documents and the service --------------------------------------------------
+
+
+def test_load_contract_docs_returns_each_node_with_the_document_it_was_built_from(demo_contracts):
+    pairs = load_contract_docs(demo_contracts)
+    assert [node for node, _ in pairs] == load_contract_dir(demo_contracts)
+    for node, doc in pairs:
+        assert doc == yaml_strict.load(node.path.read_text(encoding="utf-8"))
+
+
+def test_load_contract_docs_reads_each_file_once(demo_contracts, monkeypatch):
+    reads = []
+    real = loader_module.read_contract_text
+    monkeypatch.setattr(loader_module, "read_contract_text", lambda file: reads.append(file) or real(file))
+    load_contract_docs(demo_contracts)
+    assert sorted(reads) == sorted(demo_contracts.glob("*.odcs.yaml"))
+
+
+def test_a_service_refuses_a_contract_that_names_another(tmp_path):
+    file = write_contract(tmp_path, **{**FIELDS, "service": "other"})
+    load_contract_dir(tmp_path)
+    load_contract_docs(tmp_path)
+    with pytest.raises(ContractError, match=rf"{re.escape(str(file))}: .*'other'.*'billing-py'"):
+        load_contract_docs(tmp_path, service="billing-py")
+
+
+def test_a_service_accepts_a_contract_that_names_it_and_one_that_names_none(tmp_path):
+    write_contract(tmp_path, **{**FIELDS, "service": "billing-py"})
+    write_contract(tmp_path, **{**FIELDS, "table": "u"})
+    assert len(load_contract_docs(tmp_path, service="billing-py")) == 2
+
+
+def test_node_from_contract_takes_the_service_to_check():
+    doc = yaml_strict.load(contract_text(**{**FIELDS, "service": "other"}))
+    file = Path("t.odcs.yaml")
+    assert node_from_contract(doc, file, dialect=None, check_reads=True).table == "t"
+    with pytest.raises(ContractError, match="'other'"):
+        node_from_contract(doc, file, dialect=None, check_reads=True, service="billing-py")

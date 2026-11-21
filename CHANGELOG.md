@@ -36,8 +36,8 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The README's engine examples and the template's `Dockerfile` build on the
   `v0.14.0` engine images, the first with `validate --service` and
   `validate --ontology`. The README says how a team adds the ontology check to
-  its CI, with the company's ontology file taken from its own repository at a
-  pinned commit; the boundary-contract guide lists the bindings a contract may
+  its CI, with a copy of the company's ontology file kept in the team's own
+  repository; the boundary-contract guide lists the bindings a contract may
   carry and points to the README for the check. The template's workflow is
   unchanged: a company without an ontology adds nothing.
 

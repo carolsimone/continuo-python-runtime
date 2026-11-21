@@ -249,29 +249,20 @@ that column itself; the binding is written out for clarity.
 
 A contract with bindings loads, validates, packs and runs like any other, and
 its `content_hash` is the one it has without them. To check the bindings in your
-CI, give `validate` the name of your service and the ontology file:
+CI, keep a copy of the company's ontology file in your own repository, for
+example at `ontology/ontology.yaml`, and give `validate` the name of your
+service and the path of that copy:
 
 ```bash
-continuo-runtime validate contracts --service <name> --ontology <path to the company's ontology file>
+continuo-runtime validate contracts --service <name> --ontology ontology/ontology.yaml
 ```
 
-Take the file from the company's ontology repository, at a commit you pin, and
-never from continuo. A step that checks the repository out beside your own
-does it, and the file stays outside `contracts/`, where `validate` refuses any
-other YAML file:
-
-```yaml
-      - uses: actions/checkout@v4
-        with:
-          repository: <company>/<ontology repository>
-          ref: <the commit to check against>
-          path: ontology
-      - run: continuo-runtime validate contracts --service <name> --ontology ontology/<ontology file>
-```
-
-A private ontology repository needs a `token` in the checkout step (a personal
-access token or an app token that can read it), since the default
-`GITHUB_TOKEN` reads only the repository the workflow runs in.
+Copy the file from the company's ontology repository, never from continuo, and
+keep it outside `contracts/`, where `validate` refuses any other YAML file. The
+copy is yours to keep current: when the ontology changes, you update it. A copy
+that is behind the ontology can pass here and still be refused by the release,
+which checks against the ontology the install runs. The library's dbt check,
+`continuo-contracts dbt check`, takes the same file with `--ontology`.
 
 `--service` alone refuses a contract whose `service` property names another
 service. `--ontology` needs `--service`; without it `validate` exits 2. With

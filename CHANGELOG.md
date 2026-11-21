@@ -5,6 +5,37 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-21
+
+**TL;DR**
+
+- The runtime pins continuo-contracts 0.4.1. A Python contract may carry the
+  ontology's binding properties (`entity`, `grain`, `fixed` and `filter` on the
+  table, `property`, `local` and `aggregate` on a column). A binding of the
+  wrong shape is refused, naming the file.
+- `continuo-runtime validate --service <name> --ontology <file>` checks a
+  service's contracts against the company's ontology file with the rules a
+  release runs over one service, and refuses an ontology file that the
+  library's own ontology rule rejects. `--service` alone refuses a contract
+  that names another service.
+- A node's hashes are the same with or without bindings. No node changes its
+  `content_hash` by moving to 0.14.0.
+
+**Upgrade**
+
+1. Nothing is required. To move a service, build its image `FROM` the `v0.14.0`
+   engine image; CI installs `continuo-python-runtime==0.14.0` from the `FROM`
+   line.
+2. Release a service on the `v0.14.0` image only to a continuo install that
+   runs continuo-contracts 0.4.1 or later. `pack` records the library version
+   in the bundle, and continuo refuses a bundle written by a newer library than
+   its own. continuo accepts it from the first chart release whose CHANGELOG
+   names continuo-contracts 0.4.1.
+3. To check bindings in CI, see "Checking against the ontology" in the README.
+   A company that does not use the ontology changes nothing.
+
+Versions: runtime 0.14.0 (pins continuo-contracts 0.4.1), engine contract 0.10.0, postgres adapter 0.4.0, trino adapter 0.5.0, duckdb adapter 0.3.0.
+
 ### Added
 
 - `continuo-runtime validate` takes `--service <name>` and `--ontology <file>`.

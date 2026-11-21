@@ -27,13 +27,16 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the table, `property`, `local` and `aggregate` on a column. The loader,
   `validate`, `pack` and the harness accept them, `pack` writes them into the
   bundle as the file has them, and a node's hashes are the same with or without
-  them.
-- The README, the boundary-contract guide and the template's `Dockerfile` build
-  on the `v0.14.0` engine images, the first with `validate --service` and
-  `validate --ontology`. The README and the guide say how a contract carries
-  ontology bindings and how a team adds the check to its CI, with the
-  company's ontology file taken from its own repository at a pinned commit. The
-  template's workflow is unchanged: a company without an ontology adds nothing.
+  them. A binding whose value has the wrong shape is refused with a `value`
+  issue that names the file, by `validate`, `pack` and the harness at start,
+  whatever the flags say.
+- The README's engine examples and the template's `Dockerfile` build on the
+  `v0.14.0` engine images, the first with `validate --service` and
+  `validate --ontology`. The README says how a team adds the ontology check to
+  its CI, with the company's ontology file taken from its own repository at a
+  pinned commit; the boundary-contract guide lists the bindings a contract may
+  carry and points to the README for the check. The template's workflow is
+  unchanged: a company without an ontology adds nothing.
 
 ## [0.13.0] - 2026-11-16
 

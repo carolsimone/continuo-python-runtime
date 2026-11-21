@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 from continuo_contracts import yaml_strict
 from continuo_contracts.python import node_from_odcs
 
@@ -484,6 +485,68 @@ def test_a_contract_with_bindings_has_the_projection_hash_of_one_without():
     ]})
     assert bound.python == plain.python
     assert config_hash(bound) == config_hash(plain)
+
+
+# Each of the seven bindings with a value the library accepts, and the object it sits on: the
+# schema object (`table`) or the first column.
+BINDINGS = [
+    ("table", "entity", "Order"),
+    ("table", "grain", ["id"]),
+    ("table", "fixed", {"region": "eu"}),
+    ("table", "filter", {"status": "open"}),
+    ("column", "property", "Order.id"),
+    ("column", "local", True),
+    ("column", "aggregate", {"from": "Order.id", "agg": "count"}),
+]
+
+
+def _document_with(level, name, value):
+    """The document of the contract of FIELDS with the binding ``name`` written on ``level``."""
+    doc = yaml.safe_load(contract_text(**FIELDS))
+    target = doc["schema"][0] if level == "table" else doc["schema"][0]["properties"][0]
+    target.setdefault("customProperties", []).append({"vendor": "continuo", "property": name, "value": value})
+    return doc
+
+
+def _read(doc):
+    return node_from_contract(
+        yaml_strict.load(yaml.safe_dump(doc)), Path("t.odcs.yaml"), dialect=None, check_reads=False
+    )
+
+
+@pytest.mark.parametrize(("level", "name", "value"), BINDINGS, ids=[name for _, name, _ in BINDINGS])
+def test_each_binding_loads_and_leaves_the_node_and_its_hash_as_they_are(level, name, value):
+    plain = contract_node(**FIELDS)
+    bound = _read(_document_with(level, name, value))
+    assert bound == plain
+    assert bound.python == plain.python
+    assert config_hash(bound) == config_hash(plain)
+
+
+@pytest.mark.parametrize(
+    ("level", "name", "value", "refusal"),
+    [
+        ("table", "entity", 1, "`entity` is 1"),
+        ("table", "entity", "two words", "`entity` is 'two words'"),
+        ("table", "grain", [], "`grain` is []"),
+        ("table", "fixed", ["a"], "`fixed` is ['a']"),
+        ("table", "filter", {"a": [1]}, "`filter` has [1] for 'a'"),
+        ("column", "property", "Order", "`property` is 'Order'"),
+        ("column", "local", False, "`local` is False"),
+        ("column", "local", "yes", "`local` is 'yes'"),
+        ("column", "aggregate", {}, "`aggregate` has neither `from` nor `period`"),
+        ("column", "entity", "Order", "`entity` sits on the schema object, not on a column"),
+    ],
+)
+def test_a_malformed_binding_is_refused_naming_the_file(tmp_path, level, name, value, refusal):
+    file = tmp_path / "t.odcs.yaml"
+    file.write_text(yaml.safe_dump(_document_with(level, name, value)), encoding="utf-8")
+    with pytest.raises(ContractError) as exc:
+        load_contract_dir(tmp_path)
+    message = str(exc.value)
+    assert message.startswith(f"{file}: schema[0]."), message
+    assert refusal in message
+    assert "\n" not in message
 
 
 # --- the documents and the service --------------------------------------------------

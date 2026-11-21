@@ -244,6 +244,9 @@ schema:
           - {vendor: continuo, property: local, value: true}
 ```
 
+If `Order` has a key part or a property named `order_id`, the check would bind
+that column itself; the binding is written out for clarity.
+
 A contract with bindings loads, validates, packs and runs like any other, and
 its `content_hash` is the one it has without them. To check the bindings in your
 CI, give `validate` the name of your service and the ontology file:
@@ -266,6 +269,10 @@ other YAML file:
       - run: continuo-runtime validate contracts --service <name> --ontology ontology/<ontology file>
 ```
 
+A private ontology repository needs a `token` in the checkout step (a personal
+access token or an app token that can read it), since the default
+`GITHUB_TOKEN` reads only the repository the workflow runs in.
+
 `--service` alone refuses a contract whose `service` property names another
 service. `--ontology` needs `--service`; without it `validate` exits 2. With
 both, every contract is checked as a contract of that service by the rules of
@@ -278,9 +285,10 @@ WARNING or INFO), one line for each finding,
 `<e> error(s), <w> warning(s), <i> info: <name>`. It exits 1 when any finding is
 an error and 0 otherwise, and it prints nothing to stdout.
 
-- When the ontology declares the service, each contract names an `entity` or a
-  `grain`, so a contract with no binding is an error. A column that carries no
-  binding is a warning.
+- When the ontology declares the service, each contract names exactly one of
+  `entity` or `grain`, so a contract that names neither, or both, is an error.
+  A column that carries no binding is a warning, unless its name is a key part
+  or a property of the table's entity, in which case the check binds it itself.
 - When the ontology does not declare the service, none of its contracts is
   checked: `validate` logs one INFO line, `not declared in the ontology: none
   of this service's contracts is checked`, and one WARNING for each contract

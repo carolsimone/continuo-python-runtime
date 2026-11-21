@@ -238,6 +238,10 @@ schema:
           - {vendor: continuo, property: property, value: Order.order_id}
 ```
 
+When the ontology has a key part or a property of `Order` named `order_id`, the
+check binds that column itself, so the `property` above is written out for
+clarity.
+
 A binding at the other place, or with a value of another shape, is refused like
 any property the library reads. The bindings change nothing the runtime does:
 the loader, `validate`, `pack` and the harness accept them, `pack` writes the

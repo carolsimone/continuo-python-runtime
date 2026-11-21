@@ -75,8 +75,9 @@ def contract_text(
     """Return the YAML text of the ODCS contract that declares the node these fields describe.
 
     Raises `ValueError` for fields the contract cannot hold: a column with a key
-    other than `name`, `type` and `nullable`, a `primary_key` name that is no
-    column, or the `reads` of a `python-csv` node that is not `{"csv": <uri>}`.
+    other than `name`, `type`, `nullable`, `property` and `local`, a
+    `primary_key` name that is no column, or the `reads` of a `python-csv` node
+    that is not `{"csv": <uri>}`.
     """
     custom: list[tuple[str, Any]] = [
         ("kind", kind),

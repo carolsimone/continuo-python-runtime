@@ -2,9 +2,9 @@
 
 ``continuo-runtime validate --service <name> --ontology <file>`` runs the
 per-service rules of continuo-contracts over the contracts of one service:
-each contract is stored as the release stores it, filled with what the
-ontology knows and checked, so a team sees in its own CI what the release
-will say about its bindings. This is the only module of the runtime that
+each contract is stored as a release stores it, filled with what the
+ontology knows and checked, so a team sees in its own CI what a release says
+about its bindings. This is the only module of the runtime that
 imports the library's ontology modules.
 """
 

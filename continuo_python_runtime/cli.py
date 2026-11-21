@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         "--ontology",
         default=None,
         help="The company's ontology file (needs --service): check every contract "
-             "against it, as the release will",
+             "against it, as a release does",
     )
 
     # pack subcommand

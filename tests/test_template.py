@@ -408,18 +408,18 @@ def _version_tuple(version: str) -> tuple[int, ...]:
 
 
 def test_the_template_builds_on_a_runtime_that_can_pack_its_contracts(tmp_path):
-    """The template's own Dockerfile names a runtime that has `pack`, the first being 0.13.0.
+    """The template's own Dockerfile names a runtime whose `pack` takes `--project`, the first being 0.15.0.
 
     The release workflow installs the runtime the Dockerfile names and runs
-    `validate` and `pack` with it, and its contracts are ODCS files: a runtime
-    before 0.13.0 reads `nodes:` contracts and has no `pack` or `packages`
-    command, so a repository copied from the template would fail before it
-    built anything.
+    `validate` and `pack --project` with it: a runtime before 0.15.0 takes
+    `--service` instead, and one before 0.13.0 reads `nodes:` contracts and has
+    no `pack` or `packages` command, so a repository copied from the template
+    would fail before it released anything.
     """
     code, written, out = _pin(tmp_path, (TEMPLATE / "Dockerfile").read_text())
     assert code == 0, out
     version = written.removeprefix("RUNTIME_VERSION=").strip()
-    assert _version_tuple(version) >= (0, 13, 0), version
+    assert _version_tuple(version) >= (0, 15, 0), version
 
 
 def test_ci_installs_the_pinned_runtime_before_it_checks_the_installed_version():

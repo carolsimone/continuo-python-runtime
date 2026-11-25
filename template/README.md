@@ -82,9 +82,9 @@ EOF
 
 The committed `requirements.lock` in this template is a **placeholder**: it
 locks `continuo-python-runtime==0.4.1` and `continuo-postgres-adapter==0.2.0`,
-which are older than runtime 0.13.0, the first the release workflow can use (it
-reads ODCS contracts and has `pack`). Regenerate it with the command above for
-runtime 0.13.0 or later, and the matching adapter, before you build with
+which are older than runtime 0.15.0, the first the release workflow can use (its
+`pack` takes `--project`). Regenerate it with the command above for
+runtime 0.15.0 or later, and the matching adapter, before you build with
 `Dockerfile.pip`.
 
 The release workflow's `Pin the runtime to the image` step reads the runtime
@@ -118,7 +118,7 @@ The CI/CD pipeline (`release.yml`) runs these steps:
    installed version differs or the Dockerfile has no such line. `pack` computes
    part of each node's `content_hash`, and the harness recomputes the whole
    hash with the image's runtime at start, so CI must use the same runtime. The
-   workflow needs runtime 0.13.0 or later
+   workflow needs runtime 0.15.0 or later
 2. **Lint** scripts for hand-written SQL (forbidden)
 3. **Validate** the ODCS contracts in `contracts/` and parse every read query
 4. **Run domain tests** (optional, if `tests/` exists)

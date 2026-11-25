@@ -34,6 +34,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   come from: `build_from_sql`, `build_from_columns`, `build_from_prod`.
   **Breaking for adapter authors:** rename the method.
 
+### Changed
+
+- The validation runner refuses an unknown `VALIDATION_OP` before it reads any
+  other input, with exit 2 and the message `unknown VALIDATION_OP '<op>'`. A
+  caller that still sends `seed_preflight` or `clone_from_prod` gets that
+  message, not a missing `DBT_TARGET_SCHEMA`.
+- The template's Dockerfile and the README's engine examples build on the
+  `v0.15.0` engine images, the first whose `pack` takes `--project`.
+
 ## [0.14.0] - 2026-11-21
 
 **TL;DR**

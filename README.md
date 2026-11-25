@@ -533,11 +533,11 @@ A domain repo picks its warehouse engine by which base image it builds
 `FROM`:
 
 ```dockerfile
-FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.14.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.15.0
 # or
-FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.14.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-trino:v0.15.0
 # or
-FROM ghcr.io/carolsimone/continuo-python-runtime-duckdb:v0.14.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-duckdb:v0.15.0
 ```
 
 The engine is part of the image **name**; the tag is the bare version, so

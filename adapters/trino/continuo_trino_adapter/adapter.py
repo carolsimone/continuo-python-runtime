@@ -633,8 +633,8 @@ class TrinoAdapter(WarehouseAdapter, AppendCapable, UpsertCapable, DependentsInt
     def build_empty_from_prod(self, candidate_schema: str, prod_schema: str, table: str) -> None:
         """Create ``candidate_schema.table`` empty, shaped like ``prod_schema.table``."""
         logger.info(
-            "cloning production table %s.%s into candidate schema %s",
-            prod_schema, table, candidate_schema,
+            "building %s.%s empty, shaped like production table %s.%s",
+            candidate_schema, table, prod_schema, table,
         )
         ref = self._table_ref(candidate_schema, table)
         self._execute(f"DROP TABLE IF EXISTS {ref}")

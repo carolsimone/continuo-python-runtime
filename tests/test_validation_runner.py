@@ -134,6 +134,14 @@ class FakeS3Client:
         return {"Body": _FakeBody(data)}
 
 
+def _only_block(out: str) -> dict:
+    """The body of the one result block, which must be the last thing on stdout."""
+    lines = out.splitlines()
+    assert out.count(result.SENTINEL_BEGIN) == 1
+    assert lines[-3] == result.SENTINEL_BEGIN and lines[-1] == result.SENTINEL_END
+    return json.loads(lines[-2])
+
+
 def _set_common_env(monkeypatch):
     """Set common environment variables."""
     monkeypatch.setenv("DBT_TARGET_SCHEMA", "_candidate_relA")
@@ -348,9 +356,23 @@ def test_main_runs_the_dependents_check_and_names_its_inputs(monkeypatch, capsys
     with pytest.raises(SystemExit) as exc:
         runner.main()
     assert exc.value.code == 2
-    block = json.loads(capsys.readouterr().out.splitlines()[-2])
+    block = _only_block(capsys.readouterr().out)
     assert block["op"] == "dependents_check"
     assert block["message"] == "DEPENDENTS_CHECK_MODE must be one of check, report, got 'drop'"
+
+
+@pytest.mark.parametrize("op", ["seed_preflight", "clone_from_prod"])
+def test_main_refuses_an_old_op_name_as_unknown_before_reading_any_input(monkeypatch, capsys, op):
+    """The ops' old names are unknown ops, refused before the inputs of any op are read."""
+    monkeypatch.setenv("VALIDATION_OP", op)
+    monkeypatch.delenv("DBT_TARGET_SCHEMA", raising=False)
+    monkeypatch.delenv("NODE_ID", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        runner.main()
+    assert exc.value.code == 2
+    block = _only_block(capsys.readouterr().out)
+    assert block["status"] == "error"
+    assert block["message"] == f"unknown VALIDATION_OP {op!r}"
 
 
 def test_main_ensure_schema_calls_adapter_without_table(monkeypatch, capsys):

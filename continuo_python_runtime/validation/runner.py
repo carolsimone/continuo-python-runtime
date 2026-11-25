@@ -121,7 +121,7 @@ def load_candidate_spec() -> dict:
 
 _NODE_OPS = ("build_from_sql", "build_from_prod", "build_from_columns", "check_binds")
 _SCHEMA_OPS = ("ensure_schema", "drop_schema")
-_DEPENDENTS_OPS = ("dependents_check", "probe_views")
+_WAREHOUSE_READ_OPS = ("dependents_check", "probe_views")
 
 
 def main() -> None:
@@ -135,15 +135,23 @@ def main() -> None:
     Schema ops (``ensure_schema``/``drop_schema``) act on the whole candidate
     schema — the executor schedules them as one-shot engine-image Jobs to own
     the candidate-schema lifecycle without connecting to the warehouse itself —
-    and take no table. The dependents ops (``dependents_check``/``probe_views``) read
-    their own inputs, need no candidate schema and exit with the code
-    ``dependents_check`` returns.
+    and take no table. The warehouse-read ops (``dependents_check``/``probe_views``)
+    read the warehouse and change nothing; they read their own inputs, need no
+    candidate schema and exit with the code their function in
+    ``dependents_check`` returns. An unknown op is refused before any input is read.
     """
     logging.basicConfig(
         level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s"
     )
     op = os.environ.get("VALIDATION_OP", "build_from_sql")
-    if op in _DEPENDENTS_OPS:
+    if op not in (*_NODE_OPS, *_SCHEMA_OPS, *_WAREHOUSE_READ_OPS):
+        target_schema = os.environ.get("DBT_TARGET_SCHEMA", "")
+        unique_id = _node_id() or (f"schema.{target_schema}" if target_schema else "")
+        logger.error("unknown VALIDATION_OP %r", op)
+        print(result.result_block("error", f"unknown VALIDATION_OP {op!r}",
+                                  unique_id=unique_id), flush=True)
+        sys.exit(2)
+    if op in _WAREHOUSE_READ_OPS:
         if op == "dependents_check":
             code = dependents_check.run_dependents_check(os.environ)
         else:
@@ -222,14 +230,8 @@ def main() -> None:
                 sys.exit(2)
         else:
             prod_schema = _require("PROD_SCHEMA")
-    elif op in _SCHEMA_OPS:
-        unique_id = _node_id() or f"schema.{schema}"
     else:
         unique_id = _node_id() or f"schema.{schema}"
-        logger.error("unknown VALIDATION_OP %r", op)
-        print(result.result_block("error", f"unknown VALIDATION_OP {op!r}",
-                                  unique_id=unique_id), flush=True)
-        sys.exit(2)
 
     # Engine selection is discovery, not configuration: the image installs one adapter.
     try:

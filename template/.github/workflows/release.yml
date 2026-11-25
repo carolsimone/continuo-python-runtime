@@ -94,8 +94,8 @@ jobs:
       # this step with one that reads the continuo-python-runtime==X.Y.Z pin of
       # its requirements.lock and writes RUNTIME_VERSION the same way (the
       # README's Shape 2 section has it).
-      # The image needs runtime 0.13.0 or later, the first with `pack` and the
-      # `packages` command that `pack` runs in the image.
+      # The image needs runtime 0.15.0 or later, the first whose `pack` takes
+      # `--project` (`pack` also runs the image's `packages` command).
       - name: Pin the runtime to the image
         run: |
           version="$(sed -nE 's#^FROM[[:space:]]+ghcr\.io/carolsimone/continuo-python-runtime-[a-z0-9]+:v([0-9]+\.[0-9]+\.[0-9]+)(@sha256:[0-9a-f]+)?[[:space:]]*$#\1#p' Dockerfile | head -n 1)"

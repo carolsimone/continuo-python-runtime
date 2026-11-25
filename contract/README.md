@@ -33,7 +33,7 @@ either. It's the interface both callers agree on: `continuo-python-runtime`
 `continuo-python-runtime-<engine>` adapter package (which implements it). The
 whole contract is the twelve `WarehouseAdapter` methods (`required_env`,
 `from_env`, `ensure_schema`, `drop_schema`, `build_empty_from_sql`,
-`clone_empty_from_prod`, `build_empty_from_columns`, `check_binds`, `fetch`,
+`build_empty_from_prod`, `build_empty_from_columns`, `check_binds`, `fetch`,
 `ensure_table`, `load`, `close`) plus the sentinel result-block format, both
 reached through the single `continuo_engine.adapters` entry-point group that
 `discover_adapter` resolves against — and the three shared guards

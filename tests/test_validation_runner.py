@@ -1,4 +1,6 @@
 """Unit tests for the runner — hand-written fakes, no live DB or S3."""
+import json
+
 import boto3
 import pytest
 
@@ -14,7 +16,7 @@ class FakeWarehouseAdapter(WarehouseAdapter):
         self.schemas_ensured = []
         self.schemas_dropped = []
         self.builds = []    # list of (schema, table, sql)
-        self.clones = []    # list of (candidate_schema, prod_schema, table)
+        self.prod_builds = []    # list of (candidate_schema, prod_schema, table)
         self.column_builds = []   # list of (schema, table, columns, config)
         self.checked_binds = []   # list of sql, in call order
         self.calls = []     # unified (method, args) log, in call order across methods
@@ -47,10 +49,10 @@ class FakeWarehouseAdapter(WarehouseAdapter):
         self.builds.append((schema, table, compiled_sql))
         self.calls.append(("build_empty_from_sql", (schema, table, compiled_sql)))
 
-    def clone_empty_from_prod(self, candidate_schema: str, prod_schema: str, table: str) -> None:
-        """Record clone call."""
-        self.clones.append((candidate_schema, prod_schema, table))
-        self.calls.append(("clone_empty_from_prod", (candidate_schema, prod_schema, table)))
+    def build_empty_from_prod(self, candidate_schema: str, prod_schema: str, table: str) -> None:
+        """Record a build from the production table."""
+        self.prod_builds.append((candidate_schema, prod_schema, table))
+        self.calls.append(("build_empty_from_prod", (candidate_schema, prod_schema, table)))
 
     def build_empty_from_columns(
         self, schema: str, table: str, columns: list[dict], config: dict
@@ -165,7 +167,7 @@ def test_load_candidate_sql_raises_on_bad_uri(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# main — build_from_sql / clone_from_prod / unknown op (ported behaviors)
+# main — build_from_sql / build_from_prod / unknown op (ported behaviors)
 # --------------------------------------------------------------------------
 
 def test_main_build_from_sql_calls_adapter_and_emits_success(monkeypatch, capsys):
@@ -180,7 +182,7 @@ def test_main_build_from_sql_calls_adapter_and_emits_success(monkeypatch, capsys
 
     assert fake.schemas_ensured == ["_candidate_relA"]
     assert fake.builds == [("_candidate_relA", "orders", "SELECT 1 AS id")]
-    assert fake.clones == []
+    assert fake.prod_builds == []
     assert fake.closed is True
     out = capsys.readouterr().out
     assert result.SENTINEL_BEGIN in out
@@ -264,7 +266,7 @@ def test_main_check_binds_calls_adapter_and_emits_success(monkeypatch, capsys):
     assert fake.schemas_ensured == ["_candidate_relA"]
     assert fake.checked_binds == [sql]
     assert fake.builds == []
-    assert fake.clones == []
+    assert fake.prod_builds == []
     assert fake.column_builds == []
     assert fake.closed is True
     out = capsys.readouterr().out
@@ -288,7 +290,7 @@ def test_main_check_binds_bind_error_exits_1(monkeypatch, capsys):
 
     assert exc.value.code == 1
     assert fake.checked_binds == [sql]
-    assert fake.builds == [] and fake.clones == [] and fake.column_builds == []
+    assert fake.builds == [] and fake.prod_builds == [] and fake.column_builds == []
     out = capsys.readouterr().out
     assert result.SENTINEL_BEGIN in out
     assert '"status":"error"' in out
@@ -306,10 +308,10 @@ def test_main_check_binds_empty_candidate_sql_errors(monkeypatch, capsys):
     assert '"status":"error"' in capsys.readouterr().out
 
 
-def test_main_clone_from_prod_calls_adapter(monkeypatch, capsys):
-    """Clone from prod and emit success block."""
+def test_main_build_from_prod_calls_adapter(monkeypatch, capsys):
+    """Build from the production table and emit a success block."""
     _set_common_env(monkeypatch)
-    monkeypatch.setenv("VALIDATION_OP", "clone_from_prod")
+    monkeypatch.setenv("VALIDATION_OP", "build_from_prod")
     monkeypatch.setenv("PROD_SCHEMA", "analytics")
     fake = FakeWarehouseAdapter()
     _install_fake_adapter(monkeypatch, fake)
@@ -317,16 +319,16 @@ def test_main_clone_from_prod_calls_adapter(monkeypatch, capsys):
     runner.main()
 
     assert fake.schemas_ensured == ["_candidate_relA"]
-    assert fake.clones == [("_candidate_relA", "analytics", "orders")]
+    assert fake.prod_builds == [("_candidate_relA", "analytics", "orders")]
     assert fake.builds == []
     assert fake.closed is True
     assert '"status":"success"' in capsys.readouterr().out
 
 
-def test_main_clone_from_prod_missing_prod_schema_exits(monkeypatch, capsys):
+def test_main_build_from_prod_missing_prod_schema_exits(monkeypatch, capsys):
     """Exit 2 when PROD_SCHEMA is missing, with a structured error block."""
     _set_common_env(monkeypatch)
-    monkeypatch.setenv("VALIDATION_OP", "clone_from_prod")
+    monkeypatch.setenv("VALIDATION_OP", "build_from_prod")
     monkeypatch.delenv("PROD_SCHEMA", raising=False)
     with pytest.raises(SystemExit) as exc:
         runner.main()
@@ -334,6 +336,21 @@ def test_main_clone_from_prod_missing_prod_schema_exits(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert result.SENTINEL_BEGIN in out
     assert "missing required env var PROD_SCHEMA" in out
+
+
+def test_main_runs_the_dependents_check_and_names_its_inputs(monkeypatch, capsys):
+    """VALIDATION_OP=dependents_check reads DEPENDENTS_CHECK_* and prints a dependents_check block."""
+    monkeypatch.setenv("VALIDATION_OP", "dependents_check")
+    monkeypatch.setenv("DEPENDENTS_CHECK_MODE", "drop")
+    monkeypatch.setenv("DEPENDENTS_CHECK_ENGINE_FAMILY", "schema_bound")
+    monkeypatch.setenv("PROD_SCHEMA", "analytics")
+    monkeypatch.setenv("TABLE_NAME", "seed_fx_rates_eur")
+    with pytest.raises(SystemExit) as exc:
+        runner.main()
+    assert exc.value.code == 2
+    block = json.loads(capsys.readouterr().out.splitlines()[-2])
+    assert block["op"] == "dependents_check"
+    assert block["message"] == "DEPENDENTS_CHECK_MODE must be one of check, report, got 'drop'"
 
 
 def test_main_ensure_schema_calls_adapter_without_table(monkeypatch, capsys):
@@ -349,7 +366,7 @@ def test_main_ensure_schema_calls_adapter_without_table(monkeypatch, capsys):
 
     assert fake.schemas_ensured == ["_candidate_relA"]
     assert fake.schemas_dropped == []
-    assert fake.builds == [] and fake.clones == []
+    assert fake.builds == [] and fake.prod_builds == []
     assert fake.closed is True
     out = capsys.readouterr().out
     assert '"status":"success"' in out
@@ -368,7 +385,7 @@ def test_main_drop_schema_calls_adapter_without_ensuring(monkeypatch, capsys):
 
     assert fake.schemas_dropped == ["_candidate_relA"]
     assert fake.schemas_ensured == []  # teardown must not recreate the schema
-    assert fake.builds == [] and fake.clones == []
+    assert fake.builds == [] and fake.prod_builds == []
     assert fake.closed is True
     assert '"status":"success"' in capsys.readouterr().out
 
@@ -404,7 +421,7 @@ def test_main_unknown_validation_op_exits_2(monkeypatch, capsys):
 def test_main_discovery_failure_exits_2_with_error_block(monkeypatch, capsys):
     """Exit 2 on adapter discovery failure."""
     _set_common_env(monkeypatch)
-    monkeypatch.setenv("VALIDATION_OP", "clone_from_prod")
+    monkeypatch.setenv("VALIDATION_OP", "build_from_prod")
     monkeypatch.setenv("PROD_SCHEMA", "analytics")
 
     def _fail():
@@ -422,7 +439,7 @@ def test_main_discovery_failure_exits_2_with_error_block(monkeypatch, capsys):
 def test_main_missing_required_env_exits_2_naming_vars(monkeypatch, capsys):
     """Exit 2 when adapter required env vars are missing."""
     _set_common_env(monkeypatch)
-    monkeypatch.setenv("VALIDATION_OP", "clone_from_prod")
+    monkeypatch.setenv("VALIDATION_OP", "build_from_prod")
     monkeypatch.setenv("PROD_SCHEMA", "analytics")
     monkeypatch.delenv("POSTGRES_HOST", raising=False)
     fake = FakeWarehouseAdapter()
@@ -931,9 +948,9 @@ def _setup_unknown_op(monkeypatch):
 
 
 def _setup_discovery_failure(monkeypatch):
-    """Arrange a clone_from_prod run whose adapter discovery fails."""
+    """Arrange a build_from_prod run whose adapter discovery fails."""
     _set_common_env(monkeypatch)
-    monkeypatch.setenv("VALIDATION_OP", "clone_from_prod")
+    monkeypatch.setenv("VALIDATION_OP", "build_from_prod")
     monkeypatch.setenv("PROD_SCHEMA", "analytics")
 
     def _fail():
@@ -943,9 +960,9 @@ def _setup_discovery_failure(monkeypatch):
 
 
 def _setup_missing_required_env(monkeypatch):
-    """Arrange a clone_from_prod run whose adapter is missing required env."""
+    """Arrange a build_from_prod run whose adapter is missing required env."""
     _set_common_env(monkeypatch)
-    monkeypatch.setenv("VALIDATION_OP", "clone_from_prod")
+    monkeypatch.setenv("VALIDATION_OP", "build_from_prod")
     monkeypatch.setenv("PROD_SCHEMA", "analytics")
     monkeypatch.delenv("POSTGRES_HOST", raising=False)
     fake = FakeWarehouseAdapter()
@@ -959,9 +976,9 @@ def _setup_missing_dbt_target_schema(monkeypatch):
 
 
 def _setup_missing_prod_schema(monkeypatch):
-    """Arrange a clone_from_prod run missing the required PROD_SCHEMA env var."""
+    """Arrange a build_from_prod run missing the required PROD_SCHEMA env var."""
     _set_common_env(monkeypatch)
-    monkeypatch.setenv("VALIDATION_OP", "clone_from_prod")
+    monkeypatch.setenv("VALIDATION_OP", "build_from_prod")
     monkeypatch.delenv("PROD_SCHEMA", raising=False)
 
 

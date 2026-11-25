@@ -5,7 +5,7 @@ One port covers both roles an engine plays in Continuo:
 * **validation DDL** — a release gate builds each node as an EMPTY table in the
   candidate schema and bind-checks its compiled SQL (``ensure_schema``,
   ``drop_schema``, ``build_empty_from_sql``, ``build_empty_from_columns``,
-  ``clone_empty_from_prod``, ``check_binds``);
+  ``build_empty_from_prod``, ``check_binds``);
 * **python-node data-plane I/O** — the runtime harness reads declared inputs and
   writes a node's result (``fetch``, ``ensure_table``, ``load``).
 
@@ -112,7 +112,7 @@ class WarehouseAdapter(ABC):
         """Create ``schema.table`` empty, shaped by the compiled SELECT."""
 
     @abstractmethod
-    def clone_empty_from_prod(self, candidate_schema: str, prod_schema: str, table: str) -> None:
+    def build_empty_from_prod(self, candidate_schema: str, prod_schema: str, table: str) -> None:
         """Create ``candidate_schema.table`` empty, shaped like ``prod_schema.table``."""
 
     @abstractmethod

@@ -126,29 +126,29 @@ def estate() -> Iterator[tuple[str, str]]:
 
 def _seed_env(s: str, **extra: str) -> dict[str, str]:
     return {
-        "VALIDATION_OP": "seed_preflight", "SEED_PREFLIGHT_MODE": "check",
-        "SEED_PREFLIGHT_ENGINE_FAMILY": "schema_bound", "PROD_SCHEMA": s, "TABLE_NAME": "seed",
-        "SEED_PREFLIGHT_ALLOWED": json.dumps([f"{s}.v"]), **extra,
+        "VALIDATION_OP": "dependents_check", "DEPENDENTS_CHECK_MODE": "check",
+        "DEPENDENTS_CHECK_ENGINE_FAMILY": "schema_bound", "PROD_SCHEMA": s, "TABLE_NAME": "seed",
+        "DEPENDENTS_CHECK_ALLOWED": json.dumps([f"{s}.v"]), **extra,
     }
 
 
-def test_seed_preflight_stops_on_a_view_outside_the_allowed_set(estate):
+def test_dependents_check_stops_on_a_view_outside_the_allowed_set(estate):
     s, b = estate
     proc = _entrypoint("validation-op", _seed_env(s))
     block = _block(proc)
     assert proc.returncode == 1
-    assert (block["status"], block["reason"], block["op"]) == ("error", "unowned_dependents", "seed_preflight")
+    assert (block["status"], block["reason"], block["op"]) == ("error", "unowned_dependents", "dependents_check")
     assert block["failures"] == 1 and block["checked"] is True and block["completeness"] == "exact"
     assert {(d["schema"], d["name"], d["allowed"]) for d in block["dependents"]} == {(s, "v", True), (b, "bi_v", False)}
     assert "unowned_dependents" in proc.stderr
 
 
-def test_seed_preflight_passes_once_the_view_is_acknowledged(estate):
+def test_dependents_check_passes_once_the_view_is_acknowledged(estate):
     s, b = estate
-    proc = _entrypoint("validation-op", _seed_env(s, SEED_PREFLIGHT_ACKNOWLEDGED=json.dumps([f"{b}.bi_v"])))
+    proc = _entrypoint("validation-op", _seed_env(s, DEPENDENTS_CHECK_ACKNOWLEDGED=json.dumps([f"{b}.bi_v"])))
     block = _block(proc)
     assert proc.returncode == 0
-    assert (block["status"], block["op"], block["failures"]) == ("success", "seed_preflight", 0)
+    assert (block["status"], block["op"], block["failures"]) == ("success", "dependents_check", 0)
     assert "reason" not in block and all(d["allowed"] for d in block["dependents"])
 
 
@@ -165,7 +165,7 @@ def test_probe_views_reports_a_view_that_cannot_be_read_and_exits_0(estate):
 
 
 @pytest.mark.parametrize("env,op", [
-    ({"VALIDATION_OP": "seed_preflight", "SEED_PREFLIGHT_MODE": "drop"}, "seed_preflight"),
+    ({"VALIDATION_OP": "dependents_check", "DEPENDENTS_CHECK_MODE": "drop"}, "dependents_check"),
     ({"VALIDATION_OP": "probe_views", "PROBE_VIEWS": '"bi.x"'}, "probe_views"),
 ])
 def test_a_bad_input_exits_2_and_the_process_does_not_ask_for_a_candidate_schema(env, op):

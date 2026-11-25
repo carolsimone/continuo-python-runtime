@@ -1,7 +1,7 @@
 """Trino implementation of the WarehouseAdapter port.
 
 One class covers both roles Continuo asks of an engine: validation DDL
-(``ensure_schema``/``drop_schema``, the empty builds and clones, ``check_binds``)
+(``ensure_schema``/``drop_schema``, the empty builds, ``check_binds``)
 and python-node data-plane I/O (``fetch`` executes one declared read and returns
 an Arrow table; ``ensure_table``/``load`` build and replace a table's contents;
 ``append`` and ``_upsert`` add or merge rows; ``table_columns`` reads a table's shape).
@@ -630,7 +630,7 @@ class TrinoAdapter(WarehouseAdapter, AppendCapable, UpsertCapable, DependentsInt
         self._execute(f"DROP TABLE IF EXISTS {ref}")
         self._execute(f"CREATE TABLE {ref} AS ({inner}) WITH NO DATA")
 
-    def clone_empty_from_prod(self, candidate_schema: str, prod_schema: str, table: str) -> None:
+    def build_empty_from_prod(self, candidate_schema: str, prod_schema: str, table: str) -> None:
         """Create ``candidate_schema.table`` empty, shaped like ``prod_schema.table``."""
         logger.info(
             "cloning production table %s.%s into candidate schema %s",

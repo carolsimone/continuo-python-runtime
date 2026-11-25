@@ -294,8 +294,8 @@ class DuckLakeSession(LakeGateway):
     def create_empty_table_as(self, table: QualifiedTable, select_sql: str) -> None:
         self._run(self._renderer.create_empty_table_as(table, select_sql))
 
-    def create_empty_clone(self, target: QualifiedTable, source: QualifiedTable) -> None:
-        self._run(self._renderer.create_empty_clone(target, source))
+    def create_empty_like(self, target: QualifiedTable, source: QualifiedTable) -> None:
+        self._run(self._renderer.create_empty_like(target, source))
 
     def apply_layout(self, table: QualifiedTable, layout: TableLayout) -> None:
         if layout.partition_keys:

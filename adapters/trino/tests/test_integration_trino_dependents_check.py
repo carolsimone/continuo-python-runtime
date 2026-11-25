@@ -1,4 +1,4 @@
-"""``seed_preflight`` and ``probe_views`` against Trino + Iceberg (tests/smoke/trino-stack).
+"""``dependents_check`` and ``probe_views`` against Trino + Iceberg (tests/smoke/trino-stack).
 
 Run the stack first:
     docker compose -f tests/smoke/trino-stack/docker-compose.yml up -d --wait
@@ -16,7 +16,7 @@ from collections.abc import Iterator
 import pytest
 
 from continuo_engine_contract import result
-from continuo_python_runtime.validation import preflight
+from continuo_python_runtime.validation import dependents_check
 from continuo_trino_adapter.adapter import TrinoAdapter
 
 pytestmark = pytest.mark.integration
@@ -52,7 +52,7 @@ def warehouse(trino_env) -> Iterator[tuple[TrinoAdapter, str, str]]:
 
 def _run(op, **env):
     out = io.StringIO()
-    run = preflight.run_seed_preflight if op == "seed_preflight" else preflight.run_probe_views
+    run = dependents_check.run_dependents_check if op == "dependents_check" else dependents_check.run_probe_views
     with contextlib.redirect_stdout(out):
         code = run({**os.environ, **env}, discover=lambda: ("trino", TrinoAdapter))
     lines = out.getvalue().splitlines()
@@ -72,8 +72,8 @@ def test_check_lists_an_external_view_and_passes(warehouse):
     _view(adapter, s, "cv", s, "seed")
     _view(adapter, other, "ext", s, "seed")
     code, block = _run(
-        "seed_preflight", SEED_PREFLIGHT_MODE="check", SEED_PREFLIGHT_ENGINE_FAMILY="late_binding",
-        PROD_SCHEMA=s, TABLE_NAME="seed", SEED_PREFLIGHT_ALLOWED=json.dumps([f"{s}.cv"]),
+        "dependents_check", DEPENDENTS_CHECK_MODE="check", DEPENDENTS_CHECK_ENGINE_FAMILY="late_binding",
+        PROD_SCHEMA=s, TABLE_NAME="seed", DEPENDENTS_CHECK_ALLOWED=json.dumps([f"{s}.cv"]),
     )
     assert code == 0 and block["status"] == "success" and "reason" not in block
     assert block["completeness"] == "best_effort" and block["checked"] is True
@@ -85,7 +85,7 @@ def test_check_lists_an_external_view_and_passes(warehouse):
 def test_a_schema_bound_release_on_trino_is_engine_mismatch(warehouse):
     _, s, _ = warehouse
     code, block = _run(
-        "seed_preflight", SEED_PREFLIGHT_MODE="check", SEED_PREFLIGHT_ENGINE_FAMILY="schema_bound",
+        "dependents_check", DEPENDENTS_CHECK_MODE="check", DEPENDENTS_CHECK_ENGINE_FAMILY="schema_bound",
         PROD_SCHEMA=s, TABLE_NAME="seed",
     )
     assert code == 1 and block["reason"] == "engine_mismatch" and block["checked"] is False

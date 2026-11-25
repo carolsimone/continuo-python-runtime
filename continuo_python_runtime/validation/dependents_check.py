@@ -1,6 +1,6 @@
-"""The ``seed_preflight`` and ``probe_views`` validation ops.
+"""The ``dependents_check`` and ``probe_views`` validation ops.
 
-``seed_preflight`` asks the warehouse which objects a reload of a seed's
+``dependents_check`` asks the warehouse which objects a reload of a seed's
 production table would destroy or leave reading a missing table, and compares
 them with the objects the operator has allowed or acknowledged. ``check`` stops
 a reload that would hit an object outside that set; ``report`` prints the same
@@ -15,7 +15,7 @@ when the op could not run (a bad input, no adapter, missing adapter env, an
 unexpected error). The block's ``status`` is ``error`` for exit codes 1 and 2.
 Diagnostics go to stderr through ``logging``; stdout carries only the block.
 
-The decision of ``seed_preflight`` is the pure function :func:`decide`; the rest
+The decision of ``dependents_check`` is the pure function :func:`decide`; the rest
 of the module reads the inputs, drives the adapter and prints.
 """
 import json
@@ -33,7 +33,7 @@ from continuo_engine_contract.port import (  # type: ignore[import-untyped]
     discover_adapter,
 )
 
-logger = logging.getLogger("validation_preflight")
+logger = logging.getLogger("validation_dependents_check")
 
 _Discover = Callable[[], tuple[str, type[WarehouseAdapter]]]
 
@@ -47,7 +47,7 @@ _MAX_TEXT = 500
 
 
 class Situation(Enum):
-    """How far ``seed_preflight`` got, which is what decides its verdict."""
+    """How far ``dependents_check`` got, which is what decides its verdict."""
 
     BAD_INPUT = "bad_input"
     ENGINE_MISMATCH = "engine_mismatch"
@@ -59,7 +59,7 @@ class Situation(Enum):
 
 @dataclass(frozen=True)
 class Verdict:
-    """What ``seed_preflight`` concludes: the block's status, reason, message and the exit code."""
+    """What ``dependents_check`` concludes: the block's status, reason, message and the exit code."""
 
     status: str
     reason: str
@@ -78,7 +78,7 @@ def decide(
     completeness: str = "none",
     has_unowned: bool = False,
 ) -> Verdict:
-    """The decision table of ``seed_preflight``.
+    """The decision table of ``dependents_check``.
 
     *family* is the engine family the release expects (``schema_bound`` or
     ``late_binding``), *detail* the text that explains the situation, *completeness*
@@ -178,7 +178,7 @@ def _close(adapter: Any) -> None:
         logger.error("adapter close failed: %s", exc)
 
 
-# --- seed_preflight ---------------------------------------------------------------
+# --- dependents_check ---------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -197,19 +197,19 @@ def _seed_node_id(env: Mapping[str, str]) -> str:
 
 
 def _seed_inputs(env: Mapping[str, str]) -> _SeedInputs:
-    mode = env.get("SEED_PREFLIGHT_MODE", "")
+    mode = env.get("DEPENDENTS_CHECK_MODE", "")
     if mode not in _MODES:
-        raise _InputError(f"SEED_PREFLIGHT_MODE must be one of {', '.join(_MODES)}, got {mode!r}")
-    family = env.get("SEED_PREFLIGHT_ENGINE_FAMILY", "")
+        raise _InputError(f"DEPENDENTS_CHECK_MODE must be one of {', '.join(_MODES)}, got {mode!r}")
+    family = env.get("DEPENDENTS_CHECK_ENGINE_FAMILY", "")
     if family not in _FAMILIES:
         raise _InputError(
-            f"SEED_PREFLIGHT_ENGINE_FAMILY must be one of {', '.join(_FAMILIES)}, got {family!r}"
+            f"DEPENDENTS_CHECK_ENGINE_FAMILY must be one of {', '.join(_FAMILIES)}, got {family!r}"
         )
     for name in ("PROD_SCHEMA", "TABLE_NAME"):
         if not env.get(name):
             raise _InputError(f"missing required env var {name}")
-    allowed = _json_list(env, "SEED_PREFLIGHT_ALLOWED", required=False)
-    acknowledged = _json_list(env, "SEED_PREFLIGHT_ACKNOWLEDGED", required=False)
+    allowed = _json_list(env, "DEPENDENTS_CHECK_ALLOWED", required=False)
+    acknowledged = _json_list(env, "DEPENDENTS_CHECK_ACKNOWLEDGED", required=False)
     return _SeedInputs(
         mode=mode,
         family=family,
@@ -223,10 +223,10 @@ def _seed_fields(
     env: Mapping[str, str], drop_semantics: str, verdict: Verdict, dependents: list[dict[str, Any]]
 ) -> dict[str, Any]:
     return {
-        "op": "seed_preflight",
-        "mode": env.get("SEED_PREFLIGHT_MODE", ""),
+        "op": "dependents_check",
+        "mode": env.get("DEPENDENTS_CHECK_MODE", ""),
         "checked": verdict.checked,
-        "engine_family": env.get("SEED_PREFLIGHT_ENGINE_FAMILY", ""),
+        "engine_family": env.get("DEPENDENTS_CHECK_ENGINE_FAMILY", ""),
         "drop_semantics": drop_semantics,
         "completeness": verdict.completeness,
         "dependents": dependents,
@@ -239,9 +239,9 @@ def _finish_seed(
 ) -> int:
     node_id = _seed_node_id(env)
     if verdict.exit_code == 2:
-        logger.error("seed_preflight %s: %s", node_id, verdict.message)
+        logger.error("dependents_check %s: %s", node_id, verdict.message)
     elif verdict.reason or verdict.exit_code:
-        logger.warning("seed_preflight %s: %s", node_id, verdict.message)
+        logger.warning("dependents_check %s: %s", node_id, verdict.message)
     _emit(
         verdict.status, verdict.message, node_id, verdict.reason,
         _seed_fields(env, drop_semantics, verdict, dependents or []),
@@ -249,24 +249,24 @@ def _finish_seed(
     return verdict.exit_code
 
 
-def run_seed_preflight(
+def run_dependents_check(
     env: Mapping[str, str], discover: _Discover = discover_adapter
 ) -> int:
-    """Run ``seed_preflight`` against *env*; print its one block and return the exit code.
+    """Run ``dependents_check`` against *env*; print its one block and return the exit code.
 
     Reads the op's inputs and the adapter's ``required_env()`` from *env* (adapters
     connect from ``os.environ``, so the runner passes that). An unexpected error
     still prints one ``error`` block and returns 2.
     """
     try:
-        return _seed_preflight(env, discover)
+        return _dependents_check(env, discover)
     except Exception as exc:
-        logger.exception("seed_preflight %s failed unexpectedly", _seed_node_id(env))
+        logger.exception("dependents_check %s failed unexpectedly", _seed_node_id(env))
         verdict = Verdict("error", "", 2, False, "none", f"unexpected error: {_first_line(exc)}")
         return _finish_seed(env, "", verdict)
 
 
-def _seed_preflight(env: Mapping[str, str], discover: _Discover) -> int:
+def _dependents_check(env: Mapping[str, str], discover: _Discover) -> int:
     try:
         inputs = _seed_inputs(env)
         engine, adapter_cls = _discover_and_check_env(env, discover)

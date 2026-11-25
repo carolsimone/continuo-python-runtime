@@ -81,8 +81,8 @@ class FakeLakeGateway(LakeGateway):
     def create_empty_table_as(self, table, select_sql):
         self._do("create_empty_table_as", table, select_sql)
 
-    def create_empty_clone(self, target, source):
-        self._do("create_empty_clone", target, source)
+    def create_empty_like(self, target, source):
+        self._do("create_empty_like", target, source)
 
     def apply_layout(self, table, layout):
         self._do("apply_layout", table, layout)

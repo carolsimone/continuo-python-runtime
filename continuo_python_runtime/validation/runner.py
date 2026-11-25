@@ -3,7 +3,7 @@
 Dispatches on ``VALIDATION_OP`` env var (default ``build_from_sql``):
 - ``build_from_sql``: fetch the node's compiled SQL from S3 (``CANDIDATE_SQL_URI``) and
   materialize it empty (models/snapshots).
-- ``clone_from_prod``: clone an existing prod table's shape empty from ``PROD_SCHEMA``
+- ``build_from_prod``: build the table empty, shaped like the prod table in ``PROD_SCHEMA``
   (unchanged upstreams, including seeds).
 - ``build_from_columns``: for python nodes, which have no SELECT to shape their output
   from. Fetch the node's validation spec JSON from S3 (``CANDIDATE_SPEC_URI`` —
@@ -23,12 +23,12 @@ Dispatches on ``VALIDATION_OP`` env var (default ``build_from_sql``):
   via the engine adapter and creates nothing — a test whose compiled SQL names
   a column a candidate change dropped or renamed fails the release at its
   source, before any table is built.
-- ``seed_preflight``: before a seed's production table is reloaded, list the objects
+- ``dependents_check``: before a seed's production table is reloaded, list the objects
   (``PROD_SCHEMA``.``TABLE_NAME``) that read it and compare them with the operator's
   allowed and acknowledged lists. Needs no ``DBT_TARGET_SCHEMA`` and creates nothing.
 - ``probe_views``: try each view of ``PROBE_VIEWS`` with a zero-row read and report
   which ones no longer bind. Needs no ``DBT_TARGET_SCHEMA`` and creates nothing.
-  The inputs and the result block of both ops are in ``preflight``.
+  The inputs and the result block of both ops are in ``dependents_check``.
 
 The engine adapter is discovered from the single installed
 ``continuo_engine.adapters`` entry point — each runner image installs exactly one.
@@ -49,7 +49,7 @@ from continuo_engine_contract.port import (  # type: ignore[import-untyped]
 )
 from continuo_python_runtime.csv_readers import reader_for
 from continuo_python_runtime.csv_source import check_header, parse_csv_uri
-from continuo_python_runtime.validation import preflight, s3
+from continuo_python_runtime.validation import dependents_check, s3
 
 logger = logging.getLogger("validation_runner")
 
@@ -119,15 +119,15 @@ def load_candidate_spec() -> dict:
     return spec
 
 
-_NODE_OPS = ("build_from_sql", "clone_from_prod", "build_from_columns", "check_binds")
+_NODE_OPS = ("build_from_sql", "build_from_prod", "build_from_columns", "check_binds")
 _SCHEMA_OPS = ("ensure_schema", "drop_schema")
-_PREFLIGHT_OPS = ("seed_preflight", "probe_views")
+_DEPENDENTS_OPS = ("dependents_check", "probe_views")
 
 
 def main() -> None:
     """Run one validation op end to end; exits non-zero on failure.
 
-    Node ops (``build_from_sql``/``clone_from_prod``/``build_from_columns``)
+    Node ops (``build_from_sql``/``build_from_prod``/``build_from_columns``)
     materialize one empty node table and require ``TABLE_NAME``. ``check_binds``
     is also a node op and requires ``TABLE_NAME`` (for identity only, in the
     result block's ``unique_id``) but creates nothing: it bind-checks a dbt
@@ -135,19 +135,19 @@ def main() -> None:
     Schema ops (``ensure_schema``/``drop_schema``) act on the whole candidate
     schema — the executor schedules them as one-shot engine-image Jobs to own
     the candidate-schema lifecycle without connecting to the warehouse itself —
-    and take no table. The preflight ops (``seed_preflight``/``probe_views``) read
-    their own inputs, need no candidate schema and exit with the code ``preflight``
-    returns.
+    and take no table. The dependents ops (``dependents_check``/``probe_views``) read
+    their own inputs, need no candidate schema and exit with the code
+    ``dependents_check`` returns.
     """
     logging.basicConfig(
         level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s"
     )
     op = os.environ.get("VALIDATION_OP", "build_from_sql")
-    if op in _PREFLIGHT_OPS:
-        if op == "seed_preflight":
-            code = preflight.run_seed_preflight(os.environ)
+    if op in _DEPENDENTS_OPS:
+        if op == "dependents_check":
+            code = dependents_check.run_dependents_check(os.environ)
         else:
-            code = preflight.run_probe_views(os.environ)
+            code = dependents_check.run_probe_views(os.environ)
         if code:
             sys.exit(code)
         return
@@ -290,8 +290,8 @@ def main() -> None:
                     adapter.check_binds(read_sql)
                 adapter.build_empty_from_columns(schema, table, spec["output_columns"], config)
             else:
-                assert prod_schema is not None, "prod_schema must be set for clone_from_prod"
-                adapter.clone_empty_from_prod(schema, prod_schema, table)
+                assert prod_schema is not None, "prod_schema must be set for build_from_prod"
+                adapter.build_empty_from_prod(schema, prod_schema, table)
     except Exception as exc:
         logger.error("ERROR op=%s on schema %s: %s", op, schema, exc)
         print(result.result_block("error", str(exc), unique_id=unique_id), flush=True)

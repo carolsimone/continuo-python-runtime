@@ -1,6 +1,6 @@
 """Unit tests for the trino adapter — mock-free.
 
-DDL behavior (ensure_schema, drop_schema, build_empty_from_sql, clone_empty_from_prod,
+DDL behavior (ensure_schema, drop_schema, build_empty_from_sql, build_empty_from_prod,
 the connection built by from_env, and DDL validity) is verified against a live Trino +
 Iceberg stack in test_integration_trino.py, not with mocked cursors/connections here.
 """

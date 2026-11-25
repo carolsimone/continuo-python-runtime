@@ -112,13 +112,13 @@ def _view(adapter: TrinoAdapter, schema: str, name: str, source_schema: str, sou
 
 def _seed_env(s: str, family: str, **extra: str) -> dict[str, str]:
     return {
-        "VALIDATION_OP": "seed_preflight", "SEED_PREFLIGHT_MODE": "check",
-        "SEED_PREFLIGHT_ENGINE_FAMILY": family, "PROD_SCHEMA": s, "TABLE_NAME": "seed",
-        "SEED_PREFLIGHT_ALLOWED": json.dumps([f"{s}.cv"]), **extra,
+        "VALIDATION_OP": "dependents_check", "DEPENDENTS_CHECK_MODE": "check",
+        "DEPENDENTS_CHECK_ENGINE_FAMILY": family, "PROD_SCHEMA": s, "TABLE_NAME": "seed",
+        "DEPENDENTS_CHECK_ALLOWED": json.dumps([f"{s}.cv"]), **extra,
     }
 
 
-def test_seed_preflight_on_a_late_binding_release_lists_an_external_view_and_passes(lake):
+def test_dependents_check_on_a_late_binding_release_lists_an_external_view_and_passes(lake):
     adapter, s = lake
     other = f"{s}o"
     try:
@@ -131,18 +131,18 @@ def test_seed_preflight_on_a_late_binding_release_lists_an_external_view_and_pas
     finally:
         adapter.drop_schema(other)
     assert proc.returncode == 0
-    assert (block["status"], block["op"], block["failures"]) == ("success", "seed_preflight", 0)
+    assert (block["status"], block["op"], block["failures"]) == ("success", "dependents_check", 0)
     assert "reason" not in block and block["checked"] is True and block["completeness"] == "best_effort"
     assert {(d["schema"], d["name"], d["allowed"]) for d in block["dependents"]} == {(s, "cv", True), (other, "ext", False)}
     assert "may go stale" in block["message"] and f"{other}.ext" in block["message"]
 
 
-def test_seed_preflight_stops_a_schema_bound_release_on_trino(lake):
+def test_dependents_check_stops_a_schema_bound_release_on_trino(lake):
     _, s = lake
     proc = _entrypoint("validation-op", _seed_env(s, "schema_bound"))
     block = _block(proc)
     assert proc.returncode == 1
-    assert (block["status"], block["reason"], block["op"]) == ("error", "engine_mismatch", "seed_preflight")
+    assert (block["status"], block["reason"], block["op"]) == ("error", "engine_mismatch", "dependents_check")
     assert block["failures"] == 1 and block["checked"] is False and block["completeness"] == "none"
     assert "engine_mismatch" in proc.stderr
 
@@ -163,7 +163,7 @@ def test_probe_views_reports_a_view_that_no_longer_binds_and_exits_0(lake):
 
 
 @pytest.mark.parametrize("env,op", [
-    ({"VALIDATION_OP": "seed_preflight", "SEED_PREFLIGHT_MODE": "drop"}, "seed_preflight"),
+    ({"VALIDATION_OP": "dependents_check", "DEPENDENTS_CHECK_MODE": "drop"}, "dependents_check"),
     ({"VALIDATION_OP": "probe_views", "PROBE_VIEWS": '"bi.x"'}, "probe_views"),
 ])
 def test_a_bad_input_exits_2_and_the_process_does_not_ask_for_a_candidate_schema(env, op):

@@ -102,10 +102,10 @@ def test_build_empty_from_sql_keeps_a_read_ending_in_a_line_comment(adapter, sch
     assert columns_of(schema, "m") == [("id", "INTEGER", "YES")]
 
 
-def test_clone_empty_from_prod_copies_the_shape_not_the_rows(adapter, schema, prod_table, columns_of, scalar):
+def test_build_empty_from_prod_copies_the_shape_not_the_rows(adapter, schema, prod_table, columns_of, scalar):
     prod, src = prod_table
     adapter.ensure_schema(schema)
-    adapter.clone_empty_from_prod(schema, prod, src)
+    adapter.build_empty_from_prod(schema, prod, src)
     assert columns_of(schema, src) == [("id", "INTEGER", "YES"), ("name", "VARCHAR", "YES")]
     assert scalar(f'SELECT count(*) AS n FROM "{schema}"."{src}"') == 0
 

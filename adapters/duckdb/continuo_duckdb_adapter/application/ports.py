@@ -58,7 +58,7 @@ class LakeGateway(ABC):
         """Create *table* empty, shaped by the SELECT (no terminator, single read)."""
 
     @abstractmethod
-    def create_empty_clone(self, target: QualifiedTable, source: QualifiedTable) -> None:
+    def create_empty_like(self, target: QualifiedTable, source: QualifiedTable) -> None:
         """Create *target* empty with *source*'s shape."""
 
     @abstractmethod

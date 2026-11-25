@@ -9,11 +9,11 @@ concurrency:
   group: release
   cancel-in-progress: false
 env:
-  SERVICE: your-service-name          # one service name per domain repo
+  PROJECT: your-project-name          # the project this repository releases
   # Repository variable RELEASE_ENDPOINT: the origin of continuo's `auth.publicUrl`,
   # exactly: lowercase host, no default port, no path (e.g. https://continuo.example.com).
   # It is also the OIDC audience, which assumes continuo's default `ciAuth.audience`.
-  # This repository must be bound to $SERVICE in continuo's `ciAuth.bindings`.
+  # This repository must be bound to $PROJECT in continuo's `ciAuth.bindings`.
   RELEASE_ENDPOINT: ${{ vars.RELEASE_ENDPOINT }}
 jobs:
   release:
@@ -81,7 +81,7 @@ jobs:
           case "$status" in
             200) echo "continuo API reachable and this repository is bound" ;;
             401 | 403)
-              echo "::error::continuo refused this repository (HTTP $status). Check that RELEASE_ENDPOINT is exactly the origin of continuo's auth.publicUrl (the OIDC audience), and that this repository's id is listed in continuo's ciAuth.bindings for the service."
+              echo "::error::continuo refused this repository (HTTP $status). Check that RELEASE_ENDPOINT is exactly the origin of continuo's auth.publicUrl (the OIDC audience), and that this repository's id is listed in continuo's ciAuth.bindings for the project."
               exit 1 ;;
             *) fail_with_response "reading $CONTINUO_ORIGIN/api/v1/current-prod" "$status" ;;
           esac
@@ -143,7 +143,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push image
         run: |
-          IMAGE="${{ vars.REGISTRY }}/${SERVICE}:${RELEASE_ID}"
+          IMAGE="${{ vars.REGISTRY }}/${PROJECT}:${RELEASE_ID}"
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
           echo "IMAGE_TAG=$IMAGE" >> "$GITHUB_ENV"
@@ -151,13 +151,13 @@ jobs:
       # CI can compute (from each node's script, import closure and assets),
       # and the package list of the pushed image, which `pack` reads by running
       # `continuo-runtime packages` in it, so this step runs after the build and
-      # push. It also checks each contract against $SERVICE and lints each
+      # push. It also checks each contract against $PROJECT and lints each
       # node's script and import closure. As above, add --dialect <name> to
       # parse the read queries in your warehouse's dialect.
       - name: Pack contracts
-        run: continuo-runtime pack contracts/ --service "$SERVICE" --repo-root . --image "$IMAGE_TAG" --out odcs-bundle.json
+        run: continuo-runtime pack contracts/ --project "$PROJECT" --repo-root . --image "$IMAGE_TAG" --out odcs-bundle.json
       - name: Upload contract bundle
-        run: aws s3 cp odcs-bundle.json "s3://${{ vars.BUCKET }}/${SERVICE}/${RELEASE_ID}/odcs-bundle.json"
+        run: aws s3 cp odcs-bundle.json "s3://${{ vars.BUCKET }}/${PROJECT}/${RELEASE_ID}/odcs-bundle.json"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -177,9 +177,9 @@ jobs:
 
           body="$(jq -n \
             --arg release_id "$RELEASE_ID" \
-            --arg service "$SERVICE" \
+            --arg project "$PROJECT" \
             --arg image_tag "$IMAGE_TAG" \
-            '{release_id: $release_id, service: $service, image_tag: $image_tag, kind: "python-odcs"}')"
+            '{release_id: $release_id, project: $project, image_tag: $image_tag, kind: "python"}')"
 
           # A submit is idempotent on release_id, so transient failures are retried.
           for attempt in 1 2 3; do
@@ -187,7 +187,7 @@ jobs:
             case "$status" in 000 | 429 | 502 | 503 | 504) [ "$attempt" -eq 3 ] || sleep $((attempt * 5)) ;; *) break ;; esac
           done
           [ "$status" = 202 ] || fail_with_response "submitting release $RELEASE_ID" "$status"
-          echo "submitted release $RELEASE_ID (service=$SERVICE) to $CONTINUO_ORIGIN"
+          echo "submitted release $RELEASE_ID (project=$PROJECT) to $CONTINUO_ORIGIN"
 
           # Poll to a terminal status: 300 polls x 10 s = 50 minutes.
           last=""

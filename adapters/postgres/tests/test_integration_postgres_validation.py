@@ -92,11 +92,11 @@ def test_build_empty_from_sql_live(prod_table):
 
 
 @pytest.mark.integration
-def test_clone_empty_from_prod_live(prod_table):
-    """Clone an empty candidate table shaped like the prod table."""
+def test_build_empty_from_prod_live(prod_table):
+    """Build an empty candidate table shaped like the prod table."""
     a = PostgresAdapter(_conn())
     a.ensure_schema("_candidate_it")
-    a.clone_empty_from_prod("_candidate_it", "prod_it", "src_table")
+    a.build_empty_from_prod("_candidate_it", "prod_it", "src_table")
     a.close()
     assert _columns("_candidate_it", "src_table") == [("id", "integer"), ("name", "text")]
     assert _count("_candidate_it", "src_table") == 0

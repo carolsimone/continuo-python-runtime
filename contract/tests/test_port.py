@@ -60,7 +60,7 @@ def test_warehouse_adapter_requires_drop_schema():
         def build_empty_from_sql(self, schema, table, compiled_sql):
             ...
 
-        def clone_empty_from_prod(self, candidate_schema, prod_schema, table):
+        def build_empty_from_prod(self, candidate_schema, prod_schema, table):
             ...
 
         def build_empty_from_columns(self, schema, table, columns, config):
@@ -89,7 +89,7 @@ def test_warehouse_adapter_requires_columns_and_binds_methods():
     """A subclass missing the 0.4.0 methods cannot be instantiated.
 
     Adapters implementing only the 0.3.0 surface (required_env, from_env,
-    ensure_schema, drop_schema, build_empty_from_sql, clone_empty_from_prod,
+    ensure_schema, drop_schema, build_empty_from_sql, build_empty_from_prod,
     close) must still be abstract, so callers can rely on build_empty_from_columns
     and check_binds existing on every installed engine.
     """
@@ -112,7 +112,7 @@ def test_warehouse_adapter_requires_columns_and_binds_methods():
         def build_empty_from_sql(self, schema, table, compiled_sql):
             ...
 
-        def clone_empty_from_prod(self, candidate_schema, prod_schema, table):
+        def build_empty_from_prod(self, candidate_schema, prod_schema, table):
             ...
 
         def close(self):
@@ -152,7 +152,7 @@ def test_partial_engine_cannot_be_instantiated():
         def build_empty_from_columns(self, schema, table, columns, config):
             ...
 
-        def clone_empty_from_prod(self, schema, prod_schema, table):
+        def build_empty_from_prod(self, schema, prod_schema, table):
             ...
 
         def check_binds(self, sql):
@@ -278,7 +278,7 @@ class _PortOnly(WarehouseAdapter):
     def build_empty_from_sql(self, schema, table, compiled_sql):
         ...
 
-    def clone_empty_from_prod(self, candidate_schema, prod_schema, table):
+    def build_empty_from_prod(self, candidate_schema, prod_schema, table):
         ...
 
     def build_empty_from_columns(self, schema, table, columns, config):
@@ -335,7 +335,7 @@ class OneAdapter(WarehouseAdapter):
     def build_empty_from_sql(self, schema, table, compiled_sql):
         ...
 
-    def clone_empty_from_prod(self, candidate_schema, prod_schema, table):
+    def build_empty_from_prod(self, candidate_schema, prod_schema, table):
         ...
 
     def build_empty_from_columns(self, schema, table, columns, config):

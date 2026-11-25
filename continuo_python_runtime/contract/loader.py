@@ -2,7 +2,7 @@
 
 A contracts folder holds one ODCS v3.2.0 contract per node, in a file named
 ``<table>.odcs.yaml``, or ``<schema>.<table>.odcs.yaml`` when two nodes of one
-service share a table name. continuo-contracts reads each file strictly, checks
+project share a table name. continuo-contracts reads each file strictly, checks
 it and maps it to its ``PythonNode``; the runtime then applies the rules it
 keeps for itself and builds its :class:`~continuo_python_runtime.contract.model
 .Node`. Every refusal is a :class:`ContractError` that names the file.
@@ -134,14 +134,14 @@ def node_from_contract(
     *,
     dialect: str | None,
     check_reads: bool,
-    service: str | None = None,
+    project: str | None = None,
 ) -> Node:
     """Check the ODCS contract ``doc``, read from ``file``, and build its :class:`Node`.
 
     continuo-contracts checks the contract first
     (``validate_python_contract``, of which only the base name of ``file``
-    counts for the file-name rule). With a ``service`` it also refuses a
-    contract whose authored ``service`` property names another service; with
+    counts for the file-name rule). With a ``project`` it also refuses a
+    contract whose authored ``project`` property names another project; with
     none, that property is not compared. When it finds issues they become one
     :class:`ContractError` with one :func:`issue_lines` line per issue, and
     nothing else runs.
@@ -162,7 +162,7 @@ def node_from_contract(
     ``required``), ``extra_columns``, ``config``, ``secret_ref``,
     ``mode_type``, the key when the node upserts and the assets.
     """
-    issues = validate_python_contract(doc, path=str(file), service=service)
+    issues = validate_python_contract(doc, path=str(file), project=project)
     if issues:
         raise ContractError("\n".join(issue_lines(file, issues)))
     python = node_from_odcs(doc)
@@ -232,7 +232,7 @@ def load_contract_dir(
 ) -> list[Node]:
     """Load and check every ``*.odcs.yaml`` contract in ``path``, in file-name order.
 
-    The nodes, as :func:`load_contract_docs` loads them with no service. Every
+    The nodes, as :func:`load_contract_docs` loads them with no project. Every
     refusal and every rule are described there.
     """
     return [node for node, _ in load_contract_docs(path, dialect=dialect, check_reads=check_reads)]
@@ -243,14 +243,14 @@ def load_contract_docs(
     *,
     dialect: str | None = None,
     check_reads: bool = True,
-    service: str | None = None,
+    project: str | None = None,
 ) -> list[tuple[Node, Mapping[str, Any]]]:
     """Load and check every ``*.odcs.yaml`` contract in ``path``, in file-name order.
 
     Each node comes with the document it was built from, the one read from its
     file and checked, so a caller that needs the documents does not read the
-    files again. ``service``, when given, is the service the contracts belong
-    to: continuo-contracts then refuses a contract whose authored ``service``
+    files again. ``project``, when given, is the project the contracts belong
+    to: continuo-contracts then refuses a contract whose authored ``project``
     property names another one, as :func:`node_from_contract` says.
 
     Any other file whose name ends in ``.yml`` or ``.yaml``, in any case
@@ -285,7 +285,7 @@ def load_contract_docs(
 
     Raises ``ContractError`` for an unknown ``dialect``, a file in another
     format, a folder with no contract, a contract that is refused (one that
-    names another service than ``service``, when given, included), and two
+    names another project than ``project``, when given, included), and two
     files that declare the same ``<schema>.<table>``, compared in lower case.
     """
     if dialect is not None:
@@ -316,7 +316,7 @@ def load_contract_docs(
     for file in files:
         doc = parse_contract(read_contract_text(file), file)
         node = node_from_contract(
-            doc, file, dialect=dialect, check_reads=check_reads, service=service
+            doc, file, dialect=dialect, check_reads=check_reads, project=project
         )
         # Relations are compared in lower case, as continuo compares them: a
         # warehouse folds the case of an unquoted name, so two contracts whose

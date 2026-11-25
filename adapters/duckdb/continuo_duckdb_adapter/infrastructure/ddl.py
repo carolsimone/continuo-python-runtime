@@ -198,7 +198,7 @@ class DdlRenderer:
         # swallowing the closing parenthesis.
         return f"CREATE TABLE {self.table_ref(table)} AS (\n{select_sql}\n) WITH NO DATA"
 
-    def create_empty_clone(self, target: QualifiedTable, source: QualifiedTable) -> str:
+    def create_empty_like(self, target: QualifiedTable, source: QualifiedTable) -> str:
         return (
             f"CREATE TABLE {self.table_ref(target)} AS "
             f"SELECT * FROM {self.table_ref(source)} WHERE false"

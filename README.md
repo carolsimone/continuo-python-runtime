@@ -55,7 +55,7 @@ separate validation-side port, adapter class, entry-point group or image: one
 `WarehouseAdapter` per engine serves both the data plane (`fetch` /
 `ensure_table` / `load`, plus the opt-in `table_columns` / `append` / `upsert`
 capabilities) and validation (`ensure_schema` / `drop_schema` /
-`build_empty_from_sql` / `build_empty_from_columns` / `clone_empty_from_prod` /
+`build_empty_from_sql` / `build_empty_from_columns` / `build_empty_from_prod` /
 `check_binds`), and one image per engine runs both roles.
 
 | Package (distribution name) | Module | Lives in | Role |
@@ -94,7 +94,7 @@ last line of stdout, and Continuo's Go side parses it byte-for-byte
 sentinel markers, the framing, and the field names inside the block — is
 **frozen**. The additions are an optional `reason` key, written after
 `unique_id` only when an outcome has a machine-readable code (for example
-`image_contract_mismatch`), and the op's own keys that the `seed_preflight` and
+`image_contract_mismatch`), and the op's own keys that the `dependents_check` and
 `probe_views` ops write after `reason`; a block without either keeps its bytes,
 and the sentinels, `schema_version` and the five standard keys do not change. Reuse
 it; never change it from this side alone. A change here that
@@ -103,17 +103,17 @@ the Go parser has not been taught is a production outage, not a refactor.
 ## Quickstart for domain teams
 
 1. Copy `template/` into a new repository.
-2. Edit `template/.github/workflows/release.yml` and set `SERVICE` to your
-   service name (one service name per domain repo).
+2. Edit `template/.github/workflows/release.yml` and set `PROJECT` to the
+   name of the project this repository releases.
 3. Configure repository variables in GitHub (Settings → Secrets and
    variables → Actions): `REGISTRY` (your Docker registry), `BUCKET` (your
    S3 bucket for the contract bundle), `RELEASE_ENDPOINT` (the base
    URL of your continuo install, `scheme://host[:port]` with no path, the origin of continuo's
    `auth.publicUrl`). The
    workflow calls `<RELEASE_ENDPOINT>/api/v1/releases` with its GitHub Actions
-   OIDC token, so the repository must be bound to your service in continuo's
+   OIDC token, so the repository must be bound to your project in continuo's
    `ciAuth.bindings` (see [Releasing from CI](https://github.com/carolsimone/continuo/blob/main/deploy/README.md#releasing-from-ci-github-actions)),
-   and an operator bootstraps the service's first release.
+   and an operator bootstraps the project's first release.
 4. Configure repository secrets: `AWS_ACCESS_KEY_ID` and
    `AWS_SECRET_ACCESS_KEY` for the S3 upload. The template workflow pushes
    the built image to GHCR using the workflow's own `GITHUB_TOKEN` (granted
@@ -129,13 +129,13 @@ the Go parser has not been taught is a production outage, not a refactor.
 6. Push to `main`. The `release.yml` workflow lints the scripts, validates
    the contracts, builds and pushes the image, packs the contracts into
    `odcs-bundle.json`, uploads it to S3, and POSTs the release with
-   `"kind": "python-odcs"`.
+   `"kind": "python"`.
 
 ## Contract files
 
 Each node has one contract: an ODCS v3.2.0 data contract in `contracts/`,
 named after its table, `<table>.odcs.yaml`, or `<schema>.<table>.odcs.yaml`
-when two nodes of one service share a table name. The `continuo-contracts`
+when two nodes of one project share a table name. The `continuo-contracts`
 library reads each file strictly (YAML 1.2 core, with no aliases, no duplicate
 keys and one document per file) and checks it. `validate`, `pack`, `hash` and
 the harness load the folder the same way; the harness skips the read-query
@@ -175,9 +175,9 @@ schema:
 - continuo's own settings are `customProperties` items with
   `vendor: continuo`. Every node sets `schedule` and `criticality`
   (`REGULATORY`, `CORE` or `SECONDARY`); the node's kind decides the rest
-  (see "Node kinds" below). An optional `service` names the node's service,
-  and `pack` and `validate --service` refuse a contract whose `service` is not
-  their `--service`.
+  (see "Node kinds" below). An optional `project` names the node's project,
+  and `pack` and `validate --project` refuse a contract whose `project` is not
+  their `--project`.
 - A contract may also bind its table and its columns to the company's ontology
   (see "Checking against the ontology" below).
 - The contract has exactly one schema object, `physicalType: table`. Its
@@ -221,7 +221,7 @@ production. See `docs/boundary-contract.md` §13.1.
 ### Checking against the ontology
 
 A company that keeps an ontology file, the things its data is about and the
-services that own them, can have each contract bind its table and its columns
+projects that own them, can have each contract bind its table and its columns
 to it. The bindings are optional `continuo` properties: `entity`, `grain`,
 `fixed` and `filter` on the schema object, and `property`, `local` and
 `aggregate` on a column (`docs/boundary-contract.md` gives their values):
@@ -251,10 +251,10 @@ A contract with bindings loads, validates, packs and runs like any other, and
 its `content_hash` is the one it has without them. To check the bindings in your
 CI, keep a copy of the company's ontology file in your own repository, for
 example at `ontology/ontology.yaml`, and give `validate` the name of your
-service and the path of that copy:
+project and the path of that copy:
 
 ```bash
-continuo-runtime validate contracts --service <name> --ontology ontology/ontology.yaml
+continuo-runtime validate contracts --project <name> --ontology ontology/ontology.yaml
 ```
 
 Copy the file from the company's ontology repository, never from continuo, and
@@ -264,33 +264,33 @@ that is behind the ontology can pass here and still be refused by the release,
 which checks against the ontology the install runs. The library's dbt check,
 `continuo-contracts dbt check`, takes the same file with `--ontology`.
 
-`--service` alone refuses a contract whose `service` property names another
-service. `--ontology` needs `--service`; without it `validate` exits 2. With
-both, every contract is checked as a contract of that service by the rules of
-`continuo-contracts` that need no other service: `contract`, `coverage`,
+`--project` alone refuses a contract whose `project` property names another
+project. `--ontology` needs `--project`; without it `validate` exits 2. With
+both, every contract is checked as a contract of that project by the rules of
+`continuo-contracts` that need no other project: `contract`, `coverage`,
 `quality` and `privacy`. The rules that read the whole estate (`access`,
-`order` and `drift`) cannot run on one service's contracts and are not run
+`order` and `drift`) cannot run on one project's contracts and are not run
 here. `validate` logs, on stderr and at the level of its severity (ERROR,
 WARNING or INFO), one line for each finding,
 `<severity> [<rule>] <subject>: <message>`, then one INFO line that counts them,
 `<e> error(s), <w> warning(s), <i> info: <name>`. It exits 1 when any finding is
 an error and 0 otherwise, and it prints nothing to stdout.
 
-- When the ontology declares the service, each contract names exactly one of
+- When the ontology declares the project, each contract names exactly one of
   `entity` or `grain`, so a contract that names neither, or both, is an error.
   A column that carries no binding is a warning, unless its name is a key part
   or a property of the table's entity, in which case the check binds it itself.
-- When the ontology does not declare the service, none of its contracts is
+- When the ontology does not declare the project, none of its contracts is
   checked: `validate` logs one INFO line, `not declared in the ontology: none
-  of this service's contracts is checked`, and one WARNING for each contract
+  of this project's contracts is checked`, and one WARNING for each contract
   that writes bindings, and exits 0.
 - A file that cannot be read, is not UTF-8 text or is not an ontology is one
   ERROR line, `<file>: <reason>`, and exit 1. The reason of an invalid
   ontology is the library's, with the path to the first fault.
 - A file that is an ontology but that the library's `ontology` rule refuses (a
-  thing owned by a domain the file does not declare, a service of a domain it
+  thing owned by a domain the file does not declare, a project of a domain it
   does not declare, a personal property no access rule names) is refused the
-  same way, whatever the service, and no contract is checked against it: one
+  same way, whatever the project, and no contract is checked against it: one
   ERROR line, `<file>: the ontology file has <n> error(s): run
   continuo-contracts ontology check <file>`, and exit 1. That command lists the
   errors. Findings of that rule that are not errors do not stop the check.
@@ -550,7 +550,7 @@ repo's `adapters/postgres/`, `adapters/trino/` or `adapters/duckdb/` source
 (see the table above) — registered under the
 `continuo_engine.adapters` entry-point group (entry names `postgres` /
 `trino` / `duckdb`). The runtime discovers it via `discover_adapter()` at run time, so a
-single image serves every node in the service and the release-time
+single image serves every node in the project and the release-time
 validation Job for it. The executor injects the warehouse connection as
 environment variables (engine-native, e.g.
 `POSTGRES_HOST`/`POSTGRES_DB`/`POSTGRES_USER`) plus the node-selection
@@ -578,7 +578,7 @@ Both shapes end up running the same runtime and the same adapter version;
 which one you pick only changes who controls the base OS layer underneath
 them.
 
-## Seed preflight and view probe
+## Dependents check and view probe
 
 Two validation ops read the warehouse and change nothing. They run through the
 same runner image as the other validation ops (`VALIDATION_OP`), need no
@@ -589,32 +589,32 @@ a drop destroys the objects that read the table (`drop_semantics` `cascade`,
 postgres) that takes every view, function and constraint built on the seed with
 it, including objects continuo does not own. On an engine where those objects
 survive and fail on their next read (`late_binding`, trino and duckdb) they
-may go stale. `seed_preflight` lists what a reload would touch and compares it
+may go stale. `dependents_check` lists what a reload would touch and compares it
 with what the operator has allowed or acknowledged; `probe_views` tries named
 views after a reload and says which no longer bind.
 
-`seed_preflight` runs in two places. `check` runs in the seed task's own pod just
+`dependents_check` runs in two places. `check` runs in the seed task's own pod just
 before dbt and stops the reload with exit 1 when the check concludes it must.
 `report` runs in the release's seed-build Job and only reports what a `check`
 would conclude; it exits 0 whatever it finds.
 
-### `seed_preflight` inputs
+### `dependents_check` inputs
 
 | Variable | Meaning |
 |---|---|
-| `SEED_PREFLIGHT_MODE` | `check` or `report`. |
-| `SEED_PREFLIGHT_ENGINE_FAMILY` | `schema_bound` or `late_binding`, the family the release plan expects of the engine. |
+| `DEPENDENTS_CHECK_MODE` | `check` or `report`. |
+| `DEPENDENTS_CHECK_ENGINE_FAMILY` | `schema_bound` or `late_binding`, the family the release plan expects of the engine. |
 | `PROD_SCHEMA`, `TABLE_NAME` | The seed's production relation. |
-| `SEED_PREFLIGHT_ALLOWED`, `SEED_PREFLIGHT_ACKNOWLEDGED` | JSON arrays of `"<schema>.<name>"`, default `[]`. An object is allowed when `<schema>.<name>`, in lower case, is in either list (entries are trimmed and lower-cased). |
+| `DEPENDENTS_CHECK_ALLOWED`, `DEPENDENTS_CHECK_ACKNOWLEDGED` | JSON arrays of `"<schema>.<name>"`, default `[]`. An object is allowed when `<schema>.<name>`, in lower case, is in either list (entries are trimmed and lower-cased). |
 | `NODE_ID` | Optional; the block's `unique_id`. Default `<PROD_SCHEMA>.<TABLE_NAME>`. |
 
 The adapter's own variables (`POSTGRES_*`, `TRINO_*`, ...) are needed as for any
 other op. An adapter's family is `schema_bound` when its `drop_semantics` is
 `cascade`, and `late_binding` when it is `late_binding`.
 
-### `seed_preflight` block
+### `dependents_check` block
 
-After the standard keys (and `reason` when one applies): `op` (`seed_preflight`),
+After the standard keys (and `reason` when one applies): `op` (`dependents_check`),
 `mode`, `checked` (the warehouse was asked and its listing came back), `engine_family` (as given),
 `drop_semantics` (the adapter's), `completeness` (`exact`, `best_effort`, or
 `none` when nothing was listed) and `dependents`, a list of
@@ -627,7 +627,7 @@ After the standard keys (and `reason` when one applies): `op` (`seed_preflight`)
 | Situation | `reason` | `check` | `report` |
 |---|---|---|---|
 | a missing or malformed input, no adapter, missing adapter env | none | exit 2 | exit 2 |
-| the adapter's family differs from `SEED_PREFLIGHT_ENGINE_FAMILY`, or it declares none | `engine_mismatch` | exit 1 | exit 0 |
+| the adapter's family differs from `DEPENDENTS_CHECK_ENGINE_FAMILY`, or it declares none | `engine_mismatch` | exit 1 | exit 0 |
 | the adapter cannot list dependents, `schema_bound` | `unowned_dependents` | exit 1 | exit 0 |
 | the adapter cannot list dependents, `late_binding` | none | exit 0 | exit 0 |
 | the connection fails | `warehouse_unreachable` | exit 1 | exit 0 |

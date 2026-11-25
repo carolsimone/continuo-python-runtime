@@ -1,4 +1,4 @@
-"""Unit tests for the seed_preflight and probe_views ops — fake adapters, no warehouse."""
+"""Unit tests for the dependents_check and probe_views ops — fake adapters, no warehouse."""
 import contextlib
 import io
 import json
@@ -14,14 +14,14 @@ from continuo_engine_contract.port import (
     DependentsIntrospection,
     Dependents,
 )
-from continuo_python_runtime.validation import preflight
+from continuo_python_runtime.validation import dependents_check
 
 CHECK = {
-    "VALIDATION_OP": "seed_preflight", "SEED_PREFLIGHT_MODE": "check",
-    "SEED_PREFLIGHT_ENGINE_FAMILY": "schema_bound", "PROD_SCHEMA": "analytics",
+    "VALIDATION_OP": "dependents_check", "DEPENDENTS_CHECK_MODE": "check",
+    "DEPENDENTS_CHECK_ENGINE_FAMILY": "schema_bound", "PROD_SCHEMA": "analytics",
     "TABLE_NAME": "seed_fx_rates_eur", "NODE_ID": "analytics.seed_fx_rates_eur",
-    "SEED_PREFLIGHT_ALLOWED": '["analytics.fx_rates_current", "analytics.fx_rates_latest_eur"]',
-    "SEED_PREFLIGHT_ACKNOWLEDGED": "[]",
+    "DEPENDENTS_CHECK_ALLOWED": '["analytics.fx_rates_current", "analytics.fx_rates_latest_eur"]',
+    "DEPENDENTS_CHECK_ACKNOWLEDGED": "[]",
 }
 # Two continuo views and one BI view read the seed.
 SEED_DEPENDENTS = Dependents((
@@ -29,7 +29,7 @@ SEED_DEPENDENTS = Dependents((
     Dependent("analytics", "fx_rates_latest_eur", "view", "dbt", 2),
     Dependent("bi", "fx_rates_report", "view", "bi", 1),
 ), "exact")
-LATE = {**CHECK, "SEED_PREFLIGHT_ENGINE_FAMILY": "late_binding"}
+LATE = {**CHECK, "DEPENDENTS_CHECK_ENGINE_FAMILY": "late_binding"}
 BI_VIEW = Dependents((Dependent("bi", "fx_rates_report", "view", "bi", 1),), "best_effort")
 PROBE = {"VALIDATION_OP": "probe_views", "PROBE_VIEWS": '["bi.fx_rates_report", "bi.fx_rates_broken"]'}
 UNSET = object()
@@ -78,14 +78,14 @@ def _adapter_class(drop_semantics, *, listing=None, capability=True, connect_err
     return _Adapter
 
 
-def _run(env, cls, op="seed_preflight"):
+def _run(env, cls, op="dependents_check"):
     """Run an op with *env* and a fake discovery; return ``(exit_code, block)``.
 
     Asserts the block is the one and only block, the last line on stdout, and that
     its body parses as JSON.
     """
     out = io.StringIO()
-    run = preflight.run_seed_preflight if op == "seed_preflight" else preflight.run_probe_views
+    run = dependents_check.run_dependents_check if op == "dependents_check" else dependents_check.run_probe_views
     with contextlib.redirect_stdout(out):
         code = run(dict(env), discover=lambda: ("fake", cls))
     lines = out.getvalue().splitlines()
@@ -95,7 +95,7 @@ def _run(env, cls, op="seed_preflight"):
 
 
 def _seed(env, cls):
-    return _run(env, cls, "seed_preflight")
+    return _run(env, cls, "dependents_check")
 
 
 def _probe(env, cls):
@@ -112,7 +112,7 @@ def test_check_stops_on_an_object_outside_the_allowed_set():
     assert code == 1
     assert {k: v for k, v in block.items() if k != "message"} == {
         "schema_version": 1, "status": "error", "failures": 1, "unique_id": "analytics.seed_fx_rates_eur",
-        "reason": "unowned_dependents", "op": "seed_preflight", "mode": "check", "checked": True,
+        "reason": "unowned_dependents", "op": "dependents_check", "mode": "check", "checked": True,
         "engine_family": "schema_bound", "drop_semantics": "cascade", "completeness": "exact",
         "dependents": [
             {"schema": "analytics", "name": "fx_rates_current", "kind": "view", "owner": "dbt", "depth": 1, "allowed": True},
@@ -133,7 +133,7 @@ def test_the_listing_is_asked_for_the_production_relation_and_the_adapter_is_clo
 
 
 def test_check_passes_once_the_operator_acknowledges_the_object():
-    env = _with(CHECK, SEED_PREFLIGHT_ACKNOWLEDGED='["bi.fx_rates_report"]')
+    env = _with(CHECK, DEPENDENTS_CHECK_ACKNOWLEDGED='["bi.fx_rates_report"]')
     code, block = _seed(env, _adapter_class("cascade", listing=SEED_DEPENDENTS))
     assert code == 0 and block["status"] == "success" and block["failures"] == 0
     assert "reason" not in block
@@ -141,7 +141,7 @@ def test_check_passes_once_the_operator_acknowledges_the_object():
 
 
 def test_report_never_fails_and_says_what_a_check_would():
-    code, block = _seed(_with(CHECK, SEED_PREFLIGHT_MODE="report"), _adapter_class("cascade", listing=SEED_DEPENDENTS))
+    code, block = _seed(_with(CHECK, DEPENDENTS_CHECK_MODE="report"), _adapter_class("cascade", listing=SEED_DEPENDENTS))
     assert code == 0 and block["status"] == "success" and block["failures"] == 0
     assert block["reason"] == "unowned_dependents" and block["mode"] == "report"
     assert block["message"].startswith("unowned_dependents: ")
@@ -158,7 +158,7 @@ def test_late_binding_check_lists_external_views_and_passes():
 @pytest.mark.parametrize("mode,code", [("check", 1), ("report", 0)])
 def test_an_unexpected_family_is_engine_mismatch_before_connecting(mode, code):
     cls = _adapter_class("late_binding", listing=SEED_DEPENDENTS)
-    got, block = _seed(_with(CHECK, SEED_PREFLIGHT_MODE=mode), cls)
+    got, block = _seed(_with(CHECK, DEPENDENTS_CHECK_MODE=mode), cls)
     assert got == code
     assert block["reason"] == "engine_mismatch" and block["checked"] is False
     assert block["completeness"] == "none" and block["dependents"] == []
@@ -170,7 +170,7 @@ def test_an_unexpected_family_is_engine_mismatch_before_connecting(mode, code):
 @pytest.mark.parametrize("mode,code", [("check", 1), ("report", 0)])
 def test_an_adapter_that_declares_no_family_is_engine_mismatch(mode, code):
     cls = _adapter_class(UNSET, listing=SEED_DEPENDENTS)
-    got, block = _seed(_with(CHECK, SEED_PREFLIGHT_MODE=mode), cls)
+    got, block = _seed(_with(CHECK, DEPENDENTS_CHECK_MODE=mode), cls)
     assert got == code and block["reason"] == "engine_mismatch" and block["drop_semantics"] == ""
     assert cls.state.from_env_calls == 0
 
@@ -178,7 +178,7 @@ def test_an_adapter_that_declares_no_family_is_engine_mismatch(mode, code):
 @pytest.mark.parametrize("mode,code", [("check", 1), ("report", 0)])
 def test_an_unreachable_warehouse_is_warehouse_unreachable(mode, code):
     cls = _adapter_class("cascade", connect_error=ConnectionRefusedError("connection refused"))
-    got, block = _seed(_with(CHECK, SEED_PREFLIGHT_MODE=mode), cls)
+    got, block = _seed(_with(CHECK, DEPENDENTS_CHECK_MODE=mode), cls)
     assert got == code
     assert block["status"] == ("error" if mode == "check" else "success")
     assert block["reason"] == "warehouse_unreachable" and block["checked"] is False
@@ -216,21 +216,21 @@ def test_a_seed_table_that_does_not_exist_yet_passes():
 
 
 def test_allowed_names_match_whatever_the_letter_case():
-    env = _with(CHECK, SEED_PREFLIGHT_ALLOWED='["analytics.fx_rates_current"]')
+    env = _with(CHECK, DEPENDENTS_CHECK_ALLOWED='["analytics.fx_rates_current"]')
     listing = Dependents((Dependent("Analytics", "FX_Rates_Current", "view", "dbt", 1),), "exact")
     code, block = _seed(env, _adapter_class("cascade", listing=listing))
     assert code == 0 and block["dependents"][0]["allowed"] is True
 
 
 def test_an_allowed_entry_is_matched_after_trimming_and_lower_casing():
-    env = _with(CHECK, SEED_PREFLIGHT_ALLOWED='["  Analytics.FX_Rates_Current "]')
+    env = _with(CHECK, DEPENDENTS_CHECK_ALLOWED='["  Analytics.FX_Rates_Current "]')
     listing = Dependents((Dependent("analytics", "fx_rates_current", "view", "dbt", 1),), "exact")
     code, block = _seed(env, _adapter_class("cascade", listing=listing))
     assert code == 0 and block["dependents"][0]["allowed"] is True
 
 
 def test_the_same_name_in_another_schema_is_not_allowed():
-    env = _with(CHECK, SEED_PREFLIGHT_ALLOWED='["analytics.fx_rates_current"]')
+    env = _with(CHECK, DEPENDENTS_CHECK_ALLOWED='["analytics.fx_rates_current"]')
     listing = Dependents((Dependent("bi", "fx_rates_current", "view", "bi", 1),), "exact")
     code, block = _seed(env, _adapter_class("cascade", listing=listing))
     assert code == 1 and block["reason"] == "unowned_dependents"
@@ -240,8 +240,8 @@ def test_the_same_name_in_another_schema_is_not_allowed():
 def test_duplicate_entries_in_the_allowed_and_acknowledged_lists_change_nothing():
     env = _with(
         CHECK,
-        SEED_PREFLIGHT_ALLOWED='["analytics.fx_rates_current", "analytics.fx_rates_current", "ANALYTICS.fx_rates_current"]',
-        SEED_PREFLIGHT_ACKNOWLEDGED='["bi.fx_rates_report", "bi.fx_rates_report", "analytics.fx_rates_latest_eur"]',
+        DEPENDENTS_CHECK_ALLOWED='["analytics.fx_rates_current", "analytics.fx_rates_current", "ANALYTICS.fx_rates_current"]',
+        DEPENDENTS_CHECK_ACKNOWLEDGED='["bi.fx_rates_report", "bi.fx_rates_report", "analytics.fx_rates_latest_eur"]',
     )
     code, block = _seed(env, _adapter_class("cascade", listing=SEED_DEPENDENTS))
     assert code == 0 and all(d["allowed"] for d in block["dependents"])
@@ -252,7 +252,7 @@ def test_the_dependents_are_sorted_by_depth_then_schema_then_name():
         Dependent("b", "z", "view", "o", 2), Dependent("b", "a", "view", "o", 1),
         Dependent("a", "z", "view", "o", 1), Dependent("a", "a", "view", "o", 2),
     ), "exact")
-    _, block = _seed(_with(CHECK, SEED_PREFLIGHT_MODE="report"), _adapter_class("cascade", listing=listing))
+    _, block = _seed(_with(CHECK, DEPENDENTS_CHECK_MODE="report"), _adapter_class("cascade", listing=listing))
     assert [(d["depth"], d["schema"], d["name"]) for d in block["dependents"]] == [
         (1, "a", "z"), (1, "b", "a"), (2, "a", "a"), (2, "b", "z"),
     ]
@@ -264,28 +264,28 @@ def test_the_node_id_defaults_to_the_production_relation():
 
 
 def test_the_allowed_and_acknowledged_lists_default_to_empty():
-    env = _with(CHECK, SEED_PREFLIGHT_ALLOWED=None, SEED_PREFLIGHT_ACKNOWLEDGED=None)
+    env = _with(CHECK, DEPENDENTS_CHECK_ALLOWED=None, DEPENDENTS_CHECK_ACKNOWLEDGED=None)
     code, block = _seed(env, _adapter_class("cascade", listing=SEED_DEPENDENTS))
     assert code == 1 and not any(d["allowed"] for d in block["dependents"])
 
 
 @pytest.mark.parametrize("changes", [
-    {"SEED_PREFLIGHT_MODE": None},
-    {"SEED_PREFLIGHT_MODE": "drop"},
+    {"DEPENDENTS_CHECK_MODE": None},
+    {"DEPENDENTS_CHECK_MODE": "drop"},
     {"PROD_SCHEMA": None},
     {"TABLE_NAME": None},
-    {"SEED_PREFLIGHT_ENGINE_FAMILY": None},
-    {"SEED_PREFLIGHT_ENGINE_FAMILY": "schema-bound"},
-    {"SEED_PREFLIGHT_ALLOWED": "not json"},
-    {"SEED_PREFLIGHT_ALLOWED": '{"a": 1}'},
-    {"SEED_PREFLIGHT_ALLOWED": "[1]"},
-    {"SEED_PREFLIGHT_ACKNOWLEDGED": '"bi.x"'},
+    {"DEPENDENTS_CHECK_ENGINE_FAMILY": None},
+    {"DEPENDENTS_CHECK_ENGINE_FAMILY": "schema-bound"},
+    {"DEPENDENTS_CHECK_ALLOWED": "not json"},
+    {"DEPENDENTS_CHECK_ALLOWED": '{"a": 1}'},
+    {"DEPENDENTS_CHECK_ALLOWED": "[1]"},
+    {"DEPENDENTS_CHECK_ACKNOWLEDGED": '"bi.x"'},
 ])
 def test_bad_inputs_exit_2(changes):
     cls = _adapter_class("cascade", listing=SEED_DEPENDENTS)
     code, block = _seed(_with(CHECK, **changes), cls)
     assert code == 2 and block["status"] == "error" and block["failures"] == 1
-    assert block["op"] == "seed_preflight" and "reason" not in block
+    assert block["op"] == "dependents_check" and "reason" not in block
     assert block["checked"] is False and block["completeness"] == "none" and block["dependents"] == []
     assert block["message"]
     assert cls.state.from_env_calls == 0
@@ -298,7 +298,7 @@ def test_a_discovery_failure_exits_2_in_both_modes():
     for mode in ("check", "report"):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = preflight.run_seed_preflight(_with(CHECK, SEED_PREFLIGHT_MODE=mode), discover=discover)
+            code = dependents_check.run_dependents_check(_with(CHECK, DEPENDENTS_CHECK_MODE=mode), discover=discover)
         block = json.loads(out.getvalue().splitlines()[-2])
         assert code == 2 and block["status"] == "error" and "reason" not in block
         assert "no engine adapter installed" in block["message"]
@@ -323,7 +323,7 @@ def test_adapter_env_is_read_from_the_given_env_not_the_process(monkeypatch):
 # (exit code, status, reason, checked, completeness).
 _BAD = (2, "error", "", False, "none")
 _ROWS = {
-    "bad input": (None, _with(CHECK, SEED_PREFLIGHT_MODE=None), None, None),
+    "bad input": (None, _with(CHECK, DEPENDENTS_CHECK_MODE=None), None, None),
     "engine mismatch": (
         ("late_binding", {"listing": SEED_DEPENDENTS}), CHECK,
         (1, "error", "engine_mismatch", False, "none"), (0, "success", "engine_mismatch", False, "none")),
@@ -352,7 +352,7 @@ _ROWS = {
         ("cascade", {"listing": SEED_DEPENDENTS}), CHECK,
         (1, "error", "unowned_dependents", True, "exact"), (0, "success", "unowned_dependents", True, "exact")),
     "listed, schema_bound, all allowed": (
-        ("cascade", {"listing": SEED_DEPENDENTS}), _with(CHECK, SEED_PREFLIGHT_ACKNOWLEDGED='["bi.fx_rates_report"]'),
+        ("cascade", {"listing": SEED_DEPENDENTS}), _with(CHECK, DEPENDENTS_CHECK_ACKNOWLEDGED='["bi.fx_rates_report"]'),
         (0, "success", "", True, "exact"), (0, "success", "", True, "exact")),
     "listed, schema_bound, nothing": (
         ("cascade", {"listing": Dependents((), "exact")}), CHECK,
@@ -371,7 +371,7 @@ _ROWS = {
 def test_every_row_of_the_decision_table(row, mode):
     adapter, env, check, report = _ROWS[row]
     cls = _adapter_class(adapter[0], **adapter[1]) if adapter else _adapter_class("cascade", listing=SEED_DEPENDENTS)
-    code, block = _seed(_with(env, SEED_PREFLIGHT_MODE=mode if row != "bad input" else None), cls)
+    code, block = _seed(_with(env, DEPENDENTS_CHECK_MODE=mode if row != "bad input" else None), cls)
     want = _BAD if adapter is None else (check if mode == "check" else report)
     got = (code, block["status"], block.get("reason", ""), block["checked"], block["completeness"])
     assert got == want
@@ -379,8 +379,8 @@ def test_every_row_of_the_decision_table(row, mode):
 
 
 def test_the_decision_function_is_pure():
-    verdict = preflight.decide("check", "schema_bound", preflight.Situation.LISTED, detail="x", completeness="exact", has_unowned=True)
-    assert verdict == preflight.decide("check", "schema_bound", preflight.Situation.LISTED, detail="x", completeness="exact", has_unowned=True)
+    verdict = dependents_check.decide("check", "schema_bound", dependents_check.Situation.LISTED, detail="x", completeness="exact", has_unowned=True)
+    assert verdict == dependents_check.decide("check", "schema_bound", dependents_check.Situation.LISTED, detail="x", completeness="exact", has_unowned=True)
     assert (verdict.exit_code, verdict.status, verdict.reason, verdict.checked, verdict.completeness) == (
         1, "error", "unowned_dependents", True, "exact")
     assert verdict.message == "unowned_dependents: x"
@@ -391,12 +391,12 @@ def test_an_unexpected_exception_still_prints_one_error_block(caplog):
         raise RuntimeError("boom")
 
     out = io.StringIO()
-    with caplog.at_level(logging.ERROR, logger="validation_preflight"), contextlib.redirect_stdout(out):
-        code = preflight.run_seed_preflight(dict(CHECK), discover=discover)
+    with caplog.at_level(logging.ERROR, logger="validation_dependents_check"), contextlib.redirect_stdout(out):
+        code = dependents_check.run_dependents_check(dict(CHECK), discover=discover)
     block = json.loads(out.getvalue().splitlines()[-2])
     assert out.getvalue().count(result.SENTINEL_BEGIN) == 1
     assert code == 2 and block["status"] == "error" and "boom" in block["message"]
-    assert block["op"] == "seed_preflight" and block["unique_id"] == "analytics.seed_fx_rates_eur"
+    assert block["op"] == "dependents_check" and block["unique_id"] == "analytics.seed_fx_rates_eur"
     assert any(r.exc_info for r in caplog.records)
 
 
@@ -412,8 +412,8 @@ def test_an_unexpected_exception_in_probe_views_still_prints_one_error_block(cap
         raise RuntimeError("boom")
 
     out = io.StringIO()
-    with caplog.at_level(logging.ERROR, logger="validation_preflight"), contextlib.redirect_stdout(out):
-        code = preflight.run_probe_views(dict(PROBE), discover=discover)
+    with caplog.at_level(logging.ERROR, logger="validation_dependents_check"), contextlib.redirect_stdout(out):
+        code = dependents_check.run_probe_views(dict(PROBE), discover=discover)
     block = json.loads(out.getvalue().splitlines()[-2])
     assert out.getvalue().count(result.SENTINEL_BEGIN) == 1
     assert code == 2 and block["status"] == "error" and "boom" in block["message"]
@@ -422,7 +422,7 @@ def test_an_unexpected_exception_in_probe_views_still_prints_one_error_block(cap
 
 
 def test_a_stop_and_a_failed_probe_are_logged_at_warning(caplog):
-    with caplog.at_level(logging.WARNING, logger="validation_preflight"):
+    with caplog.at_level(logging.WARNING, logger="validation_dependents_check"):
         _seed(CHECK, _adapter_class("cascade", listing=SEED_DEPENDENTS))
         _probe(PROBE, _adapter_class("cascade", broken_views=("fx_rates_broken",)))
     texts = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]

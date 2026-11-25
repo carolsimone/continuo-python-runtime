@@ -1,6 +1,6 @@
 # One ODCS v3.2.0 contract per node. Name the file after the table:
 # <table>.odcs.yaml, or <schema>.<table>.odcs.yaml when two nodes of one
-# service share a table name. The contracts folder holds nothing else that
+# project share a table name. The contracts folder holds nothing else that
 # ends in .yml or .yaml.
 apiVersion: v3.2.0
 kind: DataContract

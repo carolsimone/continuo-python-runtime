@@ -131,8 +131,8 @@ class _PortOnlyAdapter(WarehouseAdapter):
     def build_empty_from_sql(self, schema, table, compiled_sql):
         self.calls.append("build_empty_from_sql")
 
-    def clone_empty_from_prod(self, candidate_schema, prod_schema, table):
-        self.calls.append("clone_empty_from_prod")
+    def build_empty_from_prod(self, candidate_schema, prod_schema, table):
+        self.calls.append("build_empty_from_prod")
 
     def build_empty_from_columns(self, schema, table, columns, config):
         self.calls.append("build_empty_from_columns")

@@ -57,12 +57,12 @@ def test_build_empty_from_sql_rolls_back_on_failure(warehouse, gateway):
     assert gateway.names()[-1] == "rollback"
 
 
-def test_clone_empty_from_prod_rebuilds_in_one_transaction(warehouse, gateway):
-    warehouse.clone_empty_from_prod("cand", "prod", "t")
+def test_build_empty_from_prod_rebuilds_in_one_transaction(warehouse, gateway):
+    warehouse.build_empty_from_prod("cand", "prod", "t")
     assert gateway.calls == [
         ("begin",),
         ("drop_table_if_exists", QualifiedTable.of("cand", "t")),
-        ("create_empty_clone", QualifiedTable.of("cand", "t"), QualifiedTable.of("prod", "t")),
+        ("create_empty_like", QualifiedTable.of("cand", "t"), QualifiedTable.of("prod", "t")),
         ("commit",),
     ]
 
@@ -144,7 +144,7 @@ def test_build_empty_from_sql_still_accepts_single_reads(warehouse, gateway, sql
     assert ("create_empty_table_as", T, inner) in gateway.calls
 
 
-def test_clone_empty_from_prod_validates_both_tables_before_any_call(warehouse, gateway):
+def test_build_empty_from_prod_validates_both_tables_before_any_call(warehouse, gateway):
     with pytest.raises(ValueError):
-        warehouse.clone_empty_from_prod("cand", "", "t")
+        warehouse.build_empty_from_prod("cand", "", "t")
     assert gateway.calls == []

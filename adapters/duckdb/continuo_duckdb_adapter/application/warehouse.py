@@ -97,13 +97,13 @@ class LakeWarehouse(WarehouseAdapter, AppendCapable, UpsertCapable):
             self._gateway.drop_table_if_exists(target)
             self._gateway.create_empty_table_as(target, inner)
 
-    def clone_empty_from_prod(self, candidate_schema: str, prod_schema: str, table: str) -> None:
+    def build_empty_from_prod(self, candidate_schema: str, prod_schema: str, table: str) -> None:
         """Create ``candidate_schema.table`` empty, shaped like ``prod_schema.table``."""
         target = QualifiedTable.of(candidate_schema, table)
         source = QualifiedTable.of(prod_schema, table)
         with self._gateway.transaction():
             self._gateway.drop_table_if_exists(target)
-            self._gateway.create_empty_clone(target, source)
+            self._gateway.create_empty_like(target, source)
 
     def build_empty_from_columns(
         self, schema: str, table: str, columns: list[dict], config: dict

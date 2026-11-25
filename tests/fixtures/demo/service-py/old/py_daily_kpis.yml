@@ -1,7 +1,7 @@
 nodes:
   # First python node in the demo estate: a daily rollup of core's
-  # daily_transactions table. The read below is the cross-service DAG edge —
-  # analytics.daily_transactions is produced by the core service's dbt project.
+  # daily_transactions table. The read below is the cross-project topology edge —
+  # analytics.daily_transactions is produced by the core project, a dbt project.
   - schema: analytics
     table: py_daily_kpis
     description: "Daily transaction count and total amount in EUR, rolled up from analytics.daily_transactions."

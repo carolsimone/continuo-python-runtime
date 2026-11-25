@@ -5,6 +5,40 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-25
+
+**TL;DR**
+
+- The runtime uses continuo's glossary words. A team's releasable unit is a
+  **project**: `pack --project`, a `project` key in the bundle, and a release
+  posted with `project` and kind `python`.
+- The seed preflight is now the **dependents check** (`VALIDATION_OP=dependents_check`,
+  `DEPENDENTS_CHECK_*`), and `clone_from_prod` is now `build_from_prod`.
+- It pins continuo-contracts 0.5.0: a contract's `service` property is now
+  `project`. No node changes its `content_hash`.
+- You must act: this release works only with a continuo install that uses the
+  same words. Change each project's CI as below.
+
+**Upgrade**
+
+1. Move to 0.15.0 only together with a continuo install whose chart CHANGELOG
+   names the kind `python` and the dependents check. The install's validation
+   image and its execution-controller must agree on the op names, so an older
+   install cannot run this image, and this install cannot run an older one.
+2. In each project's release workflow: rename `SERVICE` to `PROJECT`, run
+   `continuo-runtime pack contracts/ --project "$PROJECT" ...`, upload to
+   `s3://<bucket>/<project>/<release_id>/odcs-bundle.json`, and post
+   `{"project": ..., "kind": "python", ...}`. `template/.github/workflows/release.yml`
+   shows each line.
+3. In each contract that writes the `continuo` property `service`, rename it to
+   `project`. In the ontology file, rename `principals.services` to
+   `principals.projects`.
+4. Build each project's image `FROM` the `v0.15.0` engine image. CI installs
+   `continuo-python-runtime==0.15.0` from the `FROM` line.
+5. Adapter authors: rename `clone_empty_from_prod` to `build_empty_from_prod`.
+
+Versions: runtime 0.15.0 (pins continuo-contracts 0.5.0), engine contract 0.11.0, postgres adapter 0.5.0, trino adapter 0.6.0, duckdb adapter 0.4.0.
+
 ### Breaking
 
 - The code a team releases as one unit is a **project**, the word continuo's

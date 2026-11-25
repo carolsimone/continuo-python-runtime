@@ -22,7 +22,7 @@ import pytest
 from continuo_engine_contract import result
 from continuo_duckdb_adapter.adapter import DuckDBAdapter
 from continuo_duckdb_adapter.infrastructure import session as session_module
-from continuo_python_runtime.validation import dependents_check
+from continuo_python_runtime.validation import dependents_check, probe_views
 
 pytestmark = pytest.mark.integration
 
@@ -72,7 +72,7 @@ def catalog(request, lake_env, monkeypatch) -> str:
 
 def _run(op: str, **env: str) -> tuple[int, dict]:
     out = io.StringIO()
-    run = dependents_check.run_dependents_check if op == "dependents_check" else dependents_check.run_probe_views
+    run = dependents_check.run_dependents_check if op == "dependents_check" else probe_views.run_probe_views
     with contextlib.redirect_stdout(out):
         code = run({**os.environ, **env}, discover=lambda: ("duckdb", DuckDBAdapter))
     lines = out.getvalue().splitlines()

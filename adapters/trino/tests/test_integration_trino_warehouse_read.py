@@ -16,7 +16,7 @@ from collections.abc import Iterator
 import pytest
 
 from continuo_engine_contract import result
-from continuo_python_runtime.validation import dependents_check
+from continuo_python_runtime.validation import dependents_check, probe_views
 from continuo_trino_adapter.adapter import TrinoAdapter
 
 pytestmark = pytest.mark.integration
@@ -52,7 +52,7 @@ def warehouse(trino_env) -> Iterator[tuple[TrinoAdapter, str, str]]:
 
 def _run(op, **env):
     out = io.StringIO()
-    run = dependents_check.run_dependents_check if op == "dependents_check" else dependents_check.run_probe_views
+    run = dependents_check.run_dependents_check if op == "dependents_check" else probe_views.run_probe_views
     with contextlib.redirect_stdout(out):
         code = run({**os.environ, **env}, discover=lambda: ("trino", TrinoAdapter))
     lines = out.getvalue().splitlines()

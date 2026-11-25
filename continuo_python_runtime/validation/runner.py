@@ -28,7 +28,7 @@ Dispatches on ``VALIDATION_OP`` env var (default ``build_from_sql``):
   allowed and acknowledged lists. Needs no ``DBT_TARGET_SCHEMA`` and creates nothing.
 - ``probe_views``: try each view of ``PROBE_VIEWS`` with a zero-row read and report
   which ones no longer bind. Needs no ``DBT_TARGET_SCHEMA`` and creates nothing.
-  The inputs and the result block of both ops are in ``dependents_check``.
+  The inputs and the result block of each op are in its own module.
 
 The engine adapter is discovered from the single installed
 ``continuo_engine.adapters`` entry point — each runner image installs exactly one.
@@ -49,7 +49,7 @@ from continuo_engine_contract.port import (  # type: ignore[import-untyped]
 )
 from continuo_python_runtime.csv_readers import reader_for
 from continuo_python_runtime.csv_source import check_header, parse_csv_uri
-from continuo_python_runtime.validation import dependents_check, s3
+from continuo_python_runtime.validation import dependents_check, probe_views, s3
 
 logger = logging.getLogger("validation_runner")
 
@@ -137,8 +137,8 @@ def main() -> None:
     the candidate-schema lifecycle without connecting to the warehouse itself —
     and take no table. The warehouse-read ops (``dependents_check``/``probe_views``)
     read the warehouse and change nothing; they read their own inputs, need no
-    candidate schema and exit with the code their function in
-    ``dependents_check`` returns. An unknown op is refused before any input is read.
+    candidate schema and exit with the code their own module's function
+    returns. An unknown op is refused before any input is read.
     """
     logging.basicConfig(
         level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s"
@@ -155,7 +155,7 @@ def main() -> None:
         if op == "dependents_check":
             code = dependents_check.run_dependents_check(os.environ)
         else:
-            code = dependents_check.run_probe_views(os.environ)
+            code = probe_views.run_probe_views(os.environ)
         if code:
             sys.exit(code)
         return

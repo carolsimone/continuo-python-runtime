@@ -1,4 +1,4 @@
-"""``dependents_check`` against postgres:16 (tests/smoke/postgres-stack).
+"""``dependents_check`` and ``probe_views`` against postgres:16 (tests/smoke/postgres-stack).
 
 Run the stack first:
     docker compose -f tests/smoke/postgres-stack/docker-compose.yml up -d --wait
@@ -20,7 +20,7 @@ import pytest
 from continuo_engine_contract import result
 from continuo_postgres_adapter import adapter as adapter_module
 from continuo_postgres_adapter.adapter import PostgresAdapter
-from continuo_python_runtime.validation import dependents_check
+from continuo_python_runtime.validation import dependents_check, probe_views
 
 from .test_integration_postgres_conformance import PG
 
@@ -68,7 +68,7 @@ def estate(monkeypatch) -> Iterator[tuple[str, str]]:
 
 def _run(op, **env):
     out = io.StringIO()
-    run = dependents_check.run_dependents_check if op == "dependents_check" else dependents_check.run_probe_views
+    run = dependents_check.run_dependents_check if op == "dependents_check" else probe_views.run_probe_views
     with contextlib.redirect_stdout(out):
         code = run({**os.environ, **env}, discover=lambda: ("postgres", PostgresAdapter))
     lines = out.getvalue().splitlines()

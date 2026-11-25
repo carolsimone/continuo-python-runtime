@@ -1,8 +1,8 @@
-"""``seed_preflight`` and ``probe_views`` against a real DuckLake (tests/smoke/duckdb-stack).
+"""``dependents_check`` and ``probe_views`` against a real DuckLake (tests/smoke/duckdb-stack).
 
 The ``lake_env`` and ``adapter_factory`` fixtures come from this directory's
 conftest.py. DuckDB declares ``drop_semantics = "late_binding"`` and cannot list
-the objects that read a table, so ``seed_preflight`` never connects to this
+the objects that read a table, so ``dependents_check`` never connects to this
 engine; the tests that expect that run once against the live lake and once with
 the catalog behind a refusing port, where a connection attempt would show as
 ``warehouse_unreachable``.
@@ -22,7 +22,7 @@ import pytest
 from continuo_engine_contract import result
 from continuo_duckdb_adapter.adapter import DuckDBAdapter
 from continuo_duckdb_adapter.infrastructure import session as session_module
-from continuo_python_runtime.validation import preflight
+from continuo_python_runtime.validation import dependents_check, probe_views
 
 pytestmark = pytest.mark.integration
 
@@ -72,7 +72,7 @@ def catalog(request, lake_env, monkeypatch) -> str:
 
 def _run(op: str, **env: str) -> tuple[int, dict]:
     out = io.StringIO()
-    run = preflight.run_seed_preflight if op == "seed_preflight" else preflight.run_probe_views
+    run = dependents_check.run_dependents_check if op == "dependents_check" else probe_views.run_probe_views
     with contextlib.redirect_stdout(out):
         code = run({**os.environ, **env}, discover=lambda: ("duckdb", DuckDBAdapter))
     lines = out.getvalue().splitlines()
@@ -82,7 +82,7 @@ def _run(op: str, **env: str) -> tuple[int, dict]:
 
 def _seed(family: str, mode: str, schema: str = "analytics") -> tuple[int, dict]:
     return _run(
-        "seed_preflight", SEED_PREFLIGHT_MODE=mode, SEED_PREFLIGHT_ENGINE_FAMILY=family,
+        "dependents_check", DEPENDENTS_CHECK_MODE=mode, DEPENDENTS_CHECK_ENGINE_FAMILY=family,
         PROD_SCHEMA=schema, TABLE_NAME="seed",
     )
 

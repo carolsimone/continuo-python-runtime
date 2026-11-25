@@ -549,7 +549,7 @@ def test_a_malformed_binding_is_refused_naming_the_file(tmp_path, level, name, v
     assert "\n" not in message
 
 
-# --- the documents and the service --------------------------------------------------
+# --- the documents and the project --------------------------------------------------
 
 
 def test_load_contract_docs_returns_each_node_with_the_document_it_was_built_from(demo_contracts):
@@ -567,23 +567,23 @@ def test_load_contract_docs_reads_each_file_once(demo_contracts, monkeypatch):
     assert sorted(reads) == sorted(demo_contracts.glob("*.odcs.yaml"))
 
 
-def test_a_service_refuses_a_contract_that_names_another(tmp_path):
-    file = write_contract(tmp_path, **{**FIELDS, "service": "other"})
+def test_a_project_refuses_a_contract_that_names_another(tmp_path):
+    file = write_contract(tmp_path, **{**FIELDS, "project": "other"})
     load_contract_dir(tmp_path)
     load_contract_docs(tmp_path)
     with pytest.raises(ContractError, match=rf"{re.escape(str(file))}: .*'other'.*'billing-py'"):
-        load_contract_docs(tmp_path, service="billing-py")
+        load_contract_docs(tmp_path, project="billing-py")
 
 
-def test_a_service_accepts_a_contract_that_names_it_and_one_that_names_none(tmp_path):
-    write_contract(tmp_path, **{**FIELDS, "service": "billing-py"})
+def test_a_project_accepts_a_contract_that_names_it_and_one_that_names_none(tmp_path):
+    write_contract(tmp_path, **{**FIELDS, "project": "billing-py"})
     write_contract(tmp_path, **{**FIELDS, "table": "u"})
-    assert len(load_contract_docs(tmp_path, service="billing-py")) == 2
+    assert len(load_contract_docs(tmp_path, project="billing-py")) == 2
 
 
-def test_node_from_contract_takes_the_service_to_check():
-    doc = yaml_strict.load(contract_text(**{**FIELDS, "service": "other"}))
+def test_node_from_contract_takes_the_project_to_check():
+    doc = yaml_strict.load(contract_text(**{**FIELDS, "project": "other"}))
     file = Path("t.odcs.yaml")
     assert node_from_contract(doc, file, dialect=None, check_reads=True).table == "t"
     with pytest.raises(ContractError, match="'other'"):
-        node_from_contract(doc, file, dialect=None, check_reads=True, service="billing-py")
+        node_from_contract(doc, file, dialect=None, check_reads=True, project="billing-py")

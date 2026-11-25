@@ -1,4 +1,4 @@
-"""Tests for `continuo-runtime pack`: the bundle of a service's ODCS contracts."""
+"""Tests for `continuo-runtime pack`: the bundle of a project's ODCS contracts."""
 
 import hashlib
 import json
@@ -24,9 +24,9 @@ NODE_KEYS = {"path", "text", "source_hash", "shared_code_hash"}
 PACKAGES = {"pyarrow": "26.0.0", "continuo-python-runtime": "0.13.0"}
 
 
-def bundle_of(repo, service="s", packages=None, **kwargs):
+def bundle_of(repo, project="s", packages=None, **kwargs):
     """The bundle of the contracts in ``<repo>/contracts``."""
-    return build_bundle(repo / "contracts", repo, service, PACKAGES if packages is None else packages, **kwargs)
+    return build_bundle(repo / "contracts", repo, project, PACKAGES if packages is None else packages, **kwargs)
 
 
 def only_node(repo):
@@ -53,7 +53,7 @@ def test_the_bundle_has_the_documented_shape(contract_repo):
     bundle = bundle_of(contract_repo, "marketing-py")
     assert bundle == {
         "bundle_version": 1,
-        "service": "marketing-py",
+        "project": "marketing-py",
         "producer": {
             "continuo_python_runtime": metadata.version("continuo-python-runtime"),
             "continuo_contracts": metadata.version("continuo-contracts"),
@@ -83,7 +83,7 @@ def test_pack_keeps_the_bindings_in_the_bundle(tmp_path):
     assert "property: entity" in node["text"] and "value: Order.id" in node["text"]
     assert bundle["producer"] == {
         "continuo_python_runtime": metadata.version("continuo-python-runtime"),
-        "continuo_contracts": "0.4.1",
+        "continuo_contracts": "0.5.0",
     }
     (unbound,) = bundle_of(plain)["nodes"]
     assert (node["source_hash"], node["shared_code_hash"]) == (unbound["source_hash"], unbound["shared_code_hash"])
@@ -462,25 +462,25 @@ def test_an_asset_that_cannot_be_read_is_refused(tmp_path, prepare, match):
 # --- the contracts ------------------------------------------------------------------
 
 
-def test_a_contract_of_another_service_is_refused_naming_the_file(tmp_path):
+def test_a_contract_of_another_project_is_refused_naming_the_file(tmp_path):
     write_script(tmp_path, "scripts/node.py")
-    write_node(tmp_path, service="other")
+    write_node(tmp_path, project="other")
     with pytest.raises(ContractError) as exc:
         bundle_of(tmp_path, "s")
     assert str(exc.value).startswith("contracts/t.odcs.yaml: ")
     assert "'other'" in str(exc.value) and "'s'" in str(exc.value)
 
 
-def test_a_contract_that_names_the_service_is_packed(tmp_path):
+def test_a_contract_that_names_the_project_is_packed(tmp_path):
     write_script(tmp_path, "scripts/node.py")
-    write_node(tmp_path, service="s")
+    write_node(tmp_path, project="s")
     assert only_node(tmp_path)["path"] == "contracts/t.odcs.yaml"
 
 
 def test_every_issue_of_every_file_is_listed(tmp_path):
     write_script(tmp_path, "scripts/node.py")
-    write_node(tmp_path, service="other")
-    write_node(tmp_path, table="u", service="another")
+    write_node(tmp_path, project="other")
+    write_node(tmp_path, table="u", project="another")
     with pytest.raises(ContractError) as exc:
         bundle_of(tmp_path, "s")
     lines = str(exc.value).splitlines()

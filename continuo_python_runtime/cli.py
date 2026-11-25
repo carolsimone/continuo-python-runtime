@@ -9,7 +9,7 @@ from importlib import metadata
 from pathlib import Path
 
 from continuo_python_runtime.contract.loader import load_contract_dir, load_contract_docs
-from continuo_python_runtime.contract.ontology_check import check_service
+from continuo_python_runtime.contract.ontology_check import check_project
 from continuo_python_runtime.contract.pack import (
     PACKAGE_SOURCE_USAGE,
     build_bundle,
@@ -59,15 +59,15 @@ def main(argv: list[str] | None = None) -> int:
     validate_parser.add_argument("contract_dir", help="Path to contract directory")
     validate_parser.add_argument("--dialect", default=None, help=dialect_help)
     validate_parser.add_argument(
-        "--service",
+        "--project",
         default=None,
-        help="The service the contracts belong to: a contract whose `service` property "
-             "names another service is refused",
+        help="The project the contracts belong to: a contract whose `project` property "
+             "names another project is refused",
     )
     validate_parser.add_argument(
         "--ontology",
         default=None,
-        help="The company's ontology file (needs --service): check every contract "
+        help="The company's ontology file (needs --project): check every contract "
              "against it, as a release does",
     )
 
@@ -81,12 +81,12 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     pack_parser.add_argument("contract_dir", help="Path to contract directory")
-    pack_parser.add_argument("--service", required=True, help="Service name")
+    pack_parser.add_argument("--project", required=True, help="Project name")
     pack_parser.add_argument("--repo-root", required=True, help="Repository root path")
     pack_parser.add_argument(
         "--image",
         default=None,
-        help="Image the service runs; its package list is read with "
+        help="Image the project runs; its package list is read with "
              "`docker run --entrypoint continuo-runtime <image> packages`",
     )
     pack_parser.add_argument(
@@ -133,8 +133,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
-    if args.command == "validate" and args.ontology is not None and args.service is None:
-        validate_parser.error("--ontology needs --service")
+    if args.command == "validate" and args.ontology is not None and args.project is None:
+        validate_parser.error("--ontology needs --project")
     if args.command == "pack" and (args.image is None) == (args.image_packages is None):
         pack_parser.error(PACKAGE_SOURCE_USAGE)
 
@@ -143,13 +143,13 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_validate(
                 args.contract_dir,
                 args.dialect,
-                service=args.service,
+                project=args.project,
                 ontology=args.ontology,
             )
         elif args.command == "pack":
             return cmd_pack(
                 args.contract_dir,
-                args.service,
+                args.project,
                 args.repo_root,
                 args.out,
                 image=args.image,
@@ -185,17 +185,17 @@ def cmd_validate(
     contract_dir: str,
     dialect: str | None = None,
     *,
-    service: str | None = None,
+    project: str | None = None,
     ontology: str | None = None,
 ) -> int:
     """Validate contracts in a directory.
 
-    With no ``service``, every contract is checked as a contract of any service
-    and nothing is logged. With a ``service``, a contract whose ``service``
+    With no ``project``, every contract is checked as a contract of any project
+    and nothing is logged. With a ``project``, a contract whose ``project``
     property names another one is refused too, as ``pack`` refuses it.
 
-    With an ``ontology`` file (which needs the ``service``), each contract is
-    then checked against it by the per-service rules of continuo-contracts.
+    With an ``ontology`` file (which needs the ``project``), each contract is
+    then checked against it by the per-project rules of continuo-contracts.
     Each finding is logged at its level, ERROR for an error, WARNING for a
     warning and INFO for information, as ``<severity> [<rule>] <subject>:
     <message>``, in the order the library returns them, followed by one INFO
@@ -204,15 +204,15 @@ def cmd_validate(
     ``ontology`` rule is one ERROR line and exit 1, before any finding. Nothing
     goes to stdout.
     """
-    if service is None:
+    if project is None:
         load_contract_dir(Path(contract_dir), dialect=dialect)
         return 0
-    loaded = load_contract_docs(Path(contract_dir), dialect=dialect, service=service)
+    loaded = load_contract_docs(Path(contract_dir), dialect=dialect, project=project)
     if ontology is None:
         return 0
 
-    findings = check_service(
-        [doc for _, doc in loaded], service=service, ontology_path=Path(ontology)
+    findings = check_project(
+        [doc for _, doc in loaded], project=project, ontology_path=Path(ontology)
     )
     for finding in findings:
         logger.log(
@@ -231,14 +231,14 @@ def cmd_validate(
         counts["error"],
         counts["warning"],
         counts["info"],
-        service,
+        project,
     )
     return 1 if counts["error"] else 0
 
 
 def cmd_pack(
     contract_dir: str,
-    service: str,
+    project: str,
     repo_root: str,
     out: str,
     *,
@@ -255,7 +255,7 @@ def cmd_pack(
     packages = image_packages_from(
         image=image, image_packages=None if image_packages is None else Path(image_packages)
     )
-    doc = build_bundle(Path(contract_dir), Path(repo_root), service, packages, dialect=dialect)
+    doc = build_bundle(Path(contract_dir), Path(repo_root), project, packages, dialect=dialect)
     write_bundle(doc, Path(out))
     return 0
 

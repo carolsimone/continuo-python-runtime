@@ -65,7 +65,7 @@ class _MemoryWarehouse(WarehouseAdapter, AppendCapable, UpsertCapable, Dependent
     def build_empty_from_sql(self, schema, table, compiled_sql):
         ...
 
-    def clone_empty_from_prod(self, candidate_schema, prod_schema, table):
+    def build_empty_from_prod(self, candidate_schema, prod_schema, table):
         ...
 
     def build_empty_from_columns(self, schema, table, columns, config):

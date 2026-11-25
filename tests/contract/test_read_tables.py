@@ -13,7 +13,7 @@ from sqlglot.errors import ParseError
 from continuo_python_runtime.contract.read_tables import unqualified_tables
 
 DIALECTS = ["postgres", None]
-# The dialects of the engines a service can run on, and sqlglot's neutral grammar.
+# The dialects of the engines a project can run on, and sqlglot's neutral grammar.
 ENGINE_DIALECTS = ["postgres", "trino", "duckdb", None]
 
 # (case id, the read queries, the answer for each query). The answer is what

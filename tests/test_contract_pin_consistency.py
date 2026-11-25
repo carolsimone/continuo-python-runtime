@@ -52,11 +52,11 @@ def test_every_contract_pin_matches_the_contract_package_version():
     )
 
 
-def test_the_runtime_pins_continuo_contracts_0_4_1():
+def test_the_runtime_pins_continuo_contracts_0_5_0():
     """The hashing and contract-reading library is pinned exactly, and the
     environment the tests run in installs that same version."""
     with (ROOT / "pyproject.toml").open("rb") as fh:
         dependencies = tomllib.load(fh)["project"]["dependencies"]
     pins = [d for d in dependencies if d.startswith("continuo-contracts")]
-    assert pins == ["continuo-contracts==0.4.1"]
-    assert metadata.version("continuo-contracts") == "0.4.1"
+    assert pins == ["continuo-contracts==0.5.0"]
+    assert metadata.version("continuo-contracts") == "0.5.0"

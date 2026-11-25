@@ -32,7 +32,7 @@ def test_packages_lists_this_environment():
     packages = installed_packages()
 
     assert packages["continuo-python-runtime"] == metadata.version("continuo-python-runtime")
-    assert packages["continuo-contracts"] == "0.4.1"
+    assert packages["continuo-contracts"] == "0.5.0"
     assert packages["pyarrow"] == metadata.version("pyarrow")
 
 
@@ -114,4 +114,4 @@ def test_the_command_prints_only_json(capsys):
     assert captured.out == json.dumps(installed_packages(), sort_keys=True) + "\n"
     parsed = json.loads(captured.out)
     assert isinstance(parsed, dict)
-    assert parsed["continuo-contracts"] == "0.4.1"
+    assert parsed["continuo-contracts"] == "0.5.0"

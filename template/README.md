@@ -5,7 +5,7 @@ This is a copy-ready template for implementing a [continuo Python domain repo](h
 ## Quick Start
 
 1. **Copy this directory** to a new repository
-2. **Rename the service**: Edit `.github/workflows/release.yml` and update the `SERVICE` environment variable to your service name
+2. **Rename the project**: Edit `.github/workflows/release.yml` and update the `PROJECT` environment variable to your project name
 3. **Configure repository variables** in GitHub (Settings → Secrets and variables → Actions):
    - `REGISTRY`: Your Docker registry (e.g., `ghcr.io/org`)
    - `BUCKET`: Your S3 bucket for the contract bundle (`odcs-bundle.json`)
@@ -26,13 +26,13 @@ This is a copy-ready template for implementing a [continuo Python domain repo](h
 5. **Bind the repository in continuo.** The workflow authenticates with its
    GitHub Actions OIDC token (`id-token: write`, already set), so no secret is
    stored. The operator who runs the install lists this repository under
-   `ciAuth.bindings` for your service name; see
+   `ciAuth.bindings` for your project name; see
    [Releasing from CI](https://github.com/carolsimone/continuo/blob/main/deploy/README.md#releasing-from-ci-github-actions). Until the
    repository is bound, every release call is refused.
-6. **Bootstrap the service once.** The first release of a service has no
+6. **Bootstrap the project once.** The first release of a project has no
    production version to validate against, so an operator promotes it with
    `"bootstrap": true`; the workflow never sends that flag. Releases from the
-   workflow work once the service has been bootstrapped.
+   workflow work once the project has been bootstrapped.
 7. **Write your contracts** in `contracts/` and **implement scripts** in `scripts/`.
    Each node has one ODCS v3.2.0 contract, named after its table:
    `contracts/<table>.odcs.yaml`, or `contracts/<schema>.<table>.odcs.yaml` when
@@ -82,9 +82,9 @@ EOF
 
 The committed `requirements.lock` in this template is a **placeholder**: it
 locks `continuo-python-runtime==0.4.1` and `continuo-postgres-adapter==0.2.0`,
-which are older than runtime 0.13.0, the first the release workflow can use (it
-reads ODCS contracts and has `pack`). Regenerate it with the command above for
-runtime 0.13.0 or later, and the matching adapter, before you build with
+which are older than runtime 0.15.0, the first the release workflow can use (its
+`pack` takes `--project`). Regenerate it with the command above for
+runtime 0.15.0 or later, and the matching adapter, before you build with
 `Dockerfile.pip`.
 
 The release workflow's `Pin the runtime to the image` step reads the runtime
@@ -118,19 +118,19 @@ The CI/CD pipeline (`release.yml`) runs these steps:
    installed version differs or the Dockerfile has no such line. `pack` computes
    part of each node's `content_hash`, and the harness recomputes the whole
    hash with the image's runtime at start, so CI must use the same runtime. The
-   workflow needs runtime 0.13.0 or later
+   workflow needs runtime 0.15.0 or later
 2. **Lint** scripts for hand-written SQL (forbidden)
 3. **Validate** the ODCS contracts in `contracts/` and parse every read query
 4. **Run domain tests** (optional, if `tests/` exists)
 5. **Build and push** the Docker image
 6. **Pack** the contracts into `odcs-bundle.json`: `continuo-runtime pack`
-   checks every contract again, also against `SERVICE`, lints each node's
+   checks every contract again, also against `PROJECT`, lints each node's
    script and its in-repo import closure, computes the hashes only CI can
    compute, and records the package list of the pushed image (it runs
    `continuo-runtime packages` in it, so it needs the image built first)
 7. **Upload the bundle** to
-   `s3://<BUCKET>/<SERVICE>/<release id>/odcs-bundle.json`, then **submit the
-   release** to continuo's `POST /api/v1/releases` with `"kind": "python-odcs"`
+   `s3://<BUCKET>/<PROJECT>/<release id>/odcs-bundle.json`, then **submit the
+   release** to continuo's `POST /api/v1/releases` with `"kind": "python"`
    and poll `GET /api/v1/releases/{id}` for up to about 50 minutes (the job's
    `timeout-minutes` is 60). The job succeeds when the release is `promoted`
    and fails when it is `rejected` or `superseded`

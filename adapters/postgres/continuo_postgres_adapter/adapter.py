@@ -3,9 +3,9 @@
 One class covers both roles Continuo asks of an engine:
 
 * **Validation DDL** — ``ensure_schema``/``drop_schema`` manage the candidate
-  schema; empty builds go through ``CREATE TABLE … AS (…) WITH NO DATA``, empty
-  clones through ``CTAS … WHERE 1=0``, and ``check_binds`` EXPLAINs a read
-  without scanning data. Schema creation is serialized on a session advisory
+  schema; empty builds go through ``CREATE TABLE … AS (…) WITH NO DATA``, an
+  empty build shaped like a production table through ``CTAS … WHERE 1=0``, and
+  ``check_binds`` EXPLAINs a read without scanning data. Schema creation is serialized on a session advisory
   lock because parallel root validation nodes race on ``CREATE SCHEMA``.
 * **Python-node data-plane I/O** — ``fetch`` executes one declared read and
   returns an Arrow table; ``ensure_table`` builds the table (an upsert key as
@@ -18,7 +18,7 @@ One class covers both roles Continuo asks of an engine:
 The connection runs with ``autocommit = True``: every method owns its
 transaction explicitly rather than relying on psycopg2's implicit
 per-connection transaction. A single-statement method (``drop_schema``,
-``build_empty_from_sql``, ``clone_empty_from_prod``) needs nothing further —
+``build_empty_from_sql``, ``build_empty_from_prod``) needs nothing further —
 under autocommit each statement commits as it runs. A method that must apply
 several statements atomically (``build_empty_from_columns``, ``check_binds``,
 ``ensure_table``, ``load``, ``append``, ``_upsert``) wraps them in its own explicit
@@ -692,7 +692,7 @@ class PostgresAdapter(WarehouseAdapter, AppendCapable, UpsertCapable, Dependents
                 )
             )
 
-    def clone_empty_from_prod(self, candidate_schema: str, prod_schema: str, table: str) -> None:
+    def build_empty_from_prod(self, candidate_schema: str, prod_schema: str, table: str) -> None:
         """Create ``candidate_schema.table`` empty, shaped like ``prod_schema.table``."""
         with self._conn.cursor() as cur:
             cur.execute(

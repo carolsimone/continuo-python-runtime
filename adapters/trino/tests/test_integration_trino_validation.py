@@ -139,11 +139,11 @@ def test_build_is_rerun_idempotent(candidate_schema, prod_table):
 
 
 @pytest.mark.integration
-def test_clone_empty_from_prod_live(candidate_schema, prod_table):
-    """Clone an empty candidate table shaped like the prod table."""
+def test_build_empty_from_prod_live(candidate_schema, prod_table):
+    """Build an empty candidate table shaped like the prod table."""
     a = _adapter()
     a.ensure_schema(candidate_schema)
-    a.clone_empty_from_prod(candidate_schema, prod_table, "src_table")
+    a.build_empty_from_prod(candidate_schema, prod_table, "src_table")
     assert _columns(a, candidate_schema, "src_table") == [
         ("id", "integer"), ("name", "varchar"),
     ]

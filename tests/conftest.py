@@ -53,17 +53,17 @@ NODE_T_BOUND = {
     ],
 }
 
-# The service of `ONTOLOGY_TEXT`, a small ontology for the checks of `validate --ontology`: the
-# service is of the domain `sales`, and the one thing, Order, is owned by that domain and has the
+# The project of `ONTOLOGY_TEXT`, a small ontology for the checks of `validate --ontology`: the
+# project is of the domain `sales`, and the one thing, Order, is owned by that domain and has the
 # key `id` and the property `note`. The file passes the library's `ontology` rule, which asks a
 # thing's owner to be a declared domain.
-ONTOLOGY_SERVICE = "orders-py"
+ONTOLOGY_PROJECT = "orders-py"
 ONTOLOGY_TEXT = """\
 principals:
   domains:
     sales:
       owner_team: sales-team
-  services:
+  projects:
     orders-py:
       domain: sales
       kind: python

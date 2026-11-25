@@ -242,7 +242,7 @@ def test_empty_builds():
     assert R.create_empty_table_as(T, "SELECT 1 AS a -- c") == (
         'CREATE TABLE "lake"."s"."t" AS (\nSELECT 1 AS a -- c\n) WITH NO DATA'
     )
-    assert R.create_empty_clone(T, QualifiedTable.of("p", "t")) == (
+    assert R.create_empty_like(T, QualifiedTable.of("p", "t")) == (
         'CREATE TABLE "lake"."s"."t" AS SELECT * FROM "lake"."p"."t" WHERE false'
     )
 

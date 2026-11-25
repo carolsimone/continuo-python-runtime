@@ -1,12 +1,12 @@
-"""``continuo-runtime pack``: the bundle of a service's ODCS contracts.
+"""``continuo-runtime pack``: the bundle of a project's ODCS contracts.
 
-A service's CI packs the contracts of its ``contracts/`` folder into one
+A project's CI packs the contracts of its ``contracts/`` folder into one
 ``odcs-bundle.json`` and uploads it with the release. The bundle is UTF-8 JSON,
 written by :func:`write_bundle` as ``json.dumps(doc, sort_keys=True, indent=2,
 ensure_ascii=False)`` and a newline, and holds::
 
     {"bundle_version": 1,
-     "service": <service>,
+     "project": <project>,
      "producer": {"continuo_python_runtime": <version>, "continuo_contracts": <version>},
      "image_packages": {<name>: <version>},
      "nodes": [{"path": <repo path of the contract file>,
@@ -18,7 +18,7 @@ ensure_ascii=False)`` and a newline, and holds::
 are the two parts :func:`~continuo_python_runtime.hashing.hash_parts` computes from
 the files of the repository; the third part, the config hash, is computed from the
 contract text by whoever reads the bundle. ``image_packages`` is the package list of
-the image the service runs, read from that image, never from the environment ``pack``
+the image the project runs, read from that image, never from the environment ``pack``
 runs in.
 """
 
@@ -51,7 +51,7 @@ from continuo_python_runtime.lint import lint_source
 BUNDLE_VERSION = 1
 
 PACKAGE_SOURCE_USAGE = (
-    "pack records the package list of the image the service runs: give exactly one of "
+    "pack records the package list of the image the project runs: give exactly one of "
     "--image <ref> (read from the image) or --image-packages <file> "
     "(a JSON object of package name to version)"
 )
@@ -155,7 +155,7 @@ def _repo_path(file: Path, repo_root: Path) -> str:
 def build_bundle(
     contract_dir: Path,
     repo_root: Path,
-    service: str,
+    project: str,
     image_packages: Mapping[str, str],
     *,
     dialect: str | None = None,
@@ -165,7 +165,7 @@ def build_bundle(
     The contracts are loaded as :func:`~continuo_python_runtime.contract.loader
     .load_contract_dir` loads them, every read checked under ``dialect`` (``None``
     is sqlglot's dialect-neutral parser). Each contract is then checked once more
-    against ``service`` by continuo-contracts, as the release does: one
+    against ``project`` by continuo-contracts, as the release does: one
     ``ContractError`` lists every issue of every file, one line each, naming the
     file by its path below ``repo_root``.
 
@@ -183,7 +183,7 @@ def build_bundle(
     files = [(node, _repo_path(node.path, repo_root), read_contract_text(node.path)) for node in nodes]
     issues: list[str] = []
     for _, path, text in files:
-        found = validate_python_contract(parse_contract(text, path), path=path, service=service)
+        found = validate_python_contract(parse_contract(text, path), path=path, project=project)
         issues.extend(issue_lines(path, found))
     if issues:
         raise ContractError("\n".join(issues))
@@ -205,7 +205,7 @@ def build_bundle(
 
     return {
         "bundle_version": BUNDLE_VERSION,
-        "service": service,
+        "project": project,
         "producer": {
             "continuo_python_runtime": metadata.version("continuo-python-runtime"),
             "continuo_contracts": metadata.version("continuo-contracts"),

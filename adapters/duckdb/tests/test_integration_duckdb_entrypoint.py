@@ -97,28 +97,28 @@ def lake(adapter_factory) -> Iterator[tuple[DuckDBAdapter, str]]:
 
 def _seed_env(s: str, family: str, **extra: str) -> dict[str, str]:
     return {
-        "VALIDATION_OP": "seed_preflight", "SEED_PREFLIGHT_MODE": "check",
-        "SEED_PREFLIGHT_ENGINE_FAMILY": family, "PROD_SCHEMA": s, "TABLE_NAME": "seed", **extra,
+        "VALIDATION_OP": "dependents_check", "DEPENDENTS_CHECK_MODE": "check",
+        "DEPENDENTS_CHECK_ENGINE_FAMILY": family, "PROD_SCHEMA": s, "TABLE_NAME": "seed", **extra,
     }
 
 
-def test_seed_preflight_on_a_late_binding_release_passes_without_listing(lake, lake_env):
+def test_dependents_check_on_a_late_binding_release_passes_without_listing(lake, lake_env):
     _, s = lake
     proc = _entrypoint("validation-op", lake_env, _seed_env(s, "late_binding"))
     block = _block(proc)
     assert proc.returncode == 0
-    assert (block["status"], block["op"], block["failures"]) == ("success", "seed_preflight", 0)
+    assert (block["status"], block["op"], block["failures"]) == ("success", "dependents_check", 0)
     # DuckDB cannot list the objects that read a table, so nothing is listed.
     assert "reason" not in block and block["checked"] is False and block["completeness"] == "none"
     assert block["dependents"] == [] and block["drop_semantics"] == "late_binding"
 
 
-def test_seed_preflight_stops_a_schema_bound_release_on_duckdb(lake, lake_env):
+def test_dependents_check_stops_a_schema_bound_release_on_duckdb(lake, lake_env):
     _, s = lake
     proc = _entrypoint("validation-op", lake_env, _seed_env(s, "schema_bound"))
     block = _block(proc)
     assert proc.returncode == 1
-    assert (block["status"], block["reason"], block["op"]) == ("error", "engine_mismatch", "seed_preflight")
+    assert (block["status"], block["reason"], block["op"]) == ("error", "engine_mismatch", "dependents_check")
     assert block["failures"] == 1 and block["checked"] is False and block["completeness"] == "none"
     assert "engine_mismatch" in proc.stderr
 
@@ -144,7 +144,7 @@ def test_probe_views_reports_a_view_that_no_longer_binds_and_exits_0(lake, lake_
 
 
 @pytest.mark.parametrize("env,op", [
-    ({"VALIDATION_OP": "seed_preflight", "SEED_PREFLIGHT_MODE": "drop"}, "seed_preflight"),
+    ({"VALIDATION_OP": "dependents_check", "DEPENDENTS_CHECK_MODE": "drop"}, "dependents_check"),
     ({"VALIDATION_OP": "probe_views", "PROBE_VIEWS": '"bi.x"'}, "probe_views"),
 ])
 def test_a_bad_input_exits_2_and_the_process_does_not_ask_for_a_candidate_schema(lake_env, env, op):

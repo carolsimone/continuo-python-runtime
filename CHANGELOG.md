@@ -5,6 +5,44 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Breaking
+
+- The code a team releases as one unit is a **project**, the word continuo's
+  glossary uses. `continuo-runtime pack` and `continuo-runtime validate` take
+  `--project <name>` instead of `--service`, `validate --ontology` needs
+  `--project`, and the bundle names the project in a `project` key instead of
+  `service`.
+- The runtime pins `continuo-contracts==0.5.0`. A contract's optional
+  `continuo` property `service` is now `project`, and a contract that still
+  writes `service` is refused, naming the file. The ontology file declares its
+  projects under `principals.projects`. A node's `content_hash` does not change.
+- The template's release workflow sets `PROJECT` instead of `SERVICE`, uploads
+  the bundle to `s3://<bucket>/<project>/<release_id>/odcs-bundle.json` and
+  posts the release with `project` and kind `python` (it was `python-odcs`).
+  continuo accepts that body from the first chart release whose CHANGELOG names
+  the kind `python`.
+- The validation op `seed_preflight` is now the **dependents check**:
+  `VALIDATION_OP=dependents_check`, its inputs `DEPENDENTS_CHECK_MODE`,
+  `DEPENDENTS_CHECK_ENGINE_FAMILY`, `DEPENDENTS_CHECK_ALLOWED` and
+  `DEPENDENTS_CHECK_ACKNOWLEDGED`, and its result block's `op` is
+  `dependents_check`. The block's other keys do not change.
+- The validation op `clone_from_prod` is now `build_from_prod`, and the engine
+  contract's `WarehouseAdapter.clone_empty_from_prod` is now
+  `build_empty_from_prod`, in the port and in the postgres, trino and duckdb
+  adapters. The op builds an empty table shaped like the production table and
+  copies no rows. The three node ops now say where the empty table's columns
+  come from: `build_from_sql`, `build_from_columns`, `build_from_prod`.
+  **Breaking for adapter authors:** rename the method.
+
+### Changed
+
+- The validation runner refuses an unknown `VALIDATION_OP` before it reads any
+  other input, with exit 2 and the message `unknown VALIDATION_OP '<op>'`. A
+  caller that still sends `seed_preflight` or `clone_from_prod` gets that
+  message, not a missing `DBT_TARGET_SCHEMA`.
+- The template's Dockerfile and the README's engine examples build on the
+  `v0.15.0` engine images, the first whose `pack` takes `--project`.
+
 ## [0.14.0] - 2026-11-21
 
 **TL;DR**

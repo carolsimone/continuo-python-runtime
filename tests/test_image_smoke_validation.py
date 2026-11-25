@@ -45,7 +45,7 @@ def test_discovery_and_required_env_produce_structured_block():
     proc = _run({
         "DBT_TARGET_SCHEMA": "_candidate_smoke",
         "TABLE_NAME": "t",
-        "VALIDATION_OP": "clone_from_prod",
+        "VALIDATION_OP": "build_from_prod",
         "PROD_SCHEMA": "analytics",
     })
     # Discovery loaded exactly one adapter; its required env is absent, so the

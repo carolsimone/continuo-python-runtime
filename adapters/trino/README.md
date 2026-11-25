@@ -5,7 +5,7 @@ Trino (Iceberg connector) engine-adapter library for Continuo python nodes.
 (from the `continuo-engine-contract` package) — one class covering both the
 data plane (`fetch` / `ensure_table` / `load`) and release-time validation
 (`ensure_schema` / `drop_schema` / `build_empty_from_sql` /
-`build_empty_from_columns` / `clone_empty_from_prod` / `check_binds`) — and
+`build_empty_from_columns` / `build_empty_from_prod` / `check_binds`) — and
 registers itself under entry-point group `continuo_engine.adapters` as
 `trino`.
 

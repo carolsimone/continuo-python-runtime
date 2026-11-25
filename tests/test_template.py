@@ -28,23 +28,23 @@ def test_template_passes_lint_and_validate():
 def test_template_packs_a_bundle_of_its_two_nodes(tmp_path):
     """`pack --image-packages` on the template writes the bundle of its two ODCS contracts.
 
-    The service is the workflow's own SERVICE, so a team that copies the template
+    The project is the workflow's own PROJECT, so a team that copies the template
     packs it unchanged.
     """
     workflow, _ = _release_job()
-    service = workflow["env"]["SERVICE"]
+    project = workflow["env"]["PROJECT"]
     image_packages = {"continuo-python-runtime": "0.13.0", "pyarrow": "26.0.0"}
     packages_file = tmp_path / "image-packages.json"
     packages_file.write_text(json.dumps(image_packages), encoding="utf-8")
     out = tmp_path / "odcs-bundle.json"
 
-    assert main(["pack", str(TEMPLATE / "contracts"), "--service", service,
+    assert main(["pack", str(TEMPLATE / "contracts"), "--project", project,
                  "--repo-root", str(TEMPLATE), "--image-packages", str(packages_file),
                  "--out", str(out)]) == 0
 
     bundle = json.loads(out.read_text(encoding="utf-8"))
     assert bundle["bundle_version"] == 1
-    assert bundle["service"] == service
+    assert bundle["project"] == project
     assert bundle["image_packages"] == image_packages
     paths = [node["path"] for node in bundle["nodes"]]
     assert paths == ["contracts/example.odcs.yaml", "contracts/example_csv.odcs.yaml"]
@@ -172,11 +172,11 @@ def test_release_workflow_lints_validates_builds_and_pushes_then_packs_uploads_a
         step_running("continuo-runtime validate contracts/"),
         step_running('docker push "$IMAGE"'),
         step_running(
-            'continuo-runtime pack contracts/ --service "$SERVICE" --repo-root . '
+            'continuo-runtime pack contracts/ --project "$PROJECT" --repo-root . '
             '--image "$IMAGE_TAG" --out odcs-bundle.json'
         ),
         step_running(
-            'aws s3 cp odcs-bundle.json "s3://${{ vars.BUCKET }}/${SERVICE}/${RELEASE_ID}/odcs-bundle.json"'
+            'aws s3 cp odcs-bundle.json "s3://${{ vars.BUCKET }}/${PROJECT}/${RELEASE_ID}/odcs-bundle.json"'
         ),
         step_running('call POST /api/v1/releases "$body"'),
     ]
@@ -192,8 +192,8 @@ def test_release_workflow_lints_validates_builds_and_pushes_then_packs_uploads_a
 
 
 @pytest.mark.skipif(not shutil.which("jq"), reason="needs jq")
-def test_release_workflow_posts_kind_python_odcs():
-    """The submit step's body, built by its own jq command, names the release kind python-odcs."""
+def test_release_workflow_posts_the_project_and_kind_python():
+    """The submit step's body, built by its own jq command, names the project and the kind python."""
     _, job = _release_job()
     submit = _step(job, "Submit release to continuo")["run"]
     start = submit.index('body="$(jq -n')
@@ -205,7 +205,7 @@ def test_release_workflow_posts_kind_python_odcs():
         env={
             "PATH": os.environ["PATH"],
             "RELEASE_ID": "7-abc1234",
-            "SERVICE": "marketing-py",
+            "PROJECT": "marketing-py",
             "IMAGE_TAG": "ghcr.io/org/marketing-py:7-abc1234",
         },
         capture_output=True,
@@ -214,9 +214,9 @@ def test_release_workflow_posts_kind_python_odcs():
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "release_id": "7-abc1234",
-        "service": "marketing-py",
+        "project": "marketing-py",
         "image_tag": "ghcr.io/org/marketing-py:7-abc1234",
-        "kind": "python-odcs",
+        "kind": "python",
     }
 
 
@@ -408,18 +408,18 @@ def _version_tuple(version: str) -> tuple[int, ...]:
 
 
 def test_the_template_builds_on_a_runtime_that_can_pack_its_contracts(tmp_path):
-    """The template's own Dockerfile names a runtime that has `pack`, the first being 0.13.0.
+    """The template's own Dockerfile names a runtime whose `pack` takes `--project`, the first being 0.15.0.
 
     The release workflow installs the runtime the Dockerfile names and runs
-    `validate` and `pack` with it, and its contracts are ODCS files: a runtime
-    before 0.13.0 reads `nodes:` contracts and has no `pack` or `packages`
-    command, so a repository copied from the template would fail before it
-    built anything.
+    `validate` and `pack --project` with it: a runtime before 0.15.0 takes
+    `--service` instead, and one before 0.13.0 reads `nodes:` contracts and has
+    no `pack` or `packages` command, so a repository copied from the template
+    would fail before it released anything.
     """
     code, written, out = _pin(tmp_path, (TEMPLATE / "Dockerfile").read_text())
     assert code == 0, out
     version = written.removeprefix("RUNTIME_VERSION=").strip()
-    assert _version_tuple(version) >= (0, 13, 0), version
+    assert _version_tuple(version) >= (0, 15, 0), version
 
 
 def test_ci_installs_the_pinned_runtime_before_it_checks_the_installed_version():

@@ -1,7 +1,7 @@
 """The distributions installed in the running Python environment.
 
 ``continuo-runtime packages`` prints them, so that a producer bundle records exactly
-what the image its service runs holds.
+what the image its project runs holds.
 """
 
 import logging

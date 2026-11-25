@@ -9,10 +9,10 @@ five surfaces — nothing else crosses it.
 
 ## 13.1 Surface 1 — the contract bundle (CI → S3, BEFORE the POST)
 
-One bundle per service per release, at the canonical key:
+One bundle per project per release, at the canonical key:
 
 ```
-s3://<bucket>/<service>/<release_id>/odcs-bundle.json
+s3://<bucket>/<project>/<release_id>/odcs-bundle.json
 ```
 
 `continuo-runtime pack` writes it and a CI step uploads it. The upload
@@ -44,15 +44,15 @@ newline:
     "continuo_contracts": "<version>",
     "continuo_python_runtime": "<version>"
   },
-  "service": "<service>"
+  "project": "<project>"
 }
 ```
 
 - `bundle_version` is `1`.
-- `service` is the service `pack` was given (`--service`).
+- `project` is the project `pack` was given (`--project`).
 - `producer` holds the versions of `continuo-python-runtime` and
   `continuo-contracts` that wrote the bundle.
-- `image_packages` is the package list of the image the service runs: every
+- `image_packages` is the package list of the image the project runs: every
   distribution installed in it, as `{normalised name: version}`.
   `pack --image <ref>` reads it by running
   `docker run --rm --entrypoint continuo-runtime <ref> packages`;
@@ -72,8 +72,8 @@ Before it writes anything, `pack`:
 1. loads the contracts folder exactly as `continuo-runtime validate` does
    (every rule in "The contract files" below), each read query parsed under
    `--dialect`;
-2. checks every contract again against `--service`: a `service` property that
-   names another service is refused;
+2. checks every contract again against `--project`: a `project` property that
+   names another project is refused;
 3. refuses a `sitecustomize.py` or `usercustomize.py` at the repository root,
    which Python imports before the harness starts;
 4. reads each node's script, in-repo import closure and assets, and refuses a
@@ -87,7 +87,7 @@ over `--out` once it is complete. A refusal writes nothing.
 ### The contract files
 
 - A contract file is `contracts/<table>.odcs.yaml`, or
-  `contracts/<schema>.<table>.odcs.yaml` when two nodes of one service share a
+  `contracts/<schema>.<table>.odcs.yaml` when two nodes of one project share a
   table name.
 - Any other file in the folder whose name ends in `.yml` or `.yaml`, in any
   case (`legacy.YML`, `t.odcs.yml`), is refused, with a message that points
@@ -98,7 +98,7 @@ over `--out` once it is complete. A refusal writes nothing.
   message names both. A folder with no contract file is refused.
 
 Each file holds one ODCS v3.2.0 data contract. The `continuo-contracts`
-library (this runtime pins 0.4.1) reads it with its strict YAML reader (YAML
+library (this runtime pins 0.5.0) reads it with its strict YAML reader (YAML
 1.2 core scalars; no aliases, no `<<` keys, no duplicate keys, no keys that are
 not strings, no tag beyond the core ones and one document per file), checks it
 against the ODCS v3.2.0 JSON schema, then checks continuo's own rules. Every
@@ -158,7 +158,7 @@ is written at most once:
 
 | Property | Kinds | Value |
 | --- | --- | --- |
-| `service` | every kind, optional | The name of the node's service. `pack` and `validate --service` refuse one that is not their `--service`. |
+| `project` | every kind, optional | The name of the node's project. `pack` and `validate --project` refuse one that is not their `--project`. |
 | `kind` | — | `python-node` (the default), `python-csv` or `python-api`. |
 | `schedule` | every kind, required | The name of the schedule that runs the node: no whitespace, at most 50 characters. |
 | `criticality` | every kind, required | `REGULATORY`, `CORE` or `SECONDARY`. |
@@ -249,17 +249,17 @@ file into the bundle as written, and neither the two hash parts of the bundle
 nor the code projection behind `config_hash` reads them, so a node's
 `content_hash` is the same with or without them.
 
-`continuo-runtime validate <folder> --service <name> --ontology <file>` checks
+`continuo-runtime validate <folder> --project <name> --ontology <file>` checks
 every contract against the company's ontology file with the rules of
-`continuo-contracts` that need no other service (`contract`, `coverage`,
+`continuo-contracts` that need no other project (`contract`, `coverage`,
 `quality` and `privacy`): each contract is put in the library's stored form,
-`service` set to `--service`, and filled from the ontology before the rules
+`project` set to `--project`, and filled from the ontology before the rules
 run. An ontology file that the library's `ontology` rule refuses stops the
-check first, whatever the service, with one error line that points to
+check first, whatever the project, with one error line that points to
 `continuo-contracts ontology check`. The README ("Checking against the
 ontology") gives the lines `validate` logs and its exit codes. `--ontology`
-needs `--service`, and `--service` alone refuses a contract whose `service`
-names another service.
+needs `--project`, and `--project` alone refuses a contract whose `project`
+names another project.
 
 ### Kinds
 
@@ -513,7 +513,7 @@ content_hash     = "sha256:" + sha256(source_hash + "|" + shared_code_hash
   spelling (`INT` is `INTEGER`, `DECIMAL(12, 2)` is `NUMERIC(12,2)`), and each
   read query is hashed as written except for LF line endings and the
   whitespace around it. `team.name`, `schedule`, `criticality`, the
-  description, `timeoutMinutes`, `service` and `version` are outside the
+  description, `timeoutMinutes`, `project` and `version` are outside the
   projection. The strict YAML reader refuses a value canonical JSON cannot
   write (an integer beyond 2**53 - 1, NaN, an infinity, nesting deeper than 99
   levels, a lone surrogate), so no contract file holds one.
@@ -596,17 +596,17 @@ own `import` statements, resolved by static AST analysis
 POST <continuo-origin>/api/v1/releases
 Authorization: Bearer <GitHub Actions OIDC token>
 {
-  "service":    "marketing-py",          # one service name per domain repo
+  "project":    "marketing-py",          # the project this repository releases
   "release_id": "<unique, matches the S3 key path>",
   "image_tag":  "<registry>/<image>:<tag>",   # the image the executor will run
-  "kind":       "python-odcs"
+  "kind":       "python"
 }
 ```
 
-The kind `python-odcs` tells Continuo the release carries a contract bundle
-at `s3://<bucket>/<service>/<release_id>/odcs-bundle.json`. The token's
+The kind `python` tells Continuo the release carries a contract bundle
+at `s3://<bucket>/<project>/<release_id>/odcs-bundle.json`. The token's
 audience is the origin of the continuo install, and the repository must be
-bound to the service in continuo's `ciAuth.bindings`
+bound to the project in continuo's `ciAuth.bindings`
 ([Releasing from CI](https://github.com/carolsimone/continuo/blob/main/deploy/README.md#releasing-from-ci-github-actions)).
 A CI token supplies `repo` and `commit_sha` (the repository and commit the
 workflow runs in), so the body leaves them out; they must point at the actual
@@ -616,7 +616,7 @@ fetches them from GitHub to propose fix PRs. 202 Accepted
 Idempotent on `release_id` with the same body — safe to retry. The workflow
 then polls `GET /api/v1/releases/{release_id}` with a fresh token until
 `terminal` is true: `promoted` is success, `rejected` and `superseded` are
-failures. The first release of a service is an operator bootstrap
+failures. The first release of a project is an operator bootstrap
 (`"bootstrap": true`), which a CI binding may send only with
 `allowBootstrap`.
 
@@ -625,13 +625,13 @@ failures. The first release of a service is an operator bootstrap
 `image_tag` must be pullable by the cluster and behave as follows when the
 executor runs it as a Kubernetes Job:
 
-- **Contracts**: the image holds the service's contract files, one
+- **Contracts**: the image holds the project's contract files, one
   `*.odcs.yaml` file per node, in `CONTRACT_DIR` (`/app/contracts`), and the
   repository files the nodes run below `APP_ROOT` (`/app`). They are the same
   files CI validated and packed.
 - **Selection env**: the executor sets `NODE_ID`, `TABLE_NAME`, and the
   target schema env; the harness loads the contracts in `CONTRACT_DIR`, picks
-  the node and runs it. One image serves all of the service's nodes.
+  the node and runs it. One image serves all of the project's nodes.
 - **Start check**: when continuo sets `CONTENT_HASH`, the harness recomputes
   the node's `content_hash` from the files in the image, with the helpers
   `continuo-runtime hash` uses, before it builds the adapter. A different
@@ -724,7 +724,7 @@ verbatim; the python dispatch path injects the names below instead:
 
 | Variable | Required? | Meaning |
 | --- | --- | --- |
-| `NODE_ID` | **required** | Any identifier whose trailing two dot-separated segments MUST be `<schema>.<table>` of the declared node (e.g. `python-node.<service>.<schema>.<table>`); the harness splits on `.` and matches the last two segments against the nodes the contracts declare. |
+| `NODE_ID` | **required** | Any identifier whose trailing two dot-separated segments MUST be `<schema>.<table>` of the declared node (e.g. `python-node.<project>.<schema>.<table>`); the harness splits on `.` and matches the last two segments against the nodes the contracts declare. |
 | `TABLE_NAME` | **required** | The target table name; must match the `table` of the node selected via `NODE_ID`. |
 | `TARGET_SCHEMA` | **required** | The target schema name; must match the `schema` of the node selected via `NODE_ID`. There is no fallback — `SCHEMA` and `DBT_TARGET_SCHEMA` are **not** recognized. |
 | `TASK_ATTEMPT` | set by the executor, not read by the harness | The 0-based number of the task's attempt: `0` on a task's first run, `1` on its first retry, and so on. The executor sets it on every production Job, dbt and python alike, so a node script can read it; the harness neither requires nor interprets it. |
@@ -749,17 +749,17 @@ same name as on a dbt Job.
              (then the domain's own tests, when it has any)
 4. build:    docker build the image (scripts + contracts + harness baked in)
 5. push:     docker push the image
-6. pack:     continuo-runtime pack contracts/ --service <service> --repo-root .
+6. pack:     continuo-runtime pack contracts/ --project <project> --repo-root .
                  --image <the pushed image> [--dialect <engine>] --out odcs-bundle.json
-7. upload:   odcs-bundle.json → s3://<bucket>/<service>/<release_id>/odcs-bundle.json
-8. POST /api/v1/releases {…, "kind": "python-odcs"}   # only after 5 and 7 succeed; then poll to a terminal status
+7. upload:   odcs-bundle.json → s3://<bucket>/<project>/<release_id>/odcs-bundle.json
+8. POST /api/v1/releases {…, "kind": "python"}   # only after 5 and 7 succeed; then poll to a terminal status
 ```
 
 `pack` runs after the push because it reads the package list of the pushed
 image (§13.1). `template/.github/workflows/release.yml` runs these steps.
 
 Provisioning Continuo hands each domain repo, once: S3 write credentials
-scoped to `s3://<bucket>/<service>/*`, the release endpoint URL and the
+scoped to `s3://<bucket>/<project>/*`, the release endpoint URL and the
 repository's binding in `ciAuth.bindings`, registry push credentials, and a
 warehouse role limited to `SELECT` on declared upstreams plus the harness's
 write path.
